@@ -107,8 +107,9 @@ Paid:  User (India) ──70ms───► Netlify sin (S'pore) ──1ms──�
 > States. Both are outside India and neither is currently restricted under DPDP,
 > so the analysis in [11-COMPLIANCE-INDIA](11-COMPLIANCE-INDIA.md) is unchanged
 > in kind — but the client should be told the data is US-hosted, not merely
-> offshore. Keep S3 in `ap-south-1` (Mumbai) regardless: documents and KYC scans
-> stay India-resident either way.
+> offshore. **Document storage has no India-region mitigation either**, since
+> the project uses Netlify Blobs (no user-controlled region) rather than S3 —
+> see [11-COMPLIANCE-INDIA](11-COMPLIANCE-INDIA.md) for the consequence.
 
 ## 3. Storage — 0.5 GB is the ceiling on going live
 
@@ -136,7 +137,7 @@ Background Functions are Pro-only, so the 15-minute ceiling assumed in
 | Job | Paid design | Free-tier design |
 |---|---|---|
 | Payout batch | One background run, chunked | **Chained scheduled invocations.** Persist a cursor; each run does what fits in 10 s and enqueues the next |
-| PDF generation | Background → S3 | On demand within 10 s (`@react-pdf/renderer` handles a statement comfortably). Bulk generation chains |
+| PDF generation | Background → Netlify Blobs | On demand within 10 s (`@react-pdf/renderer` handles a statement comfortably). Bulk generation chains |
 | Report export | Async with download link | Cap synchronous exports; chain anything larger |
 
 Chaining is more code than a background function, but it is genuinely more
@@ -167,7 +168,7 @@ tier**, and no amount of engineering changes that.
 
 Interim mitigation, mandatory once any real data exists:
 
-- Nightly `pg_dump` to S3 (`ap-south-1`), retained 30 days.
+- Nightly `pg_dump` to Netlify Blobs, retained 30 days. No India-region control (same gap as documents) and a 5 GB per-object ceiling worth watching as the database grows.
 - The dump runs as a scheduled function — small, well within 30 s against a
   free-tier dataset.
 - Restore drills run against the dump, not against PITR.

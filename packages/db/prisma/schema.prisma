@@ -20,7 +20,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" alone isn't enough on Netlify: the build container (Debian) and
+  // the Lambda runtime (RHEL-based) use different OpenSSL/libc, so a client
+  // generated only for the build machine's OS fails to find its query engine
+  // at runtime with "could not locate the Query Engine for rhel-openssl-3.0.x".
+  // Confirmed by a real deploy hitting exactly that error.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -560,7 +566,7 @@ model Document {
   entityId     String
   type         DocumentType
   fileName     String
-  s3Key        String
+  storageKey   String // Netlify Blobs key -- see docs/02-ARCHITECTURE.md
   mimeType     String
   sizeBytes    Int
   checksum     String?
@@ -1756,7 +1762,7 @@ model PayoutBatch {
   rejectionNote String?
 
   exportedAt    DateTime?
-  bankFileS3Key String?
+  bankFileStorageKey String? // Netlify Blobs key
   paidAt        DateTime?
 
   org   Organization @relation(fields: [orgId], references: [id])
@@ -1789,7 +1795,7 @@ model PayoutLine {
   bankAccountLast4 String?
   bankIfsc         String?
   utrNumber        String?
-  statementS3Key   String?
+  statementStorageKey String? // Netlify Blobs key
 
   createdAt DateTime @default(now())
 

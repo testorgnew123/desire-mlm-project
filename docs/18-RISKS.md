@@ -21,7 +21,7 @@ Scored **before** mitigation. Review at every phase boundary.
 | **R15** | Client finance unavailable for reconciliation | Med | Med | Named owner with decision authority agreed before Phase 0 | Client |
 | **R16** | Netlify free invocation cap hit mid-month | High | Med | 60 s polling, pause-on-blur, 5-min sweeps; alert at 72%. **Hitting it stops the site** ([21-TIER-LIMITS](21-TIER-LIMITS.md)) | Tech lead |
 | **R17** | Neon free 0.5 GB storage exhausted | High | **High** | Audit log alone is 1–2 GB/yr. Alert at 70%; **upgrade before real data lands** | Tech lead |
-| **R18** | Data loss beyond the 6 h free-tier PITR window | High | Med | Nightly `pg_dump` to S3, 30-day retention; restore drills against the dump | DevOps |
+| **R18** | Data loss beyond the 6 h free-tier PITR window | High | Med | Nightly `pg_dump` to Netlify Blobs, 30-day retention; restore drills against the dump | DevOps |
 | **R19** | Free-tier latency (Ohio) rejected by associates | Med | Med | Measure in the demo. ~₹3,500/mo upgrade moves functions and DB to Singapore | Tech lead |
 | **R20** | Scheduled jobs stop firing silently | High | Med | Netlify Scheduled Functions are [reported to cease firing](https://answers.netlify.com/t/scheduled-functions-never-invoked-on-two-sites-schedules-registered-manual-triggers-work/164978) and to drift. Moved to external cron; **dead-man's switch is mandatory** ([21-TIER-LIMITS §11](21-TIER-LIMITS.md)) | Tech lead |
 | **R21** | GitHub Actions scheduled workflows auto-disable after 60 days repo inactivity | Med | Med | Dead-man's switch catches it; quarterly ops check | DevOps |

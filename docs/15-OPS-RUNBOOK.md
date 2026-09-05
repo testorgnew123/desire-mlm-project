@@ -64,8 +64,8 @@ becomes a breach.
 |---|---|
 | Mechanism | Neon point-in-time recovery |
 | Retention | **6 hours on the free tier** (7 days on Pro) |
-| Free-tier supplement | **Nightly `pg_dump` to S3 `ap-south-1`, retained 30 days — mandatory once any real data exists** |
-| Documents | S3 versioning + cross-region replication |
+| Free-tier supplement | **Nightly `pg_dump` to Netlify Blobs, retained 30 days — mandatory once any real data exists.** No India-region control (same gap as documents, [11-COMPLIANCE-INDIA](11-COMPLIANCE-INDIA.md)); watch the 5 GB per-object limit as the database grows |
+| Documents | Netlify Blobs. No built-in versioning or cross-region replication -- if either turns out to matter, that is a reason to reconsider the storage provider, not to build them by hand |
 | **Restore drill** | **Quarterly** |
 
 > An untested backup is not a backup. The quarterly drill restores to a scratch
@@ -89,7 +89,7 @@ Targets: **RPO 1 hour, RTO 4 hours.**
 | Bad migration | Forward-fix migration. **Never `migrate reset` in production** |
 | Data corruption | Restore to a Neon branch at a point in time, validate, cut over |
 | Neon region outage | Restore into another region from PITR; update `DATABASE_URL`; expect degraded latency |
-| S3 region outage | Documents unavailable, app degraded but functional; bookings can continue |
+| Storage outage | Documents unavailable, app degraded but functional; bookings can continue |
 | Total loss | Full runbook rehearsed in the quarterly drill |
 
 ## Routine operations

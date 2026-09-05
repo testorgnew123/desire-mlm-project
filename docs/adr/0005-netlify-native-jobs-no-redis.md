@@ -24,7 +24,7 @@ No Redis, no BullMQ, no worker process. Use Netlify's own primitives.
 | Commission accrual | Async Workload | On booking confirm |
 | Commission release | Async Workload | On receipt clear |
 | Payout batch | Background Function, **chunked** | On demand |
-| PDF generation | Background Function → S3 | Event |
+| PDF generation | Background Function → Netlify Blobs | Event |
 
 ## Why
 

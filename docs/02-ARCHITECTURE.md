@@ -10,7 +10,7 @@
 | ORM | Prisma | Typed schema; migration history doubles as a change record |
 | Jobs | **External cron (GitHub Actions) → guarded HTTP endpoints.** No Redis, no worker process | Netlify Scheduled Functions are not dependable — [ADR-0005 amendment](adr/0005-netlify-native-jobs-no-redis.md), [21-TIER-LIMITS §11](21-TIER-LIMITS.md) |
 | Auth | Auth.js self-hosted + TOTP | Own the session store; no third-party PII processor |
-| Files | S3 `ap-south-1` (Mumbai) | KYC and agreements stay India-resident |
+| Files | Netlify Blobs | KYC, agreements, statements. **No India-region guarantee** — see [11-COMPLIANCE-INDIA](11-COMPLIANCE-INDIA.md) |
 | PDF | `@react-pdf/renderer` | Pure JS; Chromium will not fit a function bundle |
 | RBAC | Permission matrix table + CASL | Sales orgs restructure constantly |
 | Realtime | Delta polling, **60 s on the free tier** | See [ADR-0004](adr/0004-polling-not-sse.md) and [21-TIER-LIMITS §1](21-TIER-LIMITS.md) |
@@ -128,8 +128,8 @@ Netlify Edge Function (middleware)          ← Deno, at the edge
       ↓
 Netlify Function, region sin (Singapore)    ← Next.js SSR / actions / API
       ↓                        ↓
-Neon Postgres                  S3 ap-south-1 (Mumbai)
-aws-ap-southeast-1 (pooled)    documents, KYC — India-resident
+Neon Postgres                  Netlify Blobs
+aws-ap-southeast-1 (pooled)    documents, KYC — region not user-controlled
 ```
 
 Function region and DB region are deliberately the same, so the function↔DB round

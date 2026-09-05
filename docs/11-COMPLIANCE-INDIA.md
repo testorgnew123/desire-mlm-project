@@ -104,14 +104,30 @@ Where that stands:
 - The practical risk is the client's counsel, not the statute — and that
   requirement usually surfaces at contract signing, not at kickoff.
 
-**Partial mitigation, already in the design:** S3 is `ap-south-1` (Mumbai), so
-documents, KYC scans and agreements — the most sensitive artifacts — are
-India-resident even though the rows are not.
+**The India-resident-documents mitigation no longer applies.** The original
+design put file storage on S3 `ap-south-1` (Mumbai) specifically so documents,
+KYC scans and agreements stayed India-resident even though the database rows
+did not. **The project uses Netlify Blobs instead** (decided during Phase 0 —
+see PROGRESS.md decision log), which has no user-controlled region: Netlify's
+own docs describe it as stored in a single region with edge caching, without
+specifying or letting the caller pin which region for the site-wide store
+`getStore()` uses (a region CAN be set for a *deploy-specific* store via
+`getDeployStore({ region })`, which does not apply to the durable, cross-deploy
+storage this system needs). So as of this decision, **no artifact in this
+system — rows or documents — is guaranteed India-resident.**
 
-**If full residency is required**, see [ADR-0001](adr/0001-nextjs-netlify-neon.md)
-for the alternatives. Nothing else in the design changes; the app is standard
-Next.js + Prisma. Decide before Phase 0 — it is a one-line choice at kickoff and
-a painful migration at Phase 4.
+This raises, not lowers, the residency question's stakes. If India residency
+for documents specifically turns out to matter to the client, Netlify Blobs
+does not offer a way to satisfy it; the fallback would be reintroducing an
+S3-compatible bucket in `ap-south-1` for documents alone while keeping Blobs
+for anything non-sensitive, or moving file storage to a provider with real
+region control (Cloudflare R2, Backblaze B2) — see [ADR-0001](adr/0001-nextjs-netlify-neon.md)
+for the equivalent database-residency alternatives, which apply here too.
+
+**Decide before the first real document is stored** — practically, before
+Phase 2 (KYC upload, cost sheets, agreements). Today's Phase 0/1 data is
+synthetic and no documents have been uploaded, so this is not urgent, but it
+is a real gap to close before it is.
 
 ## Outputs the system must produce
 

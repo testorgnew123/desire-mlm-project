@@ -33,7 +33,7 @@ is the one interaction an associate performs while a customer watches.
 | Receipts | 2,000 / month | |
 | Commission entries | ~24,000 / year | 500 × 4 beneficiaries × 12 |
 | Audit rows | ~5 M / year | Partition by month from the start |
-| Documents | 200 GB / year | S3 |
+| Documents | 200 GB / year | Netlify Blobs. **5 GB per-object limit** -- fine for scans/PDFs, worth tracking as volume grows |
 
 ## Availability
 

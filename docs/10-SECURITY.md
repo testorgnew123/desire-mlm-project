@@ -87,8 +87,15 @@ that data unreadable.**
 ## Uploads
 
 MIME allowlist · size cap · virus scan before the object is readable ·
-short-TTL presigned S3 URLs (`S3_PRESIGNED_URL_TTL_SECONDS`) · no public
-buckets, ever · content-type set on the object, never trusted from the client.
+content-type set on the object, never trusted from the client.
+
+**No presigned direct-to-storage uploads.** Netlify Blobs has no presigned-URL
+mechanism (unlike S3) — every read and write goes through a Function or Edge
+Function, which is actually the stricter posture: there is no way to expose a
+blob store publicly even by misconfiguration, because nothing reaches it
+except application code. The upload flow is: client → server action/route
+handler (auth + MIME + size checks) → Netlify Blobs API. Larger files stream
+through the function rather than being buffered whole in memory.
 
 ## Application security
 

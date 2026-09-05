@@ -88,7 +88,7 @@ Post-upgrade:
 |---|---|
 | Netlify Pro | 2,000–4,000 |
 | Neon paid | 2,000–5,000 |
-| S3 + transfer | 1,000–3,000 |
+| Netlify Blobs | included in Netlify plan, no separate line item |
 | WhatsApp BSP | 10,000–25,000 |
 | SMS (DLT) | 2,000–5,000 |
 | Sentry | 1,500 |

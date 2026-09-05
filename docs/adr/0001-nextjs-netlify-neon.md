@@ -14,7 +14,9 @@ Next.js 15 (App Router) on Netlify, Postgres on Neon, Prisma as the ORM.
 
 - Netlify functions in region `sin` (Singapore)
 - Neon in `aws-ap-southeast-1` (Singapore)
-- S3 in `ap-south-1` (Mumbai)
+- File storage on Netlify Blobs (decided during Phase 0 -- see
+  PROGRESS.md decision log; supersedes the S3-in-Mumbai plan this ADR
+  originally made, see the amendment at the end)
 
 ## Why
 
@@ -68,8 +70,10 @@ is capacity and operational posture, plus a known upgrade point before Phase 4.
 
 **No India region on Neon.** Relational data including KYC sits in Singapore.
 DPDP permits this today — Singapore is not a restricted country — but it is
-standing policy risk on a multi-year product. Mitigated in part by keeping S3 in
-Mumbai, so documents and KYC scans stay India-resident.
+standing policy risk on a multi-year product. **No longer partially mitigated
+by India-resident document storage** — see the amendment below; the original
+S3-in-Mumbai plan was replaced with Netlify Blobs, which has no region
+control. See [11-COMPLIANCE-INDIA](../11-COMPLIANCE-INDIA.md).
 
 **Netlify Pro subscription required.**
 
@@ -113,3 +117,52 @@ infrastructure.
 
 **Supabase from the start** — has Mumbai, but we would trade Neon's PR branching
 for it. Worth revisiting the moment residency becomes a hard requirement.
+
+---
+
+## Amendment — S3 replaced with Netlify Blobs
+
+**Date:** 2026-09-05
+
+### What changed
+
+This ADR originally specified S3 in `ap-south-1` (Mumbai) for file storage,
+specifically so documents and KYC scans stayed India-resident even though the
+database rows did not (a deliberate partial mitigation for the Neon residency
+gap above). The user decided against S3; the project uses **Netlify Blobs**
+instead, since it requires no separate account or credentials given the stack
+is already all-in on Netlify.
+
+### Consequence: the India-resident-documents mitigation is gone
+
+Netlify Blobs has no user-controlled region for the durable, cross-deploy
+store this system needs (`getStore()`). A region CAN be set for a
+*deploy-specific* store (`getDeployStore({ region })`), but that is scoped to
+one deploy, not the kind of persistent storage KYC documents need. So as of
+this amendment, **no artifact in this system — rows or files — is guaranteed
+India-resident.** Full detail: [11-COMPLIANCE-INDIA](../11-COMPLIANCE-INDIA.md).
+
+Also gone: presigned direct-to-storage uploads (S3's mechanism) and built-in
+versioning/cross-region replication. Neither is a blocker — Blobs is reached
+only through server code regardless, which is arguably the stricter posture —
+but both are real, load-bearing capabilities this system no longer has for
+free. See [10-SECURITY](../10-SECURITY.md) and
+[15-OPS-RUNBOOK](../15-OPS-RUNBOOK.md).
+
+### Why this wasn't fought
+
+The India-residency gap on the *database* (no Neon region in India) was
+already an accepted, documented risk in this ADR before this amendment.
+Extending that same gap to documents is a real regression, not a neutral
+trade — but re-litigating it would mean re-opening the storage-provider
+decision the user already made. Recorded here so it is visible at the next
+compliance review, not silently absorbed.
+
+### Revisit if
+
+India residency for documents specifically becomes a hard client requirement.
+The fallback is not a code change — it is a provider decision: reintroduce an
+S3-compatible bucket in `ap-south-1` for documents alone (Netlify Blobs
+elsewhere), or move file storage entirely to a provider with real region
+control (Cloudflare R2, Backblaze B2 — neither has a Mumbai region either,
+so this still needs a real answer, not an assumption).
