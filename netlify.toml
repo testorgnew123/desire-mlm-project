@@ -11,9 +11,17 @@
 # Next.js Runtime v5 can auto-detect it: omitting it here produced a doubled,
 # broken path (base + a wrong default = apps/web/apps/web/.next), confirmed
 # by a failed deploy. Setting it explicitly, relative to `base`, avoids that.
+#
+# `prisma generate` is run EXPLICITLY, not left to a postinstall hook: plain
+# `pnpm --filter @desire/web build` does not trigger packages/db's own build
+# step (that's Turbo's `dependsOn: ["^build"]` behaviour, not plain pnpm
+# --filter), and @prisma/client's postinstall generation is unreliable in a
+# pnpm-workspace monorepo where schema.prisma isn't at a conventional root
+# path. Confirmed by a real deploy failing with "@prisma/client did not
+# initialize yet" before this was added.
 [build]
   base = "apps/web"
-  command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/web build"
+  command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/db exec prisma generate && pnpm --filter @desire/web build"
   publish = ".next"
 
 [build.environment]
