@@ -61,6 +61,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # engineType="client" (packages/db/prisma/schema.prisma) generates the
+      # client into packages/db/src/generated/ -- it's gitignored build
+      # output, so every environment (CI, Netlify, local) must generate it
+      # explicitly rather than relying on a postinstall hook. Must run before
+      # typecheck, since packages/db/src/index.ts imports the generated code.
+      - name: Generate Prisma Client
+        run: pnpm --filter @desire/db exec prisma generate
+
       - name: Typecheck
         run: pnpm typecheck
 

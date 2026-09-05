@@ -23,3 +23,7 @@ packages/db/prisma/*.d.ts.map
 
 # Local Netlify folder
 .netlify
+
+# Prisma's engineType="client" generates the client into src/ (so tsconfig's
+# rootDir/include naturally picks it up) -- it is build output, never commit it.
+packages/db/src/generated/

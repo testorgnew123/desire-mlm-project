@@ -19,19 +19,26 @@
 //    · Values marked PLACEHOLDER are unconfirmed by the client. Do not ship them.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// No Rust query engine binary (GA since Prisma 6.16) -- engineType="client"
+// generates a pure TS/WASM client with no native .so/.node file to bundle at
+// all, which is what actually ends the class of bug that binaryTargets only
+// patched: three real Netlify deploys in a row hit the SAME root cause in
+// layers (wrong binary target, then binary present but not copied into the
+// serverless bundle by Next.js's file tracer). Runtime connections go through
+// a driver adapter instead (see packages/db/src/index.ts) -- @prisma/adapter-pg
+// (generic node-postgres), not @prisma/adapter-neon, so the identical code
+// path works against local Docker Postgres, CI's ephemeral Postgres, AND
+// hosted Neon. Netlify Functions run on normal Node.js, not edge, so there is
+// no need for Neon's HTTP-specific transport that adapter-neon exists for.
 generator client {
-  provider      = "prisma-client-js"
-  // "native" alone isn't enough on Netlify: the build container (Debian) and
-  // the Lambda runtime (RHEL-based) use different OpenSSL/libc, so a client
-  // generated only for the build machine's OS fails to find its query engine
-  // at runtime with "could not locate the Query Engine for rhel-openssl-3.0.x".
-  // Confirmed by a real deploy hitting exactly that error.
-  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+  provider   = "prisma-client"
+  engineType = "client"
+  output     = "../src/generated/prisma"
 }
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")           // pooled — used by PrismaClient at runtime
+  url       = env("DATABASE_URL")           // pooled — used by the driver adapter at runtime
   directUrl = env("DATABASE_URL_UNPOOLED")  // direct — Prisma CLI uses this automatically
                                              // for migrate/introspect. Available since
                                              // Prisma 4.10; this is the verified mechanism,
