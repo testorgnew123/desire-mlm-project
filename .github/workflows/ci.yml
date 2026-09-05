@@ -1,0 +1,88 @@
+# CI. Runs against an EPHEMERAL Postgres service container -- never the hosted
+# Neon project or a developer's local Docker instance -- so a PR run can
+# never corrupt real data and never depends on anything outside this
+# workflow. See PROGRESS.md Phase 0.
+#
+# Playwright e2e is wired as a step but currently a no-op: no UI exists yet
+# to test against (see apps/web -- Phase 0 is schema + commission engine +
+# auth, not screens). The step stays in the pipeline shape now so adding the
+# first real e2e spec in Phase 1 is "write the test", not "also build CI for
+# it" -- and an honest "no tests yet" step, same pattern as
+# apps/web/package.json's own test script.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-lint-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: desire
+          POSTGRES_PASSWORD: desire_ci_only
+          POSTGRES_DB: desire
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U desire -d desire"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://desire:desire_ci_only@localhost:5432/desire
+      DATABASE_URL_UNPOOLED: postgresql://desire:desire_ci_only@localhost:5432/desire
+      PII_ENCRYPTION_KEY: ${{ secrets.CI_PII_ENCRYPTION_KEY }}
+      PII_ENCRYPTION_KEY_ID: v1
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # GATE (docs/06-INVENTORY-SPEC.md, PROGRESS.md Phase 0): the partial
+      # unique indexes cannot be expressed in schema.prisma. This is what
+      # proves every PR still has them -- a migration that drops one fails
+      # the build here, not in production.
+      - name: Apply migrations to the ephemeral database
+        run: pnpm --filter @desire/db exec prisma migrate deploy
+
+      - name: Unit + integration tests
+        run: pnpm test
+
+      # packages/commission is held to 100% branch coverage by its own
+      # vitest.config.ts threshold (docs/04-COMMISSION-SPEC.md section 8) --
+      # this step fails the build if that regresses, same for
+      # packages/services' 80% floor (docs/12-NFR.md).
+      - name: Coverage gates
+        run: pnpm test:coverage
+
+      - name: Playwright e2e (no specs yet -- Phase 1 adds the first)
+        run: echo "No e2e specs exist yet. apps/web has no UI to test against until Phase 1."

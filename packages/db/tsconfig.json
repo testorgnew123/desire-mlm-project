@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  // prisma/seed.ts is deliberately excluded here: it's run directly via
+  // `tsx` (which resolves modules/compiler options without needing rootDir
+  // to cover it) and is never part of this package's build output. Including
+  // it would break `tsc -p tsconfig.json` (rootDir "src" can't also emit a
+  // file under prisma/) for no benefit -- see PROGRESS.md Phase 0.
+  "include": ["src"]
+}

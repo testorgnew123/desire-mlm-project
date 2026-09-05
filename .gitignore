@@ -1,0 +1,22 @@
+node_modules/
+.turbo/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+.DS_Store
+Thumbs.db
+pnpm-lock.yaml.bak
+
+# prisma/ must only ever contain schema.prisma, migrations/, and seed.ts --
+# a stray tsc build once emitted compiled output directly into this folder
+# (fixed by excluding "prisma" from packages/db/tsconfig.json's include).
+# This is a backstop against it happening again silently.
+packages/db/prisma/*.js
+packages/db/prisma/*.js.map
+packages/db/prisma/*.d.ts
+packages/db/prisma/*.d.ts.map

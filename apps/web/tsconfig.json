@@ -1,0 +1,38 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "noEmit": true,
+    // apps/web is a leaf app, not a library other packages import from --
+    // unlike packages/db and packages/commission, it never needs emitted
+    // .d.ts files. With declaration:true (inherited from tsconfig.base.json)
+    // tsc still demands every exported type be "nameable" even though
+    // noEmit suppresses output, which breaks on Next.js route handlers
+    // whose inferred Response type pulls in non-portable undici-types.
+    "declaration": false,
+    "declarationMap": false,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "allowJs": true,
+    "incremental": true
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

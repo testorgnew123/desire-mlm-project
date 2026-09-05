@@ -1,0 +1,1977 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  Real Estate Sales & Commission Platform — Prisma schema
+//
+//  Companion docs:
+//    docs/03-DATA-MODEL.md       ERD + entity dictionary
+//    docs/04-COMMISSION-SPEC.md  the commission engine
+//    docs/05-COLLECTIONS-SPEC.md demands, receipts, alerts
+//    docs/06-INVENTORY-SPEC.md   units, holds, price lists
+//    docs/19-GLOSSARY.md         READ FIRST. The domain terms are not intuitive.
+//
+//  Conventions used throughout:
+//    · Money is Decimal(18,2). Never Float. Never Int-rupees.
+//    · Areas are Decimal(10,2) square feet.
+//    · Rates/percentages are Decimal(7,4) — 1.5% is stored as 1.5000.
+//    · Every table carries orgId. Single-tenant today; this makes Postgres RLS
+//      a later config change rather than a migration.
+//    · Financial rows are APPEND-ONLY. No updates. Corrections are contra rows.
+//    · Effective-dated assignments use validFrom/validTo (validTo null = current).
+//    · Values marked PLACEHOLDER are unconfirmed by the client. Do not ship them.
+// ═══════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")           // pooled — used by PrismaClient at runtime
+  directUrl = env("DATABASE_URL_UNPOOLED")  // direct — Prisma CLI uses this automatically
+                                             // for migrate/introspect. Available since
+                                             // Prisma 4.10; this is the verified mechanism,
+                                             // not prisma.config.ts. See docs/02-ARCHITECTURE.md.
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ENUMS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+/// How the associate is engaged. This single field drives the entire tax path:
+/// TDS section, GST applicability, and whether payout routes through payroll.
+/// See docs/11-COMPLIANCE-INDIA.md.
+enum EngagementType {
+  EMPLOYEE // incentive = salary -> TDS u/s 192, no GST, via payroll
+  CONSULTANT // professional fee -> TDS u/s 194J, GST if registered
+  CHANNEL_PARTNER // brokerage      -> TDS u/s 194H, GST if registered
+}
+
+enum AssociateStatus {
+  ONBOARDING
+  ACTIVE
+  ON_LEAVE
+  NOTICE_PERIOD
+  EXITED
+  SUSPENDED
+}
+
+enum ProjectStatus {
+  PLANNING
+  PRE_LAUNCH
+  LAUNCHED
+  SELLING
+  SOLD_OUT
+  COMPLETED
+  ON_HOLD
+}
+
+/// Unit lifecycle. Transitions and their guards: docs/06-INVENTORY-SPEC.md.
+enum UnitStatus {
+  AVAILABLE
+  HELD
+  BOOKED
+  AGREEMENT_SIGNED
+  REGISTERED
+  POSSESSION
+  BLOCKED // management / legal / mortgage — not sellable
+}
+
+enum HoldReleaseReason {
+  EXPIRED // TTL elapsed
+  RELEASED_BY_ASSOCIATE
+  RELEASED_BY_ADMIN
+  CONVERTED_TO_BOOKING
+  UNIT_BLOCKED
+}
+
+enum PublishStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  ARCHIVED
+}
+
+/// Charge components on a cost sheet. `countsTowardCommission` on ChargeHead
+/// decides which of these form the commissionable value.
+enum ChargeCategory {
+  BASE_PRICE // BSP
+  PLC // preferential location charge
+  PARKING
+  CLUB_MEMBERSHIP
+  IFMS // interest-free maintenance security
+  ELECTRICITY_WATER
+  POWER_BACKUP
+  LEGAL_DOCUMENTATION
+  GST
+  STAMP_DUTY
+  REGISTRATION
+  OTHER
+}
+
+enum LeadSource {
+  WALK_IN
+  REFERRAL
+  WEBSITE
+  PORTAL_99ACRES
+  PORTAL_MAGICBRICKS
+  PORTAL_HOUSING
+  SOCIAL_MEDIA
+  CAMPAIGN
+  CHANNEL_PARTNER
+  COLD_CALL
+  OTHER
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  SITE_VISIT_SCHEDULED
+  SITE_VISIT_DONE
+  NEGOTIATION
+  BOOKED
+  LOST
+  DORMANT
+}
+
+enum ActivityType {
+  CALL
+  WHATSAPP
+  EMAIL
+  MEETING
+  SITE_VISIT
+  NOTE
+  STAGE_CHANGE
+}
+
+enum BookingStatus {
+  DRAFT
+  PENDING_APPROVAL
+  CONFIRMED
+  AGREEMENT_SIGNED
+  REGISTERED
+  POSSESSION_GIVEN
+  CANCELLED
+}
+
+enum DemandStatus {
+  SCHEDULED // future, not yet raised on the customer
+  RAISED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+enum ReceiptMode {
+  CHEQUE
+  NEFT
+  RTGS
+  IMPS
+  UPI
+  CARD
+  CASH
+  DEMAND_DRAFT
+  BANK_TRANSFER
+}
+
+/// A receipt only counts toward commission release once VERIFIED and cleared.
+/// Entry and verification must be different people — see docs/10-SECURITY.md.
+enum ReceiptStatus {
+  ENTERED // recorded by sales admin, not yet verified
+  VERIFIED // finance confirmed
+  CLEARED // funds actually in the bank
+  BOUNCED
+  CANCELLED
+}
+
+enum FollowUpOutcome {
+  CONTACTED_WILL_PAY
+  CONTACTED_DISPUTED
+  CONTACTED_REQUESTED_EXTENSION
+  NO_ANSWER
+  WRONG_NUMBER
+  ESCALATED
+}
+
+enum RateType {
+  PCT_OF_BASE // percentage of commissionable value
+  PER_SQFT // rupees per saleable square foot
+  FLAT // fixed rupee amount per booking
+}
+
+/// What happens to a level's override when the upline in that slot is
+/// ineligible. See docs/04-COMMISSION-SPEC.md — the default is deliberate.
+enum CompressionMode {
+  NONE // level is consumed; the amount becomes breakage to the company
+  ROLL_UP // level is not consumed; the next eligible upline takes it
+}
+
+enum PayoutMode {
+  PRO_RATA_COLLECTION
+  MILESTONE
+  ON_BOOKING
+}
+
+enum ReleaseTriggerType {
+  BOOKING_CONFIRMED
+  COLLECTION_PCT // release tracks cumulative cleared collection
+  DEMAND_PAID // a specific milestone demand settled
+  AGREEMENT_SIGNED
+  REGISTRATION
+  POSSESSION
+}
+
+enum CommissionRole {
+  SELF // the selling associate
+  OVERRIDE // an upline earning a level percentage
+}
+
+enum CommissionEntryStatus {
+  ACCRUED // owed, not yet payable
+  PAYABLE // released, awaiting a payout batch
+  ON_HOLD // disputed or withheld
+  PAID
+  REVERSED // superseded by a contra entry
+}
+
+enum PayoutBatchStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  EXPORTED
+  PAID
+  CANCELLED
+}
+
+enum RecoveryStatus {
+  OUTSTANDING
+  PARTIALLY_RECOVERED
+  RECOVERED
+  WRITTEN_OFF
+}
+
+enum AdjustmentType {
+  CREDIT
+  DEBIT
+  OPENING_BALANCE // migrated historical position — see docs/14-DATA-MIGRATION.md
+}
+
+enum TdsSection {
+  SEC_192 // salary
+  SEC_194H // commission / brokerage
+  SEC_194J // professional fees
+  NONE
+}
+
+enum ApprovalType {
+  DISCOUNT
+  PRICE_LIST_PUBLISH
+  BOOKING_CANCELLATION
+  COMMISSION_SCHEME_PUBLISH
+  GRADE_CHANGE
+  HIERARCHY_MOVE
+  PAYOUT_BATCH
+  RECEIPT_VERIFICATION
+  DEMAND_WAIVER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  WHATSAPP
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+/// Rungs of the collections escalation ladder. Each fires at most once per
+/// demand. See docs/05-COLLECTIONS-SPEC.md.
+enum AlertRung {
+  DUE_MINUS_7
+  DUE_MINUS_3
+  DUE_MINUS_1
+  DUE_TODAY
+  OVERDUE_1
+  OVERDUE_7
+  OVERDUE_15
+  OVERDUE_30
+  PROMISE_BREACHED
+  CHEQUE_BOUNCED
+}
+
+enum DocumentType {
+  KYC_PAN
+  KYC_AADHAAR
+  KYC_PASSPORT
+  KYC_PHOTO
+  BANK_PROOF
+  BOOKING_FORM
+  ALLOTMENT_LETTER
+  COST_SHEET
+  AGREEMENT_TO_SALE
+  SALE_DEED
+  RECEIPT_COPY
+  CHEQUE_COPY
+  DEMAND_LETTER
+  COMMISSION_STATEMENT
+  FORM_16A
+  OTHER
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  EXPORT
+  VIEW_SENSITIVE // KYC document access — logged deliberately
+  IMPERSONATE
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ORGANISATION, AUTH & ACCESS CONTROL
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  legalName String
+  gstin     String?
+  pan       String?
+  cin       String?
+  address   Json?
+  logoUrl   String?
+  timezone  String   @default("Asia/Kolkata")
+  currency  String   @default("INR")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  associates        Associate[]
+  grades            Grade[]
+  projects          Project[]
+  leads             Lead[]
+  customers         Customer[]
+  bookings          Booking[]
+  commissionSchemes CommissionScheme[]
+  payoutBatches     PayoutBatch[]
+  roles             Role[]
+  auditLogs         AuditLog[]
+  taxRates          TaxRate[]
+  chargeHeads       ChargeHead[]
+  paymentPlans      PaymentPlan[]
+  notificationRules NotificationRule[]
+  featureFlags      FeatureFlag[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  orgId        String
+  email        String
+  phone        String?
+  name         String
+  passwordHash String // argon2id
+  status       UserStatus @default(INVITED)
+
+  /// TOTP. Mandatory for SUPER_ADMIN, FINANCE_ADMIN, SALES_HEAD —
+  /// enforced in the service layer, see docs/10-SECURITY.md.
+  mfaSecret        String?
+  mfaEnabled       Boolean   @default(false)
+  mfaEnrolledAt    DateTime?
+  lastLoginAt      DateTime?
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org       Organization @relation(fields: [orgId], references: [id])
+  associate Associate?
+  userRoles UserRole[]
+  sessions  Session[]
+
+  @@unique([orgId, email])
+  @@index([orgId, status])
+  @@map("users")
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  tokenHash    String    @unique
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Roles are data, not code. Sales orgs restructure constantly and a hardcoded
+/// enum guarantees a deploy every time they do. Grid: docs/09-RBAC-MATRIX.md.
+model Role {
+  id          String  @id @default(cuid())
+  orgId       String
+  code        String // SUPER_ADMIN, FINANCE_ADMIN, PROJECT_MANAGER, ...
+  name        String
+  description String?
+  isSystem    Boolean @default(false) // system roles cannot be deleted
+  requiresMfa Boolean @default(false)
+
+  org             Organization     @relation(fields: [orgId], references: [id])
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([orgId, code])
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  code        String  @unique // "booking.cancel", "receipt.verify", ...
+  resource    String
+  action      String
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@index([resource])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// Postgres treats NULLs as distinct in a unique index, so a plain
+/// @@unique([userId, roleId, projectId]) would let the same org-wide role be
+/// granted twice. Phase 0 adds two partial unique indexes by hand:
+///
+///   CREATE UNIQUE INDEX user_role_org_wide
+///     ON user_roles (user_id, role_id) WHERE project_id IS NULL;
+///   CREATE UNIQUE INDEX user_role_scoped
+///     ON user_roles (user_id, role_id, project_id) WHERE project_id IS NOT NULL;
+model UserRole {
+  id         String   @id @default(cuid())
+  userId     String
+  roleId     String
+  /// Null = organisation-wide. Set = the role applies only to this project,
+  /// which is how a Project Manager is scoped to their own towers.
+  projectId  String?
+  assignedAt DateTime @default(now())
+  assignedBy String?
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@index([userId])
+  @@index([roleId])
+  @@index([projectId])
+  @@map("user_roles")
+}
+
+/// Append-only. Never updated, never deleted. Retention is handled by
+/// partitioning, not by DELETE. See docs/15-OPS-RUNBOOK.md.
+model AuditLog {
+  id         String      @id @default(cuid())
+  orgId      String
+  actorId    String? // null for system/job actors
+  actorLabel String // denormalised: the actor may later be deleted
+  action     AuditAction
+  entity     String // "Booking", "Receipt", ...
+  entityId   String
+  before     Json?
+  after      Json?
+  reason     String?
+  ipAddress  String?
+  userAgent  String?
+  requestId  String?
+  createdAt  DateTime    @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@index([orgId, entity, entityId])
+  @@index([orgId, actorId, createdAt])
+  @@index([orgId, action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  orgId       String
+  key         String
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, key])
+  @@map("feature_flags")
+}
+
+/// Polymorphic attachment. `entity` + `entityId` point at the owning row.
+model Document {
+  id           String       @id @default(cuid())
+  orgId        String
+  entity       String
+  entityId     String
+  type         DocumentType
+  fileName     String
+  s3Key        String
+  mimeType     String
+  sizeBytes    Int
+  checksum     String?
+  uploadedById String?
+  uploadedAt   DateTime     @default(now())
+  verifiedById String?
+  verifiedAt   DateTime?
+  /// Documents holding KYC are read-logged (AuditAction.VIEW_SENSITIVE).
+  isSensitive  Boolean      @default(false)
+
+  @@index([orgId, entity, entityId])
+  @@index([orgId, type])
+  @@map("documents")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PEOPLE & NETWORK
+//
+//  The tree is admin-assigned (no self-signup). Grade and placement are both
+//  effective-dated, AND the resolved chain is snapshotted onto every commission
+//  entry at accrual — see docs/04-COMMISSION-SPEC.md for why both.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Associate {
+  id     String @id @default(cuid())
+  orgId  String
+  userId String @unique
+  code   String // human-readable, appears on statements
+
+  engagementType EngagementType
+  status         AssociateStatus @default(ONBOARDING)
+  joinDate       DateTime
+  confirmDate    DateTime?
+  exitDate       DateTime?
+  exitReason     String?
+
+  // ── KYC. Encrypted at the application layer before insert (AES-256-GCM).
+  //    Never log or export these raw. docs/10-SECURITY.md.
+  panEncrypted     String?
+  panLast4         String? // for display without decrypting
+  aadhaarEncrypted String?
+  aadhaarLast4     String?
+
+  // ── Payout destination
+  bankAccountEncrypted String?
+  bankAccountLast4     String?
+  bankIfsc             String?
+  bankName             String?
+  bankBranch           String?
+
+  /// Only meaningful when engagementType is CHANNEL_PARTNER. An employee of the
+  /// promoter is generally not a RERA-registrable agent — docs/11-COMPLIANCE-INDIA.md.
+  reraAgentRegNo  String?
+  reraValidTill   DateTime?
+  gstin           String?
+  isGstRegistered Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org               Organization         @relation(fields: [orgId], references: [id])
+  user              User                 @relation(fields: [userId], references: [id])
+  grades            AssociateGrade[]
+  hierarchyAsChild  AssociateHierarchy[] @relation("HierarchyChild")
+  hierarchyAsParent AssociateHierarchy[] @relation("HierarchyParent")
+  leads             Lead[]
+  holds             UnitHold[]
+  bookings          Booking[]
+  commissionEntries CommissionEntry[]
+  payoutLines       PayoutLine[]
+  recoveries        Recovery[]
+  adjustments       Adjustment[]
+  followUps         PaymentFollowUp[]
+  activities        LeadActivity[]
+
+  @@unique([orgId, code])
+  @@index([orgId, status])
+  @@map("associates")
+}
+
+model Grade {
+  id          String  @id @default(cuid())
+  orgId       String
+  code        String // PLACEHOLDER: G1..G6
+  name        String // PLACEHOLDER: Executive .. Vice President
+  rank        Int // 1 = most junior. Ordering matters for qualification rules.
+  description String?
+  isActive    Boolean @default(true)
+
+  // ── Auto-qualification thresholds. All PLACEHOLDER; null = not evaluated.
+  minCumulativeSalesValue Decimal? @db.Decimal(18, 2)
+  minBookingsInPeriod     Int?
+  minTeamSize             Int?
+  minTenureMonths         Int?
+
+  /// Holds an associate at this grade may keep open at once, across projects.
+  holdQuota Int @default(3) // PLACEHOLDER
+
+  org             Organization      @relation(fields: [orgId], references: [id])
+  associateGrades AssociateGrade[]
+  schemeRates     SchemeGradeRate[]
+
+  @@unique([orgId, code])
+  @@unique([orgId, rank])
+  @@map("grades")
+}
+
+/// Effective-dated grade assignment. NEVER update a row to change a grade —
+/// close the current one (set validTo) and insert a new one. A commission run
+/// for a March sale must resolve the grade that was valid in March.
+model AssociateGrade {
+  id           String    @id @default(cuid())
+  associateId  String
+  gradeId      String
+  validFrom    DateTime
+  validTo      DateTime? // null = current
+  reason       String?
+  approvedById String?
+  createdAt    DateTime  @default(now())
+
+  associate Associate @relation(fields: [associateId], references: [id])
+  grade     Grade     @relation(fields: [gradeId], references: [id])
+
+  @@index([associateId, validFrom])
+  @@index([associateId, validTo])
+  @@map("associate_grades")
+}
+
+/// Effective-dated tree placement.
+///
+/// `path` is a materialised ancestor path ("/root/mid/leaf/") recomputed for the
+/// whole subtree on a move. It makes "all my downline" a prefix scan instead of
+/// a recursive CTE, which matters on the team dashboards.
+///
+/// Invariants (asserted in code and by the nightly monitor):
+///   · an associate is never their own ancestor
+///   · exactly one row per associate has validTo = null
+///   · moves are rejected while a payout period is open
+model AssociateHierarchy {
+  id          String    @id @default(cuid())
+  associateId String
+  parentId    String? // null = top of tree
+  path        String
+  depth       Int
+  validFrom   DateTime
+  validTo     DateTime?
+  createdAt   DateTime  @default(now())
+
+  associate Associate  @relation("HierarchyChild", fields: [associateId], references: [id])
+  parent    Associate? @relation("HierarchyParent", fields: [parentId], references: [id])
+
+  @@index([associateId, validTo])
+  @@index([parentId, validTo])
+  @@index([path])
+  @@map("associate_hierarchy")
+}
+
+model HierarchyChangeLog {
+  id           String   @id @default(cuid())
+  orgId        String
+  associateId  String
+  fromParentId String?
+  toParentId   String?
+  reason       String
+  movedById    String
+  movedAt      DateTime @default(now())
+  /// Number of descendants that moved with them. Recorded because a move that
+  /// silently relocated 40 people is the kind of thing people later dispute.
+  subtreeSize  Int
+
+  @@index([orgId, associateId, movedAt])
+  @@map("hierarchy_change_log")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PROJECTS & INVENTORY
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Project {
+  id     String        @id @default(cuid())
+  orgId  String
+  code   String
+  name   String
+  status ProjectStatus @default(PLANNING)
+
+  // ── RERA. Required before any unit may be marketed.
+  reraRegNo     String?
+  reraValidTill DateTime?
+  reraPortalUrl String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String
+  state        String
+  pincode      String?
+  latitude     Decimal? @db.Decimal(10, 7)
+  longitude    Decimal? @db.Decimal(10, 7)
+
+  launchDate             DateTime?
+  expectedPossessionDate DateTime?
+
+  // ── Inventory behaviour. Overrides the .env defaults. All PLACEHOLDER.
+  holdTtlMinutes       Int     @default(1440)
+  holdExtensionMinutes Int     @default(720)
+  maxHoldExtensions    Int     @default(1)
+  holdRequiresApproval Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org               Organization       @relation(fields: [orgId], references: [id])
+  towers            Tower[]
+  unitTypes         UnitType[]
+  units             Unit[]
+  priceLists        PriceList[]
+  leads             Lead[]
+  bookings          Booking[]
+  commissionSchemes CommissionScheme[]
+  paymentPlans      PaymentPlan[]
+  userRoles         UserRole[]
+
+  @@unique([orgId, code])
+  @@index([orgId, status])
+  @@map("projects")
+}
+
+model Tower {
+  id            String  @id @default(cuid())
+  orgId         String
+  projectId     String
+  code          String
+  name          String
+  totalFloors   Int
+  unitsPerFloor Int?
+  phase         String?
+  displayOrder  Int     @default(0)
+
+  project Project @relation(fields: [projectId], references: [id])
+  units   Unit[]
+
+  @@unique([projectId, code])
+  @@map("towers")
+}
+
+/// All three areas are stored because they serve different purposes. Carpet is
+/// the RERA-mandated figure that must appear on customer documents. Saleable is
+/// what pricing is quoted on. Confusing them is the most common costly mistake
+/// in this domain — see docs/19-GLOSSARY.md.
+model UnitType {
+  id        String @id @default(cuid())
+  orgId     String
+  projectId String
+  code      String
+  name      String
+  bedrooms  Int?
+  bathrooms Int?
+  balconies Int?
+
+  carpetArea   Decimal  @db.Decimal(10, 2)
+  builtUpArea  Decimal  @db.Decimal(10, 2)
+  saleableArea Decimal  @db.Decimal(10, 2)
+  terraceArea  Decimal? @db.Decimal(10, 2)
+
+  floorPlanUrl String?
+
+  project        Project         @relation(fields: [projectId], references: [id])
+  units          Unit[]
+  priceListItems PriceListItem[]
+
+  @@unique([projectId, code])
+  @@map("unit_types")
+}
+
+model Unit {
+  id         String  @id @default(cuid())
+  orgId      String
+  projectId  String
+  towerId    String?
+  unitTypeId String
+
+  unitNumber String
+  floor      Int
+  facing     String?
+  /// PLC tags priced by PriceListItem.plcCharges, e.g. ["CORNER","PARK_FACING"].
+  plcTags    String[]
+
+  /// Per-unit override. Null means inherit from UnitType.
+  carpetAreaOverride   Decimal? @db.Decimal(10, 2)
+  saleableAreaOverride Decimal? @db.Decimal(10, 2)
+
+  status      UnitStatus @default(AVAILABLE)
+  blockReason String?
+  blockedById String?
+  blockedAt   DateTime?
+
+  /// Denormalised pointer to the live hold. The authoritative constraint is the
+  /// partial unique index on unit_holds — this field is a read convenience,
+  /// not the lock. See docs/06-INVENTORY-SPEC.md.
+  currentHoldId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project        Project             @relation(fields: [projectId], references: [id])
+  tower          Tower?              @relation(fields: [towerId], references: [id])
+  unitType       UnitType            @relation(fields: [unitTypeId], references: [id])
+  holds          UnitHold[]
+  statusHistory  UnitStatusHistory[]
+  bookings       Booking[]
+  priceListItems PriceListItem[]
+
+  @@unique([projectId, unitNumber])
+  @@index([projectId, status])
+  @@index([projectId, towerId, floor])
+  @@index([orgId, updatedAt])
+  @@map("units")
+}
+
+/// Versioned. Price lists are never mutated — a change publishes a new version
+/// and archives the old. A booking pins the version it was sold on, so
+/// "why was this unit cheaper in January" is answerable from a row.
+model PriceList {
+  id        String        @id @default(cuid())
+  orgId     String
+  projectId String
+  version   Int
+  name      String
+  status    PublishStatus @default(DRAFT)
+  validFrom DateTime
+  validTo   DateTime?
+
+  preparedById String
+  approvedById String?
+  publishedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  project  Project         @relation(fields: [projectId], references: [id])
+  items    PriceListItem[]
+  bookings Booking[]
+
+  @@unique([projectId, version])
+  @@index([projectId, status, validFrom])
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id          String  @id @default(cuid())
+  priceListId String
+  /// Either a unit-type-wide rate or a per-unit override. Exactly one is set.
+  unitTypeId  String?
+  unitId      String?
+
+  baseRatePerSqft Decimal @db.Decimal(12, 2)
+  /// { "CORNER": 150, "PARK_FACING": 200 } — rupees per sqft, keyed by PLC tag.
+  plcCharges      Json?
+  /// [{ "chargeHeadCode": "PARKING", "amount": 300000 }, ...]
+  otherCharges    Json?
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  unitType  UnitType? @relation(fields: [unitTypeId], references: [id])
+  unit      Unit?     @relation(fields: [unitId], references: [id])
+
+  @@index([priceListId])
+  @@map("price_list_items")
+}
+
+/// Charge components. countsTowardCommission is what a commission scheme base
+/// definition reads to build the commissionable value.
+model ChargeHead {
+  id                     String         @id @default(cuid())
+  orgId                  String
+  code                   String
+  name                   String
+  category               ChargeCategory
+  isTaxable              Boolean        @default(true)
+  gstRatePct             Decimal?       @db.Decimal(5, 2)
+  countsTowardCommission Boolean        @default(false)
+  isRefundable           Boolean        @default(false)
+  displayOrder           Int            @default(0)
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, code])
+  @@map("charge_heads")
+}
+
+/// One live hold per unit is enforced by a PARTIAL UNIQUE INDEX that Prisma
+/// cannot express. Phase 0 must add it in a hand-written migration:
+///
+///   CREATE UNIQUE INDEX one_active_hold_per_unit
+///     ON unit_holds (unit_id) WHERE released_at IS NULL;
+///
+/// Without it, two associates tapping Hold in the same second both succeed.
+model UnitHold {
+  id          String  @id @default(cuid())
+  orgId       String
+  unitId      String
+  associateId String
+  leadId      String?
+
+  createdAt      DateTime           @default(now())
+  expiresAt      DateTime
+  releasedAt     DateTime?
+  releaseReason  HoldReleaseReason?
+  releasedById   String?
+  extensionCount Int                @default(0)
+
+  unit      Unit      @relation(fields: [unitId], references: [id])
+  associate Associate @relation(fields: [associateId], references: [id])
+  lead      Lead?     @relation(fields: [leadId], references: [id])
+
+  @@index([unitId, releasedAt])
+  @@index([associateId, releasedAt])
+  @@index([expiresAt, releasedAt])
+  @@map("unit_holds")
+}
+
+model UnitStatusHistory {
+  id         String      @id @default(cuid())
+  unitId     String
+  fromStatus UnitStatus?
+  toStatus   UnitStatus
+  reason     String?
+  actorId    String?
+  actorLabel String
+  createdAt  DateTime    @default(now())
+
+  unit Unit @relation(fields: [unitId], references: [id])
+
+  @@index([unitId, createdAt])
+  @@map("unit_status_history")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CRM
+//
+//  Lead ownership is the single biggest source of internal conflict on a
+//  commission-driven sales floor. It is modelled explicitly rather than left
+//  to convention. See docs/01-PRD.md.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Lead {
+  id        String  @id @default(cuid())
+  orgId     String
+  projectId String?
+
+  name      String
+  phone     String
+  email     String?
+  altPhone  String?
+  /// SHA-256 of the normalised phone (E.164) and lowercased email. Used for
+  /// duplicate detection without exposing contacts across teams.
+  phoneHash String
+  emailHash String?
+
+  source       LeadSource
+  sourceDetail String?
+  campaignRef  String?
+
+  stage      LeadStage @default(NEW)
+  lostReason String?
+
+  budgetMin       Decimal? @db.Decimal(18, 2)
+  budgetMax       Decimal? @db.Decimal(18, 2)
+  preferredTypes  String[]
+  requirementNote String?
+
+  assignedAssociateId String?
+  assignedAt          DateTime?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastContactAt DateTime?
+
+  org        Organization   @relation(fields: [orgId], references: [id])
+  project    Project?       @relation(fields: [projectId], references: [id])
+  associate  Associate?     @relation(fields: [assignedAssociateId], references: [id])
+  activities LeadActivity[]
+  siteVisits SiteVisit[]
+  claims     LeadClaim[]
+  holds      UnitHold[]
+  bookings   Booking[]
+
+  @@index([orgId, phoneHash])
+  @@index([orgId, assignedAssociateId, stage])
+  @@index([orgId, projectId, stage])
+  @@index([orgId, createdAt])
+  @@map("leads")
+}
+
+/// First-touch claim with an expiry window (PLACEHOLDER 90 days). On expiry the
+/// lead returns to the pool. A walk-in matching a live claim surfaces the
+/// conflict BEFORE booking, not after commission has accrued.
+model LeadClaim {
+  id            String    @id @default(cuid())
+  leadId        String
+  associateId   String
+  claimedAt     DateTime  @default(now())
+  expiresAt     DateTime
+  releasedAt    DateTime?
+  releaseReason String?
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([leadId, releasedAt])
+  @@index([associateId, expiresAt])
+  @@map("lead_claims")
+}
+
+model LeadActivity {
+  id          String       @id @default(cuid())
+  leadId      String
+  associateId String?
+  type        ActivityType
+  subject     String?
+  notes       String?
+  outcome     String?
+  fromStage   LeadStage?
+  toStage     LeadStage?
+  dueAt       DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+
+  lead      Lead       @relation(fields: [leadId], references: [id])
+  associate Associate? @relation(fields: [associateId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([associateId, dueAt, completedAt])
+  @@map("lead_activities")
+}
+
+model SiteVisit {
+  id            String    @id @default(cuid())
+  orgId         String
+  leadId        String
+  projectId     String
+  associateId   String
+  scheduledAt   DateTime
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  unitsShown    String[]
+  feedback      String?
+  interestLevel Int? // 1-5
+  createdAt     DateTime  @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([orgId, scheduledAt])
+  @@index([associateId, scheduledAt])
+  @@map("site_visits")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CUSTOMERS & BOOKINGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Customer {
+  id    String @id @default(cuid())
+  orgId String
+
+  name         String
+  phone        String
+  email        String?
+  dateOfBirth  DateTime?
+  occupation   String?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  pincode      String?
+  country      String    @default("India")
+
+  // ── KYC, application-layer encrypted. docs/10-SECURITY.md.
+  panEncrypted     String?
+  panLast4         String?
+  aadhaarEncrypted String?
+  aadhaarLast4     String?
+  isNri            Boolean @default(false)
+  passportLast4    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org          Organization  @relation(fields: [orgId], references: [id])
+  bookings     Booking[]
+  coApplicants CoApplicant[]
+
+  @@index([orgId, phone])
+  @@map("customers")
+}
+
+model CoApplicant {
+  id               String  @id @default(cuid())
+  customerId       String
+  name             String
+  relationship     String
+  phone            String?
+  email            String?
+  panEncrypted     String?
+  panLast4         String?
+  aadhaarEncrypted String?
+  aadhaarLast4     String?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("co_applicants")
+}
+
+/// The pivot of the whole system.
+///
+/// agreementValue is what the customer owes in total.
+/// commissionableValue is the subset that commission is computed on, resolved
+/// from the scheme base definition AT CONFIRMATION and frozen here. Never
+/// recompute it later — the scheme may have been versioned since.
+model Booking {
+  id         String  @id @default(cuid())
+  orgId      String
+  projectId  String
+  unitId     String
+  customerId String
+  leadId     String?
+
+  bookingNumber String
+  bookingDate   DateTime
+  status        BookingStatus @default(DRAFT)
+
+  /// The associate credited with the sale. Every commission entry for this
+  /// booking traces back to this person and their upline chain on bookingDate.
+  sellingAssociateId String
+
+  priceListId String
+
+  // ── Money. All frozen at confirmation.
+  baseAmount          Decimal @db.Decimal(18, 2)
+  plcAmount           Decimal @default(0) @db.Decimal(18, 2)
+  otherChargesAmount  Decimal @default(0) @db.Decimal(18, 2)
+  discountAmount      Decimal @default(0) @db.Decimal(18, 2)
+  gstAmount           Decimal @default(0) @db.Decimal(18, 2)
+  stampDutyAmount     Decimal @default(0) @db.Decimal(18, 2)
+  registrationAmount  Decimal @default(0) @db.Decimal(18, 2)
+  agreementValue      Decimal @db.Decimal(18, 2)
+  commissionableValue Decimal @db.Decimal(18, 2)
+
+  /// Overpayment parked here and auto-applied to the next demand raised.
+  /// Buyers pay round numbers; the demand schedule does not.
+  creditBalance Decimal @default(0) @db.Decimal(18, 2)
+
+  saleableAreaAtBooking Decimal @db.Decimal(10, 2)
+  carpetAreaAtBooking   Decimal @db.Decimal(10, 2)
+
+  paymentPlanId String?
+
+  confirmedAt       DateTime?
+  confirmedById     String?
+  agreementSignedAt DateTime?
+  registeredAt      DateTime?
+  possessionAt      DateTime?
+
+  cancelledAt        DateTime?
+  cancelledById      String?
+  cancellationReason String?
+  refundPct          Decimal?  @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org               Organization           @relation(fields: [orgId], references: [id])
+  project           Project                @relation(fields: [projectId], references: [id])
+  unit              Unit                   @relation(fields: [unitId], references: [id])
+  customer          Customer               @relation(fields: [customerId], references: [id])
+  lead              Lead?                  @relation(fields: [leadId], references: [id])
+  sellingAssociate  Associate              @relation(fields: [sellingAssociateId], references: [id])
+  priceList         PriceList              @relation(fields: [priceListId], references: [id])
+  paymentPlan       PaymentPlan?           @relation(fields: [paymentPlanId], references: [id])
+  costSheetLines    CostSheetLine[]
+  statusHistory     BookingStatusHistory[]
+  demands           Demand[]
+  receipts          Receipt[]
+  commissionEntries CommissionEntry[]
+  discountRequests  DiscountRequest[]
+
+  @@unique([orgId, bookingNumber])
+  @@index([orgId, status, bookingDate])
+  @@index([projectId, status])
+  @@index([sellingAssociateId, bookingDate])
+  @@index([customerId])
+  @@map("bookings")
+}
+
+/// Line-by-line cost sheet snapshot. Regenerating it later from the price list
+/// would not reproduce what the customer actually signed.
+model CostSheetLine {
+  id                     String   @id @default(cuid())
+  bookingId              String
+  chargeHeadCode         String
+  description            String
+  quantity               Decimal? @db.Decimal(12, 2)
+  rate                   Decimal? @db.Decimal(12, 2)
+  amount                 Decimal  @db.Decimal(18, 2)
+  gstRatePct             Decimal? @db.Decimal(5, 2)
+  gstAmount              Decimal  @default(0) @db.Decimal(18, 2)
+  countsTowardCommission Boolean  @default(false)
+  displayOrder           Int      @default(0)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("cost_sheet_lines")
+}
+
+model BookingStatusHistory {
+  id         String         @id @default(cuid())
+  bookingId  String
+  fromStatus BookingStatus?
+  toStatus   BookingStatus
+  reason     String?
+  actorId    String?
+  actorLabel String
+  createdAt  DateTime       @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId, createdAt])
+  @@map("booking_status_history")
+}
+
+model DiscountRequest {
+  id               String         @id @default(cuid())
+  bookingId        String
+  requestedById    String
+  amount           Decimal        @db.Decimal(18, 2)
+  pctOfBase        Decimal        @db.Decimal(5, 2)
+  justification    String
+  status           ApprovalStatus @default(PENDING)
+  /// Resolved from the approval matrix by amount band. The requesting
+  /// associate can never be the approver.
+  approverRoleCode String
+  decidedById      String?
+  decidedAt        DateTime?
+  decisionNote     String?
+  createdAt        DateTime       @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId])
+  @@index([status, createdAt])
+  @@map("discount_requests")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  COLLECTIONS — demands, receipts, allocation, follow-up
+//
+//  Rule that keeps finance trusting this: a demand NEVER stores a paid amount.
+//  It is always derived from ReceiptAllocation. One cheque routinely settles
+//  two demands, and one demand routinely takes three transfers. A denormalised
+//  paidAmount column drifts, and once it drifts nobody believes the system.
+//  See docs/05-COLLECTIONS-SPEC.md.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PaymentPlan {
+  id          String  @id @default(cuid())
+  orgId       String
+  projectId   String?
+  code        String
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  org        Organization           @relation(fields: [orgId], references: [id])
+  project    Project?               @relation(fields: [projectId], references: [id])
+  milestones PaymentPlanMilestone[]
+  bookings   Booking[]
+
+  @@unique([orgId, code])
+  @@map("payment_plans")
+}
+
+model PaymentPlanMilestone {
+  id                  String  @id @default(cuid())
+  paymentPlanId       String
+  sequence            Int
+  label               String // "On booking", "On completion of 3rd slab", ...
+  pctOfAgreementValue Decimal @db.Decimal(7, 4)
+  /// Days after the trigger event before the demand falls due.
+  dueDaysOffset       Int     @default(15)
+  /// Construction-linked plans trigger on site progress rather than a date.
+  triggerNote         String?
+
+  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentPlanId, sequence])
+  @@map("payment_plan_milestones")
+}
+
+model Demand {
+  id        String @id @default(cuid())
+  orgId     String
+  bookingId String
+
+  sequence     Int
+  milestoneRef String?
+  description  String
+
+  amount    Decimal @db.Decimal(18, 2)
+  gstAmount Decimal @default(0) @db.Decimal(18, 2)
+
+  dueDate  DateTime
+  raisedAt DateTime?
+  status   DemandStatus @default(SCHEDULED)
+
+  /// Interest on delayed payment, accrued by the daily sweep. PLACEHOLDER rate.
+  interestRatePctPerAnnum Decimal? @db.Decimal(5, 2)
+  interestAccrued         Decimal  @default(0) @db.Decimal(18, 2)
+
+  waivedById  String?
+  waivedAt    DateTime?
+  waiveReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  booking     Booking             @relation(fields: [bookingId], references: [id])
+  allocations ReceiptAllocation[]
+  followUps   PaymentFollowUp[]
+  alerts      CollectionAlert[]
+
+  @@unique([bookingId, sequence])
+  @@index([orgId, status, dueDate])
+  @@index([bookingId, dueDate])
+  @@map("demands")
+}
+
+/// Money received, entered by a sales admin.
+///
+/// SECURITY — commission releases pro-rata on collection, so whoever can mark
+/// money as received can unlock their own or their team's commission. Therefore:
+///   · enteredById != verifiedById                            (maker-checker)
+///   · neither may be the booking's selling associate or their upline
+/// Both are coded assertions with tests, not policy. docs/10-SECURITY.md.
+model Receipt {
+  id        String @id @default(cuid())
+  orgId     String
+  bookingId String
+
+  receiptNumber String
+  amount        Decimal       @db.Decimal(18, 2)
+  mode          ReceiptMode
+  status        ReceiptStatus @default(ENTERED)
+
+  instrumentNumber String? // cheque / DD / UTR / UPI ref
+  instrumentDate   DateTime?
+  drawnOnBank      String?
+  depositedToBank  String?
+
+  receivedOn   DateTime
+  /// Commission release keys off clearedOn, never receivedOn. A cheque that
+  /// bounces must never have released money.
+  clearedOn    DateTime?
+  bouncedOn    DateTime?
+  bounceReason String?
+
+  enteredById  String
+  verifiedById String?
+  verifiedAt   DateTime?
+
+  remarks   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  booking     Booking             @relation(fields: [bookingId], references: [id])
+  allocations ReceiptAllocation[]
+
+  @@unique([orgId, receiptNumber])
+  @@index([bookingId, status])
+  @@index([orgId, status, receivedOn])
+  @@index([orgId, clearedOn])
+  @@map("receipts")
+}
+
+/// Many-to-many between receipts and demands. This table is the single source
+/// of truth for how much of a demand has been paid.
+model ReceiptAllocation {
+  id             String    @id @default(cuid())
+  receiptId      String
+  demandId       String
+  amount         Decimal   @db.Decimal(18, 2)
+  /// Set when the allocation is reversed by a bounce rather than deleted —
+  /// financial rows are append-only.
+  reversedAt     DateTime?
+  reversedReason String?
+  createdAt      DateTime  @default(now())
+
+  receipt Receipt @relation(fields: [receiptId], references: [id])
+  demand  Demand  @relation(fields: [demandId], references: [id])
+
+  @@index([receiptId])
+  @@index([demandId, reversedAt])
+  @@map("receipt_allocations")
+}
+
+/// Closing an overdue alert requires logging what actually happened. This is
+/// what turns a passive notification into tracked work.
+model PaymentFollowUp {
+  id          String @id @default(cuid())
+  demandId    String
+  associateId String
+
+  contactedOn      DateTime
+  outcome          FollowUpOutcome
+  promiseToPayDate DateTime?
+  promiseBrokenAt  DateTime?
+  notes            String?
+  createdAt        DateTime        @default(now())
+
+  demand    Demand    @relation(fields: [demandId], references: [id])
+  associate Associate @relation(fields: [associateId], references: [id])
+
+  @@index([demandId, contactedOn])
+  @@index([associateId, promiseToPayDate])
+  @@map("payment_follow_ups")
+}
+
+/// One row per (demand, rung). The unique constraint is what stops the daily
+/// sweep from re-nagging. Alert fatigue kills a collections system faster than
+/// having no alerts at all.
+model CollectionAlert {
+  id         String    @id @default(cuid())
+  orgId      String
+  demandId   String
+  rung       AlertRung
+  firedAt    DateTime  @default(now())
+  /// Associate ids and role codes the alert was addressed to, for audit.
+  recipients Json
+
+  demand Demand @relation(fields: [demandId], references: [id])
+
+  @@unique([demandId, rung])
+  @@index([orgId, firedAt])
+  @@map("collection_alerts")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  COMMISSION
+//
+//  Model: the seller's GRADE sets a rate on the commissionable value; each
+//  upline earns a FIXED PERCENTAGE OF THE SELLER'S COMMISSION by tree level.
+//  Total payout is therefore bounded at selfRate x (1 + sum of level pcts).
+//
+//  Full spec, worked examples and test fixtures: docs/04-COMMISSION-SPEC.md.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model CommissionScheme {
+  id        String @id @default(cuid())
+  orgId     String
+  projectId String
+
+  name    String
+  version Int
+  status  PublishStatus @default(DRAFT) // DRAFT / PENDING_APPROVAL / ACTIVE / ARCHIVED
+
+  validFrom DateTime
+  validTo   DateTime?
+
+  /// Which charge heads form the commissionable base.
+  /// { "chargeHeadCodes": ["BSP"], "netOfDiscount": true, "netOfGst": true }
+  baseDefinition Json
+
+  maxLevel        Int             @default(3) // PLACEHOLDER
+  compressionMode CompressionMode @default(NONE)
+
+  /// Hard ceiling as a percentage of commissionable value. Accrual ASSERTS
+  /// against this and refuses to persist if breached. The realistic risk here
+  /// is not bad math, it is a misconfigured scheme.
+  maxTotalPct Decimal @default(3.0) @db.Decimal(7, 4) // PLACEHOLDER
+
+  /// Extra conditions an upline must satisfy to earn an override.
+  /// { "minGradeRank": 2, "minPersonalBookingsInPeriod": 1 }
+  eligibilityRules Json?
+
+  preparedById String
+  approvedById String? // must differ from preparedById
+  publishedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  org        Organization      @relation(fields: [orgId], references: [id])
+  project    Project           @relation(fields: [projectId], references: [id])
+  gradeRates SchemeGradeRate[]
+  levelRates SchemeLevelRate[]
+  schedules  PayoutSchedule[]
+  entries    CommissionEntry[]
+
+  @@unique([projectId, version])
+  @@index([projectId, status, validFrom])
+  @@map("commission_schemes")
+}
+
+/// The seller's own rate, by grade. PLACEHOLDER values throughout.
+model SchemeGradeRate {
+  id        String   @id @default(cuid())
+  schemeId  String
+  gradeId   String
+  rateType  RateType @default(PCT_OF_BASE)
+  /// PCT_OF_BASE -> percent (1.5000 = 1.5%)
+  /// PER_SQFT    -> rupees per saleable sqft
+  /// FLAT        -> rupees per booking
+  rateValue Decimal  @db.Decimal(12, 4)
+
+  scheme CommissionScheme @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+  grade  Grade            @relation(fields: [gradeId], references: [id])
+
+  @@unique([schemeId, gradeId])
+  @@map("scheme_grade_rates")
+}
+
+/// The upline override, by tree level. PLACEHOLDER: L1 10%, L2 5%, L3 2%.
+/// Note this is a percentage OF THE SELLER'S COMMISSION, not of the sale value.
+model SchemeLevelRate {
+  id                    String  @id @default(cuid())
+  schemeId              String
+  level                 Int // 1 = immediate upline
+  pctOfSellerCommission Decimal @db.Decimal(7, 4)
+
+  scheme CommissionScheme @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+
+  @@unique([schemeId, level])
+  @@map("scheme_level_rates")
+}
+
+/// When accrued commission becomes payable. Configured per project.
+model PayoutSchedule {
+  id       String     @id @default(cuid())
+  schemeId String
+  mode     PayoutMode
+  name     String
+
+  scheme CommissionScheme     @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+  slabs  PayoutScheduleSlab[]
+
+  @@map("payout_schedules")
+}
+
+model PayoutScheduleSlab {
+  id          String             @id @default(cuid())
+  scheduleId  String
+  sequence    Int
+  triggerType ReleaseTriggerType
+  /// For COLLECTION_PCT: the cumulative collection percentage that unlocks
+  /// this slab. For DEMAND_PAID: the milestone reference.
+  triggerRef  String?
+  releasePct  Decimal            @db.Decimal(7, 4)
+
+  schedule PayoutSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, sequence])
+  @@map("payout_schedule_slabs")
+}
+
+/// THE LEDGER. Append-only.
+///
+/// Never UPDATE gross_amount. Never DELETE. A correction is a new row with
+/// sourceEntryId pointing at what it reverses.
+///
+/// `snapshot` is the reason a three-year-old statement is still explainable:
+/// it freezes the resolved grade, rate, scheme rates and full upline chain as
+/// they stood at accrual. Even if the tree is later restructured, every
+/// historical payout can be reconstructed from its own row without
+/// time-travelling anything.
+model CommissionEntry {
+  id        String @id @default(cuid())
+  orgId     String
+  bookingId String
+  schemeId  String
+
+  beneficiaryAssociateId String
+  role                   CommissionRole
+  /// 0 for SELF, 1..maxLevel for OVERRIDE.
+  level                  Int
+
+  /// The commissionable value this was computed from.
+  baseAmount  Decimal @db.Decimal(18, 2)
+  grossAmount Decimal @db.Decimal(18, 2)
+
+  status CommissionEntryStatus @default(ACCRUED)
+
+  /// { gradeCode, gradeRank, rateType, rateValue, sellerCommission,
+  ///   levelPct, uplineChain: [{level, associateId, code, gradeCode}],
+  ///   schemeVersion, compressionMode, computedAt }
+  snapshot Json
+
+  /// Contra rows point at what they reverse.
+  sourceEntryId  String?
+  reversalReason String?
+
+  /// Guards against a retried job double-accruing.
+  /// Format: {bookingId}:{beneficiaryId}:{level}:{schemeId}
+  idempotencyKey String
+
+  accruedAt DateTime  @default(now())
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  booking     Booking             @relation(fields: [bookingId], references: [id])
+  scheme      CommissionScheme    @relation(fields: [schemeId], references: [id])
+  beneficiary Associate           @relation(fields: [beneficiaryAssociateId], references: [id])
+  releases    CommissionRelease[]
+  payoutLines PayoutLineEntry[]
+  disputes    CommissionDispute[]
+  recoveries  Recovery[]
+
+  @@unique([idempotencyKey])
+  @@index([bookingId])
+  @@index([beneficiaryAssociateId, status])
+  @@index([orgId, status, accruedAt])
+  @@map("commission_entries")
+}
+
+/// Partial release of an accrued entry, driven by a trigger event.
+/// Idempotent on (entryId, triggerType, triggerRef) so a replayed event does
+/// not release twice.
+model CommissionRelease {
+  id      String @id @default(cuid())
+  entryId String
+
+  triggerType   ReleaseTriggerType
+  triggerRef    String // receiptId, demandId, or milestone code
+  /// Cumulative release percentage this event took the entry to.
+  cumulativePct Decimal            @db.Decimal(7, 4)
+  amount        Decimal            @db.Decimal(18, 2)
+
+  reversedAt     DateTime?
+  reversalReason String?
+  releasedAt     DateTime  @default(now())
+
+  entry CommissionEntry @relation(fields: [entryId], references: [id])
+
+  @@unique([entryId, triggerType, triggerRef])
+  @@index([entryId, reversedAt])
+  @@map("commission_releases")
+}
+
+model CommissionDispute {
+  id          String @id @default(cuid())
+  orgId       String
+  entryId     String
+  raisedById  String
+  description String
+
+  status       ApprovalStatus @default(PENDING)
+  resolvedById String?
+  resolvedAt   DateTime?
+  resolution   String?
+  /// Set when the resolution was an adjustment rather than a rejection.
+  adjustmentId String?
+
+  createdAt DateTime @default(now())
+
+  entry CommissionEntry @relation(fields: [entryId], references: [id])
+
+  @@index([orgId, status])
+  @@index([entryId])
+  @@map("commission_disputes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PAYOUTS, TAX, RECOVERIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Opening a period FREEZES tree moves and grade changes for its window, so a
+/// batch cannot be computed against a hierarchy that shifts underneath it.
+model PayoutBatch {
+  id    String @id @default(cuid())
+  orgId String
+
+  batchNumber String
+  periodStart DateTime
+  periodEnd   DateTime
+  status      PayoutBatchStatus @default(DRAFT)
+
+  totalGross      Decimal @default(0) @db.Decimal(18, 2)
+  totalTds        Decimal @default(0) @db.Decimal(18, 2)
+  totalGst        Decimal @default(0) @db.Decimal(18, 2)
+  totalRecovery   Decimal @default(0) @db.Decimal(18, 2)
+  totalAdjustment Decimal @default(0) @db.Decimal(18, 2)
+  totalNetPayable Decimal @default(0) @db.Decimal(18, 2)
+
+  preparedById  String
+  preparedAt    DateTime  @default(now())
+  /// Enforced != preparedById. docs/09-RBAC-MATRIX.md.
+  approvedById  String?
+  approvedAt    DateTime?
+  rejectionNote String?
+
+  exportedAt    DateTime?
+  bankFileS3Key String?
+  paidAt        DateTime?
+
+  org   Organization @relation(fields: [orgId], references: [id])
+  lines PayoutLine[]
+
+  @@unique([orgId, batchNumber])
+  @@index([orgId, status, periodEnd])
+  @@map("payout_batches")
+}
+
+model PayoutLine {
+  id          String @id @default(cuid())
+  batchId     String
+  associateId String
+
+  grossAmount Decimal @db.Decimal(18, 2)
+
+  // ── Tax, resolved from the associate's engagementType at batch time.
+  tdsSection TdsSection
+  tdsRatePct Decimal    @db.Decimal(5, 2)
+  tdsAmount  Decimal    @default(0) @db.Decimal(18, 2)
+  gstRatePct Decimal?   @db.Decimal(5, 2)
+  gstAmount  Decimal    @default(0) @db.Decimal(18, 2)
+
+  recoveryAdjustment Decimal @default(0) @db.Decimal(18, 2)
+  otherAdjustment    Decimal @default(0) @db.Decimal(18, 2)
+  netPayable         Decimal @db.Decimal(18, 2)
+
+  /// Snapshot so a reissued statement matches the original payment.
+  bankAccountLast4 String?
+  bankIfsc         String?
+  utrNumber        String?
+  statementS3Key   String?
+
+  createdAt DateTime @default(now())
+
+  batch     PayoutBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  associate Associate         @relation(fields: [associateId], references: [id])
+  entries   PayoutLineEntry[]
+
+  @@unique([batchId, associateId])
+  @@index([associateId])
+  @@map("payout_lines")
+}
+
+/// Join table: which commission entries were paid on which line. Without it,
+/// "which sales does this payment cover" is unanswerable.
+model PayoutLineEntry {
+  payoutLineId String
+  entryId      String
+  amount       Decimal @db.Decimal(18, 2)
+
+  payoutLine PayoutLine      @relation(fields: [payoutLineId], references: [id], onDelete: Cascade)
+  entry      CommissionEntry @relation(fields: [entryId], references: [id])
+
+  @@id([payoutLineId, entryId])
+  @@index([entryId])
+  @@map("payout_line_entries")
+}
+
+/// Money already paid out that a cancellation made recoverable. Auto-deducted
+/// from future batches, subject to PAYOUT_RECOVERY_MAX_DEDUCTION_PCT so nobody
+/// takes home zero without a conversation first.
+model Recovery {
+  id            String  @id @default(cuid())
+  orgId         String
+  associateId   String
+  sourceEntryId String?
+
+  amount            Decimal        @db.Decimal(18, 2)
+  recoveredAmount   Decimal        @default(0) @db.Decimal(18, 2)
+  outstandingAmount Decimal        @db.Decimal(18, 2)
+  status            RecoveryStatus @default(OUTSTANDING)
+  reason            String
+
+  writtenOffById String?
+  writtenOffAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  associate   Associate        @relation(fields: [associateId], references: [id])
+  sourceEntry CommissionEntry? @relation(fields: [sourceEntryId], references: [id])
+
+  @@index([associateId, status])
+  @@index([orgId, status])
+  @@map("recoveries")
+}
+
+/// Manual credit or debit. Also the vehicle for migrated opening balances —
+/// historical commission is imported here, never recomputed. docs/14-DATA-MIGRATION.md.
+model Adjustment {
+  id          String         @id @default(cuid())
+  orgId       String
+  associateId String
+  type        AdjustmentType
+  amount      Decimal        @db.Decimal(18, 2)
+  reason      String
+  sourceRef   String? // spreadsheet row for migrated rows
+
+  requestedById    String
+  approvedById     String?
+  approvedAt       DateTime?
+  appliedInBatchId String?
+
+  createdAt DateTime @default(now())
+
+  associate Associate @relation(fields: [associateId], references: [id])
+
+  @@index([associateId, createdAt])
+  @@index([orgId, type])
+  @@map("adjustments")
+}
+
+/// Effective-dated tax rates. These change at every Finance Act — they are
+/// rows, not constants. Confirm current values with the client's CA before
+/// go-live. docs/11-COMPLIANCE-INDIA.md.
+model TaxRate {
+  id              String     @id @default(cuid())
+  orgId           String
+  section         TdsSection
+  ratePct         Decimal    @db.Decimal(5, 2)
+  /// Higher rate applied when PAN is not on file (Sec. 206AA).
+  noPanRatePct    Decimal?   @db.Decimal(5, 2)
+  thresholdAmount Decimal?   @db.Decimal(18, 2)
+  validFrom       DateTime
+  validTo         DateTime?
+  note            String?
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@index([orgId, section, validFrom])
+  @@map("tax_rates")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  APPROVALS & NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Generic maker-checker. Every row in the separation-of-duties table in
+/// docs/09-RBAC-MATRIX.md routes through here.
+model ApprovalRequest {
+  id       String       @id @default(cuid())
+  orgId    String
+  type     ApprovalType
+  entity   String
+  entityId String
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+  justification String?
+  payload       Json?
+
+  /// Resolved from the approval matrix. The requester is never eligible.
+  requiredRoleCode String
+  status           ApprovalStatus @default(PENDING)
+  decidedById      String?
+  decidedAt        DateTime?
+  decisionNote     String?
+
+  @@index([orgId, status, type])
+  @@index([entity, entityId])
+  @@map("approval_requests")
+}
+
+/// Notification behaviour is configuration, not code. Every developer runs a
+/// different collections and escalation policy.
+model NotificationRule {
+  id      String  @id @default(cuid())
+  orgId   String
+  code    String // "DEMAND_DUE_MINUS_7", "HOLD_EXPIRING", ...
+  name    String
+  enabled Boolean @default(true)
+
+  channels    NotificationChannel[]
+  /// Role codes and/or relative targets: ["ASSOCIATE","UPLINE_L1","SALES_HEAD"]
+  audience    String[]
+  /// Days relative to the reference date. Negative = before.
+  offsetDays  Int?
+  templateKey String
+  /// Whether firing this rule also escalates to the audience of the next rung.
+  escalates   Boolean               @default(false)
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, code])
+  @@map("notification_rules")
+}
+
+model Notification {
+  id     String @id @default(cuid())
+  orgId  String
+  userId String
+
+  channel  NotificationChannel
+  status   NotificationStatus  @default(QUEUED)
+  ruleCode String?
+
+  title     String
+  body      String
+  /// Deep link into the app, e.g. /collections/demands/{id}
+  actionUrl String?
+
+  entity   String?
+  entityId String?
+
+  sentAt        DateTime?
+  deliveredAt   DateTime?
+  readAt        DateTime?
+  failedAt      DateTime?
+  failureReason String?
+  providerRef   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, status, createdAt])
+  @@index([orgId, ruleCode, createdAt])
+  @@map("notifications")
+}

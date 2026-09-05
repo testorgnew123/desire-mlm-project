@@ -1,0 +1,31 @@
+{
+  "name": "desire-platform",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.20.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "db:migrate": "pnpm --filter @desire/db exec prisma migrate dev",
+    "db:migrate:deploy": "pnpm --filter @desire/db exec prisma migrate deploy",
+    "db:seed": "pnpm --filter @desire/db exec prisma db seed",
+    "db:format": "pnpm --filter @desire/db exec prisma format",
+    "db:validate": "pnpm --filter @desire/db exec prisma validate"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-import": "^2.31.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

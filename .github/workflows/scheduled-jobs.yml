@@ -1,0 +1,88 @@
+# Scheduled job triggers.
+#
+# WHY THIS EXISTS INSTEAD OF NETLIFY SCHEDULED FUNCTIONS:
+#   Netlify Scheduled Functions have been reported to silently stop firing and
+#   to drift off their configured cadence. Two of these jobs (the collections
+#   escalation ladder and the nightly invariant monitor) are the kind of thing
+#   that must not quietly stop. See docs/21-TIER-LIMITS.md section 11.
+#
+# The endpoints themselves are ordinary HTTP handlers guarded by
+# JOB_TRIGGER_SECRET, so this workflow is a trigger, not a dependency. Swap it
+# for cron-job.org, QStash, or Netlify Scheduled Functions without touching
+# application code.
+#
+# CAVEATS:
+#   · GitHub Actions cron is best-effort and can be delayed under load.
+#     Acceptable because every job is idempotent and lazy expiry means the
+#     inventory board is never wrong between runs.
+#   · Scheduled workflows are DISABLED automatically after 60 days of repository
+#     inactivity. The dead-man's switch in docs/15-OPS-RUNBOOK.md catches this.
+#   · Each trigger consumes one Netlify function invocation — the free-tier
+#     budget in docs/21-TIER-LIMITS.md section 1 is unchanged by moving the
+#     trigger off-platform.
+
+name: Scheduled jobs
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # hold expiry sweep
+    - cron: '30 2 * * *'    # 08:00 IST — collections, grades
+    - cron: '30 18 * * *'   # 00:00 IST — invariants, backup
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job endpoint to trigger manually
+        required: true
+        type: choice
+        options:
+          - holds/expire
+          - collections/sweep
+          - grades/qualify
+          - monitor/invariants
+          - backup/dump
+
+concurrency:
+  group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve jobs for this schedule
+        id: plan
+        run: |
+          case "${{ github.event.schedule }}" in
+            '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
+            '30 2 * * *')   echo 'jobs=collections/sweep grades/qualify' >> "$GITHUB_OUTPUT" ;;
+            '30 18 * * *')  echo 'jobs=monitor/invariants backup/dump' >> "$GITHUB_OUTPUT" ;;
+            *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Trigger
+        env:
+          BASE_URL: ${{ secrets.APP_BASE_URL }}
+          JOB_TRIGGER_SECRET: ${{ secrets.JOB_TRIGGER_SECRET }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for job in ${{ steps.plan.outputs.jobs }}; do
+            echo "::group::$job"
+            # Retry: a cold Neon compute can make the first call slow.
+            for attempt in 1 2 3; do
+              code=$(curl -sS -o /tmp/out.txt -w '%{http_code}' \
+                --max-time 60 \
+                -X POST "$BASE_URL/api/jobs/$job" \
+                -H "x-job-secret: $JOB_TRIGGER_SECRET" \
+                -H 'content-type: application/json' \
+                -d "{\"trigger\":\"github-actions\",\"runId\":\"${{ github.run_id }}\"}" \
+                || echo 000)
+              cat /tmp/out.txt
+              if [ "$code" = "200" ]; then echo "OK ($code)"; break; fi
+              echo "attempt $attempt failed with $code"
+              [ "$attempt" = "3" ] && failed=1
+              sleep 10
+            done
+            echo "::endgroup::"
+          done
+          exit $failed

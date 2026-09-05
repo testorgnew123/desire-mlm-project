@@ -1,0 +1,31 @@
+# Local development database — Postgres 18, matching the Neon target version
+# (Neon supports 18.2). See docs/21-TIER-LIMITS.md and PROGRESS.md decision log
+# for why local Docker rather than a hosted free-tier project during
+# development: real Postgres for concurrency tests, no quota burn, no
+# dependency on the hosted project's uptime.
+services:
+  postgres:
+    image: postgres:18
+    container_name: desire-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: desire
+      POSTGRES_PASSWORD: desire_dev_only
+      POSTGRES_DB: desire
+    ports:
+      - "5432:5432"
+    volumes:
+      # NOTE: postgres:18+ images changed their on-disk layout to a
+      # pg_ctlcluster-style, version-specific directory structure. The mount
+      # point is now the PARENT directory /var/lib/postgresql, not
+      # /var/lib/postgresql/data as with older images -- mounting at /data
+      # crashes the container on 18+ with "unused mount/volume" errors.
+      - desire-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U desire -d desire"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  desire-postgres-data:
