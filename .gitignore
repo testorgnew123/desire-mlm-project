@@ -20,3 +20,6 @@ packages/db/prisma/*.js
 packages/db/prisma/*.js.map
 packages/db/prisma/*.d.ts
 packages/db/prisma/*.d.ts.map
+
+# Local Netlify folder
+.netlify
