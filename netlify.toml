@@ -7,12 +7,14 @@
 # `workspace:*` dependencies on @desire/db etc.), then builds just this app
 # via turbo/pnpm filter.
 #
-# `publish` is deliberately omitted -- Netlify's docs are explicit that the
-# Next.js Runtime v5 handles build output automatically; setting it manually
-# fights the auto-detection rather than helping it.
+# `publish` IS set, deliberately, despite Netlify's docs suggesting the
+# Next.js Runtime v5 can auto-detect it: omitting it here produced a doubled,
+# broken path (base + a wrong default = apps/web/apps/web/.next), confirmed
+# by a failed deploy. Setting it explicitly, relative to `base`, avoids that.
 [build]
   base = "apps/web"
   command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/web build"
+  publish = ".next"
 
 [build.environment]
   NODE_VERSION = "22"
