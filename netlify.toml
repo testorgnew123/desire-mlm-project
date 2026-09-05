@@ -1,0 +1,18 @@
+# Netlify build config for the pnpm-workspace monorepo.
+#
+# `base` points Netlify at the Next.js app's own directory so the Next.js
+# Runtime v5 (OpenNext adapter) auto-detects it correctly for SSR/function
+# wrapping. `command` immediately steps back to the workspace root to do a
+# workspace-aware `pnpm install` (apps/web alone can't resolve its
+# `workspace:*` dependencies on @desire/db etc.), then builds just this app
+# via turbo/pnpm filter.
+#
+# `publish` is deliberately omitted -- Netlify's docs are explicit that the
+# Next.js Runtime v5 handles build output automatically; setting it manually
+# fights the auto-detection rather than helping it.
+[build]
+  base = "apps/web"
+  command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/web build"
+
+[build.environment]
+  NODE_VERSION = "22"
