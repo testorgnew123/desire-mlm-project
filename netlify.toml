@@ -23,6 +23,14 @@
   base = "apps/web"
   command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/db exec prisma generate && pnpm --filter @desire/web build"
   publish = ".next"
+  # `base = apps/web` makes Netlify's default change-detection only look at
+  # files inside that folder -- a real deploy was silently SKIPPED
+  # ("Canceled build due to no content change") after a commit that only
+  # touched packages/db/prisma/schema.prisma, which apps/web depends on but
+  # sits outside base. `ignore = "exit 1"` disables that heuristic entirely
+  # (exit 1 = never skip), which is correct for a monorepo where the app
+  # depends on sibling workspace packages Netlify's default check can't see.
+  ignore = "exit 1"
 
 [build.environment]
   NODE_VERSION = "22"
