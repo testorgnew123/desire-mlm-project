@@ -8,6 +8,10 @@
 # On PR close: delete the Neon branch and the branch-scoped override, so
 # neither accumulates across closed PRs.
 #
+# --filter @desire/web is REQUIRED, not cosmetic: this is a pnpm workspace with
+# four packages, and without it the CLI stops with "Projects detected: ..." and
+# exits 1 before touching anything. It cannot prompt on a runner.
+#
 # WHY THE CLI RATHER THAN raw curl: an earlier draft called Netlify's REST
 # API directly and passed the SITE id where the path wants the ACCOUNT id
 # (`/api/v1/accounts/{account_id}/env/{key}` -- confirmed by introspecting
@@ -22,6 +26,12 @@
 #                                     > Personal access tokens. MANUAL: Netlify
 #                                     has no API to mint one.
 #   NETLIFY_SITE_ID                -- this site's project id
+#   NETLIFY_BUILD_HOOK_URL         -- a build hook on this site. Created via
+#                                     POST /api/v1/sites/{id}/build_hooks; the
+#                                     workflow appends ?trigger_branch=<branch>
+#                                     so one hook serves every PR. Without it
+#                                     the preview races the env vars and reads
+#                                     production -- see the rebuild step.
 
 name: Neon preview branch
 
@@ -103,9 +113,43 @@ jobs:
         run: |
           set -euo pipefail
           npx --yes netlify-cli@latest env:set DATABASE_URL "$DB_URL_POOLED" \
-            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --force
+            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force
           npx --yes netlify-cli@latest env:set DATABASE_URL_UNPOOLED "$DB_URL_UNPOOLED" \
-            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --force
+            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force
+
+      # PROVEN NECESSARY, not defensive. Netlify starts building the deploy
+      # preview the moment the PR is pushed, while this workflow is still
+      # creating the Neon branch -- so the first build of every PR captures the
+      # environment as it was BEFORE the branch-scoped DATABASE_URL existed,
+      # and that preview talks to the PRODUCTION database.
+      #
+      # Verified empirically rather than reasoned about: a session row created
+      # only in the preview branch was rejected (404) by the first preview
+      # build and accepted (200) by a rebuild, while production rejected it
+      # both times. That also settles the other half -- `branch:<name>` DOES
+      # apply to deploy previews; the context was never the problem, the
+      # ordering was.
+      #
+      # Costs one extra build per PR push. On the free tier's 300 build
+      # minutes that is the right trade against a preview that silently reads
+      # and writes production.
+      - name: Rebuild the preview now that it has its own database
+        env:
+          HOOK_URL: ${{ secrets.NETLIFY_BUILD_HOOK_URL }}
+          GIT_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOOK_URL:-}" ]; then
+            echo "::error::NETLIFY_BUILD_HOOK_URL is not set. The preview would run against the production database."
+            exit 1
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -d '{}'             "${HOOK_URL}?trigger_branch=${GIT_BRANCH}&trigger_title=preview-db-pr-${PR_NUMBER}")
+          if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+            echo "::error::Build hook returned $code; the preview may still be pointed at production."
+            exit 1
+          fi
+          echo "Triggered rebuild of ${GIT_BRANCH} against its Neon branch."
 
       - name: Comment the branch details on the PR
         uses: actions/github-script@v7
@@ -165,5 +209,5 @@ jobs:
           set -euo pipefail
           for key in DATABASE_URL DATABASE_URL_UNPOOLED; do
             npx --yes netlify-cli@latest env:unset "$key" \
-              --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --force || true
+              --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force || true
           done
