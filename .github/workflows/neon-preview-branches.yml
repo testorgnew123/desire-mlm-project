@@ -36,10 +36,18 @@ concurrency:
 env:
   NEON_BRANCH_NAME: preview/pr-${{ github.event.pull_request.number }}
 
+# The repository's default workflow token is read-only (verified:
+# actions/permissions/workflow reports default_workflow_permissions=read), so
+# the PR-comment step 403s without this. Granted at job level and narrowly:
+# contents to check out, pull-requests to comment. Nothing else.
 jobs:
   create-or-update:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -51,14 +59,21 @@ jobs:
           api_key: ${{ secrets.NEON_API_KEY }}
           branch_name: ${{ env.NEON_BRANCH_NAME }}
           database: neondb
-          role: neondb_owner
+          # `username`, NOT `role`. create-branch-action@v5 declares username
+          # as a REQUIRED input and has no `role` input at all (checked against
+          # the action's own action.yml), so the previous spelling passed an
+          # unknown key while omitting a required one.
+          username: neondb_owner
+
+      # corepack before setup-node: `cache: pnpm` shells out to pnpm, which is
+      # not on ubuntu-latest. Same bug that had ci.yml failing on every commit.
+      - run: corepack enable
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
 
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
 
       # engineType="client" generates into packages/db/src/generated/, which is
@@ -71,7 +86,7 @@ jobs:
       # migration needs it applied before the preview can use the branch.
       - name: Apply migrations to the preview branch
         env:
-          DATABASE_URL: ${{ steps.neon.outputs.db_url_pooled }}
+          DATABASE_URL: ${{ steps.neon.outputs.db_url_with_pooler }}
           DATABASE_URL_UNPOOLED: ${{ steps.neon.outputs.db_url }}
         run: pnpm --filter @desire/db exec prisma migrate deploy
 
@@ -83,7 +98,7 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
           GIT_BRANCH: ${{ github.event.pull_request.head.ref }}
-          DB_URL_POOLED: ${{ steps.neon.outputs.db_url_pooled }}
+          DB_URL_POOLED: ${{ steps.neon.outputs.db_url_with_pooler }}
           DB_URL_UNPOOLED: ${{ steps.neon.outputs.db_url }}
         run: |
           set -euo pipefail
@@ -108,6 +123,12 @@ jobs:
   cleanup:
     if: github.event.action == 'closed'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deletes resources only -- no checkout, no comment, so nothing beyond the
+    # default read is needed. Stated rather than inherited so a future repo-wide
+    # default of write does not silently widen it.
+    permissions:
+      contents: read
     steps:
       # delete-branch-action takes an id, not a name, so resolve it first.
       # Tolerates the branch already being gone (a re-run, or manual deletion).

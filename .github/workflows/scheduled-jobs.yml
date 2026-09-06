@@ -26,8 +26,21 @@ name: Scheduled jobs
 on:
   schedule:
     - cron: '*/5 * * * *'   # hold expiry sweep
-    - cron: '30 2 * * *'    # 08:00 IST — collections, grades
-    - cron: '30 18 * * *'   # 00:00 IST — invariants, backup
+    # The 08:00 IST and 00:00 IST schedules are NOT registered yet, on purpose.
+    # /api/jobs/holds/expire is currently the only job route that exists;
+    # collections/sweep, grades/qualify, monitor/invariants and backup/dump
+    # would each 404, retry three times and exit 1 -- two guaranteed-red runs
+    # every day, forever.
+    #
+    # That is not a cosmetic problem. There is no heartbeat table yet, so
+    # /api/health still reports jobs as "not yet implemented": the GitHub
+    # Actions run status is currently the ONLY signal that the 5-minute hold
+    # sweep is alive. Two known-bogus failures a day trains everyone to ignore
+    # exactly the channel a real sweep failure arrives on.
+    #
+    # Re-add each cron in the same commit that adds its route. The intended
+    # cadence is recorded in docs/21-TIER-LIMITS.md section 11, so nothing is
+    # lost by leaving it out of here until then.
   workflow_dispatch:
     inputs:
       job:
@@ -36,10 +49,6 @@ on:
         type: choice
         options:
           - holds/expire
-          - collections/sweep
-          - grades/qualify
-          - monitor/invariants
-          - backup/dump
 
 concurrency:
   group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
@@ -54,8 +63,6 @@ jobs:
         run: |
           case "${{ github.event.schedule }}" in
             '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
-            '30 2 * * *')   echo 'jobs=collections/sweep grades/qualify' >> "$GITHUB_OUTPUT" ;;
-            '30 18 * * *')  echo 'jobs=monitor/invariants backup/dump' >> "$GITHUB_OUTPUT" ;;
             *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
           esac
 

@@ -50,13 +50,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # corepack MUST come before setup-node. `cache: pnpm` makes setup-node
+      # shell out to pnpm to resolve the store path, and ubuntu-latest ships
+      # npm and yarn but NOT pnpm -- so with the steps the other way round
+      # every run died on "Unable to locate executable file: pnpm" before a
+      # single test ran.
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Enable corepack (pnpm)
-        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
