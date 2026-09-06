@@ -345,3 +345,6 @@ Correctness never depends on a job running:
 
 The scheduler is a convenience layer over a system that is correct without it.
 That was already the design; this change makes it load-bearing.
+
+<!-- Preview-branch verification marker. Added by the PR that proves
+     neon-preview-branches.yml works end-to-end; removed once verified. -->
