@@ -41,7 +41,13 @@ on:
 
 concurrency:
   group: neon-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # NEVER cancel the cleanup. Observed on PR #1: closing the PR while a
+  # synchronize run was still settling produced NO cleanup run at all, leaving
+  # the Neon branch and both Netlify overrides stranded -- and the job that
+  # would have removed them only fires on `closed`, which never comes again.
+  # Superseding a create/update run is fine and saves minutes; superseding the
+  # one run that deletes resources is how you leak them.
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
 
 env:
   NEON_BRANCH_NAME: preview/pr-${{ github.event.pull_request.number }}
@@ -208,6 +214,12 @@ jobs:
         run: |
           set -euo pipefail
           for key in DATABASE_URL DATABASE_URL_UNPOOLED; do
-            npx --yes netlify-cli@latest env:unset "$key" \
-              --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force || true
+          # Non-fatal, because a PR closed before the create job ever ran has
+          # nothing to unset -- but SAY SO. A bare `|| true` here hid a real
+          # failure once already: the job went green while both overrides
+          # were still in place.
+            if ! npx --yes netlify-cli@latest env:unset "$key" \
+              --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force; then
+              echo "::warning::Could not unset $key for branch:$GIT_BRANCH. If the variable still exists, remove it by hand."
+            fi
           done
