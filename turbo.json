@@ -1,9 +1,24 @@
 {
   "$schema": "https://turbo.build/schema.json",
+
+  // Turborepo 2.x runs tasks in STRICT env mode by default: a task only sees
+  // the variables declared here, everything else is stripped. Without these
+  // declarations `pnpm test` in CI died with "DATABASE_URL is not set" even
+  // though ci.yml sets it at job level -- and it passed locally only because
+  // packages/*/.env exists on disk and the tests call dotenv/config. Declaring
+  // them is what makes the two environments agree.
+  //
+  // These are in `env` rather than `passThroughEnv` on purpose: which database
+  // a test ran against genuinely changes whether its result is meaningful, so
+  // it belongs in the cache key. Turbo hashes the value and never logs it.
+
+  "globalEnv": ["NODE_ENV"],
+
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**"]
+      "outputs": ["dist/**", ".next/**"],
+      "env": ["DATABASE_URL", "DATABASE_URL_UNPOOLED"]
     },
     "dev": {
       "cache": false,
@@ -14,11 +29,23 @@
     },
     "lint": {},
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "env": [
+        "DATABASE_URL",
+        "DATABASE_URL_UNPOOLED",
+        "PII_ENCRYPTION_KEY",
+        "PII_ENCRYPTION_KEY_ID"
+      ]
     },
     "test:coverage": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "env": [
+        "DATABASE_URL",
+        "DATABASE_URL_UNPOOLED",
+        "PII_ENCRYPTION_KEY",
+        "PII_ENCRYPTION_KEY_ID"
+      ]
     }
   }
 }
