@@ -8,6 +8,10 @@
 # On PR close: delete the Neon branch and the branch-scoped override, so
 # neither accumulates across closed PRs.
 #
+# --filter @desire/web is REQUIRED, not cosmetic: this is a pnpm workspace with
+# four packages, and without it the CLI stops with "Projects detected: ..." and
+# exits 1 before touching anything. It cannot prompt on a runner.
+#
 # WHY THE CLI RATHER THAN raw curl: an earlier draft called Netlify's REST
 # API directly and passed the SITE id where the path wants the ACCOUNT id
 # (`/api/v1/accounts/{account_id}/env/{key}` -- confirmed by introspecting
@@ -103,9 +107,9 @@ jobs:
         run: |
           set -euo pipefail
           npx --yes netlify-cli@latest env:set DATABASE_URL "$DB_URL_POOLED" \
-            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --force
+            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force
           npx --yes netlify-cli@latest env:set DATABASE_URL_UNPOOLED "$DB_URL_UNPOOLED" \
-            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --force
+            --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force
 
       - name: Comment the branch details on the PR
         uses: actions/github-script@v7
@@ -165,5 +169,5 @@ jobs:
           set -euo pipefail
           for key in DATABASE_URL DATABASE_URL_UNPOOLED; do
             npx --yes netlify-cli@latest env:unset "$key" \
-              --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --force || true
+              --context "branch:$GIT_BRANCH" --site "$SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --filter @desire/web --force || true
           done
