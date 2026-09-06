@@ -4,18 +4,28 @@ Units, the state machine, hold concurrency, and versioned pricing.
 
 ## 1. State machine
 
+**`UnitStatus` has no `CANCELLED` value** (confirmed against the migrated,
+gate-tested schema — the enum is `AVAILABLE, HELD, BOOKED, AGREEMENT_SIGNED,
+REGISTERED, POSSESSION, BLOCKED`). Cancellation is a `Booking.status`
+concept, not a unit one: cancelling a booking frees the unit by returning it
+to `AVAILABLE` for resale, and the commission clawback it triggers is tracked
+entirely on the booking/commission side. An earlier draft of this diagram
+showed a `CANCELLED` box on the unit state machine; that was a documentation
+error, corrected here rather than added to the schema, since the schema was
+already migrated and gate-tested by the time this was caught.
+
 ```
                     ┌──── expire (TTL) / release / admin force ────┐
                     ▼                                              │
   AVAILABLE ──hold──► HELD ──confirm──► BOOKED ──agreement──► AGREEMENT_SIGNED
       ▲                                   │                          │
       │                                   │                     registration
-      │                                   │                          ▼
-      └────────── cancel ◄────────────────┴──────────────────► REGISTERED
-                     │                                              │
-                     ▼                                          possession
-                 CANCELLED                                          ▼
-                                                               POSSESSION
+      └──────────── cancel ◄──────────────┘                          ▼
+                                                                 REGISTERED
+                                                                      │
+                                                                 possession
+                                                                      ▼
+                                                                 POSSESSION
 
   Any state ──admin──► BLOCKED (management / legal / mortgage) ──► back to prior
 ```
@@ -27,12 +37,20 @@ Units, the state machine, hold concurrency, and versioned pricing.
 | `AVAILABLE → HELD` | Unit not blocked · associate has hold quota remaining · an ACTIVE price list exists · project RERA registration valid |
 | `HELD → AVAILABLE` | TTL expiry (automatic) · associate release · admin force-release (audited, reason required) |
 | `HELD → BOOKED` | Booking form complete · booking-amount receipt captured · sales admin confirms |
-| `BOOKED → CANCELLED` | Approval required · **triggers commission clawback** |
+| `BOOKED → AVAILABLE` | Booking cancelled. Approval required · **triggers commission clawback**. (This is the diagram's "cancel" transition — there is no separate `CANCELLED` unit state; see above) |
 | `BOOKED → AGREEMENT_SIGNED` | Agreement document uploaded and verified |
+| `AGREEMENT_SIGNED → REGISTERED` | Registration completed with the sub-registrar |
+| `REGISTERED → POSSESSION` | Completion certificate issued, handover done |
 | `* → BLOCKED` | Admin only; reason mandatory |
+| `BLOCKED → <prior status>` | Admin only; returns to whatever status the unit held immediately before blocking (read from `UnitStatusHistory`), not a fixed target |
 
 Every transition writes a `UnitStatusHistory` row. Table-driven tests cover every
 (state, transition) pair — legal ones succeed, illegal ones throw.
+
+Cancellation is only modelled from `BOOKED`. Cancelling after `AGREEMENT_SIGNED`
+or later is a materially different, rarer legal process (unwinding a registered
+agreement) and is out of scope until a real client case requires it — do not
+add those transitions speculatively.
 
 ## 2. Hold concurrency — the double-hold race
 

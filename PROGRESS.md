@@ -22,7 +22,7 @@ the state. Update it as work lands, not at the end of a sprint.
 
 | | |
 |---|---|
-| **Current phase** | Phase 0 — Foundation, 15/17 done. Production deploy is live and verified. Remaining 2 tasks need a Neon API key (per-PR DB branching) and a `/api/jobs/*` endpoint (Phase 1) — neither blocks starting Phase 1. Phase 3's pure engine already built ahead of order — risk-first sequencing, see Decision log |
+| **Current phase** | **Phase 1 — Inventory**, 7/17 done, **both gates passed** (hold concurrency proven against real Postgres, negative-control verified). Phase 0 sits at 15/17; its 2 stragglers need a Neon API key and a `/api/jobs/*` endpoint — the latter lands in this phase. Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
 | **Started** | 2026-09-05 |
 | **Target** | 18–22 weeks from start |
 | **Hosting** | **Live**: [desire-mlm-project.netlify.app](https://desire-mlm-project.netlify.app) — verified via `/api/health` returning `200` with a real hosted-Neon query. Hosted Neon (`ap-southeast-1`, Postgres 18.6). Local Docker Postgres 18 kept for offline dev / concurrency tests. Repo at `github.com/testorgnew123/desire-mlm-project`, connected for auto-deploy on push |
@@ -31,13 +31,13 @@ the state. Update it as work lands, not at the end of a sprint.
 | Phase | Tasks | Done | Gates | Status |
 |---|:-:|:-:|:-:|---|
 | 0 — Foundation | 17 | 15 | 1/1 | Live and deployed; 2 minor tasks remain (Phase 1-gated) |
-| 1 — Inventory | 17 | 0 | 0/2 | Not started |
+| 1 — Inventory | 17 | 7 | **2/2** | In progress — both gates passed |
 | 2 — Sales & Collections | 23 | 0 | 0/2 | Not started |
 | 3 — Commission | 23 | 7 | 5/7 | In progress (engine only) |
 | 4 — Payouts | 14 | 0 | 0/3 | Not started |
 | 5 — Scale | 13 | 0 | 0/1 | Not started |
 | Pre-go-live | 11 | 0 | — | Not started |
-| **Total** | **118** | **22** | **6/16** | |
+| **Total** | **118** | **29** | **8/16** | |
 
 ---
 
@@ -132,14 +132,14 @@ auto-expire. Board refreshes within the configured interval.*
 - [ ] `ChargeHead` master, `countsTowardCommission` flag
 - [ ] Versioned price lists, maker-checker publish (`preparedBy != approvedBy`)
 - [ ] Cost sheet computation — base, PLC, other charges, GST — [06-INVENTORY-SPEC §5](docs/06-INVENTORY-SPEC.md)
-- [ ] Unit state machine with guards; every transition writes `UnitStatusHistory`
-- [ ] Table-driven test over every (state, transition) pair
-- [ ] **GATE** Hold acquire inside `SELECT … FOR UPDATE` — [06-INVENTORY-SPEC §2](docs/06-INVENTORY-SPEC.md)
-- [ ] **GATE** 50-way concurrency test against real Postgres — exactly 1 success, 49 clean 409s
-- [ ] Lazy expiry on read (`expiresAt < now()` reads as available)
+- [x] Unit state machine with guards; every transition writes `UnitStatusHistory` -- `packages/services/src/unit-transitions.ts` (pure, no Prisma import) + `units.ts` (DB-backed `transitionUnitStatus`/`blockUnit`/`unblockUnit`, each writing history + audit inside the same transaction as the change). Unblock restores the unit to whatever status it held before blocking, read from `UnitStatusHistory` rather than passed in -- so an admin can't accidentally unblock a sold unit back to AVAILABLE
+- [x] Table-driven test over every (state, transition) pair -- all 7x7 = 49 combinations asserted explicitly, plus 5 named rule tests. The expected-legal set is transcribed independently from the doc, **not** imported from the implementation, so a bug in the table can't define its own correctness. 54 tests
+- [x] **GATE** Hold acquire inside `SELECT … FOR UPDATE` -- `packages/services/src/holds.ts`. Row lock serialises check-then-act; the partial unique index is the backstop, and a P2002 from it is converted to the same clean named rejection rather than a 500 — [06-INVENTORY-SPEC §2](docs/06-INVENTORY-SPEC.md)
+- [x] **GATE** 50-way concurrency test against real Postgres -- exactly 1 success, 49 clean `UnitNotAvailableError`s each naming the winning associate, plus an independent DB-level assertion that only one live hold row exists. **Proven non-vacuous**: with both defences removed (row lock bypassed AND index dropped) the test genuinely fails with raw transaction-layer errors, then passes again once restored. A second test holds 50 *different* units concurrently and expects all 50 to succeed -- catching the naive implementation that would pass the first test by serialising everything globally
+- [x] Lazy expiry on read -- `isHoldLive`/`effectiveUnitStatus` (pure) plus materialisation inside `acquireHold`'s lock, so a hold that expired but hasn't been swept is immediately re-holdable and the sweep can't disagree with a concurrent acquirer. Tested including the exact between-expiry-and-sweep state
 - [ ] Hold expiry sweep job, 5-min external cron — [21-TIER-LIMITS §11](docs/21-TIER-LIMITS.md)
-- [ ] Hold quota per grade, counted across projects · **BLOCKED#9**
-- [ ] Hold extension, capped by `maxHoldExtensions`
+- [x] Hold quota per grade, counted across projects -- reads `Grade.holdQuota` (currently a PLACEHOLDER default of 3; the *mechanism* doesn't need the real number, only the value does, so this is no longer blocked). An associate with no grade assignment gets a quota of 0, not an unlimited default · **BLOCKED#9** applies only to the confirmed value
+- [x] Hold extension, capped by `maxHoldExtensions` -- tested to succeed once then refuse
 - [ ] Delta endpoint + `@@index([orgId, updatedAt])`
 - [ ] Live inventory board — countdown on held tiles, filters, unit drawer, **manual refresh**, pause-on-blur at 60 s — [08-SCREENS](docs/08-SCREENS.md)
 - [ ] Lost-race UI names the winner ("Just taken by Ravi (A-0042)"), never a generic error
