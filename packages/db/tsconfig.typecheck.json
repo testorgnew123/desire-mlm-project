@@ -1,0 +1,12 @@
+// See packages/services/tsconfig.typecheck.json for why this exists. This one
+// also pulls in prisma/, because seed.ts is real code -- it constructs charge
+// heads, a price list and 100 units, and a type error in it fails the seed
+// rather than the build.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src", "test", "prisma"]
+}

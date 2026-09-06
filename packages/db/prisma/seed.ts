@@ -159,6 +159,94 @@ async function seedDemoProject() {
   console.log(`  project ${project.code}, 1 tower, 1 unit type, ${created} units`);
 }
 
+// Charge heads + an ACTIVE price list. Without these the demo is a display
+// case: holds.ts refuses to hold a unit when the project has no active price
+// list, so every unit on the board would be unholdable and the primary action
+// dead. Charge heads were in the Phase 0 plan and never landed; the price list
+// is a Phase 1 requirement that postdates the original seed.
+//
+// Written with plain Prisma rather than through packages/services: that package
+// already depends on @desire/db, so importing it here would be a dependency
+// cycle Turbo rejects. The seed is a state constructor -- it builds roles and
+// permissions directly too. The service remains the enforcement point for real
+// callers; the two invariants it guards are upheld by hand below (exactly one
+// ACTIVE list, and preparer != approver).
+async function seedPricing() {
+  // PLACEHOLDER amounts and GST rates -- plan.md Open Item 6. Codes match the
+  // catalogue in docs/06-INVENTORY-SPEC.md section 5.
+  const chargeHeads = [
+    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
+    { code: "PLC", name: "Preferential Location Charge", category: "PLC", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 2 },
+    { code: "PARKING", name: "Car Parking", category: "PARKING", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: false, isRefundable: false, displayOrder: 3 },
+    { code: "CLUB", name: "Club Membership", category: "CLUB_MEMBERSHIP", isTaxable: true, gstRatePct: "18.00", countsTowardCommission: false, isRefundable: false, displayOrder: 4 },
+    // Refundable, so it must never reach the commissionable base.
+    { code: "IFMS", name: "Interest-Free Maintenance Security", category: "IFMS", isTaxable: false, gstRatePct: null, countsTowardCommission: false, isRefundable: true, displayOrder: 5 },
+    { code: "STAMP", name: "Stamp Duty", category: "STAMP_DUTY", isTaxable: false, gstRatePct: null, countsTowardCommission: false, isRefundable: false, displayOrder: 6 },
+    { code: "REG", name: "Registration", category: "REGISTRATION", isTaxable: false, gstRatePct: null, countsTowardCommission: false, isRefundable: false, displayOrder: 7 },
+  ] as const;
+
+  for (const h of chargeHeads) {
+    await prisma.chargeHead.upsert({
+      where: { orgId_code: { orgId: ORG_ID, code: h.code } },
+      update: {},
+      create: { orgId: ORG_ID, ...h },
+    });
+  }
+
+  // Re-running the seed must not publish v2, v3, v4... Skip if one is live.
+  const existing = await prisma.priceList.findFirst({
+    where: { projectId: PROJECT_ID, status: "ACTIVE" },
+  });
+  if (existing) {
+    console.log(`  ${chargeHeads.length} charge heads, price list v${existing.version} already ACTIVE`);
+    return;
+  }
+
+  // Maker-checker (docs/09-RBAC-MATRIX.md): pricelist.prepare belongs to
+  // PROJECT_MANAGER, pricelist.approve to SALES_HEAD. Two distinct seeded
+  // users, so the row asserts an approval that genuinely happened.
+  const preparer = await prisma.user.findUniqueOrThrow({
+    where: { orgId_email: { orgId: ORG_ID, email: "project_manager@demo.test" } },
+  });
+  const approver = await prisma.user.findUniqueOrThrow({
+    where: { orgId_email: { orgId: ORG_ID, email: "sales_head@demo.test" } },
+  });
+
+  const publishedAt = new Date("2024-01-01");
+  await prisma.priceList.create({
+    data: {
+      orgId: ORG_ID,
+      projectId: PROJECT_ID,
+      version: 1,
+      name: "Launch pricing v1",
+      status: "ACTIVE",
+      validFrom: publishedAt,
+      preparedById: preparer.id,
+      approvedById: approver.id,
+      publishedAt,
+      items: {
+        create: [
+          {
+            unitTypeId: UNIT_TYPE_ID,
+            // PLACEHOLDER rate -- 975 sqft saleable x 5000 = Rs 48.75L base.
+            baseRatePerSqft: "5000.00",
+            plcCharges: { CORNER: 150, PARK_FACING: 200 },
+            otherCharges: [
+              { chargeHeadCode: "PARKING", amount: 300000 },
+              { chargeHeadCode: "CLUB", amount: 100000 },
+              { chargeHeadCode: "IFMS", amount: 50000 },
+              { chargeHeadCode: "STAMP", amount: 350000 },
+              { chargeHeadCode: "REG", amount: 30000 },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  console.log(`  ${chargeHeads.length} charge heads, price list v1 ACTIVE (prepared ${preparer.email}, approved ${approver.email})`);
+}
+
 async function seedTestUsers() {
   const passwordHash = await argon2Hash(DEMO_PASSWORD);
   let created = 0;
@@ -246,6 +334,10 @@ async function main() {
 
   console.log("Seeding test users...");
   await seedTestUsers();
+
+  // After the users: the price list records who prepared and who approved it.
+  console.log("Seeding charge heads + price list...");
+  await seedPricing();
 
   console.log("Seed complete.");
 }

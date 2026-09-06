@@ -14,6 +14,24 @@ import type {
 
 export const D = (v: number | string): Decimal => new Decimal(v);
 
+/** A fixture's-eye view of an OrgSnapshot.
+ *
+ *  OrgSnapshot declares its collections `readonly` because the ENGINE must
+ *  never mutate its input -- that is a real guarantee and the type enforces it.
+ *  Tests are the one legitimate writer: several deliberately corrupt or extend
+ *  a history to prove the engine resolves by booking date rather than by
+ *  whatever the org looks like today.
+ *
+ *  Every field is mutable and nothing else changes, so this stays assignable to
+ *  OrgSnapshot -- builders below return it, and the engine still receives it as
+ *  readonly. The distinction is the point: a mutation inside src/ would be a
+ *  bug, the same mutation inside test/ is the fixture doing its job. */
+export interface MutableOrgSnapshot {
+  hierarchyHistory: Map<string, HierarchyAssignmentRecord[]>;
+  gradeHistory: Map<string, GradeAssignmentRecord[]>;
+  associates: Map<string, AssociateSnapshot>;
+}
+
 // PLACEHOLDER rates throughout -- see docs/04-COMMISSION-SPEC.md worked example
 // and plan.md Open Items 4-5. Only the numbers are unconfirmed; the structure
 // and the test cases exercising it do not change when real figures arrive.
@@ -58,7 +76,7 @@ export interface OrgBuilderAssociate {
  *  Call it again with an extra record appended (not replacing an existing
  *  one) to simulate a later promotion or tree move without disturbing
  *  history -- see resolve.ts. */
-export function makeOrg(people: OrgBuilderAssociate[]): OrgSnapshot {
+export function makeOrg(people: OrgBuilderAssociate[]): MutableOrgSnapshot {
   const associates = new Map<string, AssociateSnapshot>();
   const gradeHistory = new Map<string, GradeAssignmentRecord[]>();
   const hierarchyHistory = new Map<string, HierarchyAssignmentRecord[]>();
@@ -103,7 +121,7 @@ function pushHistory<T>(map: Map<string, T[]>, key: string, record: T): void {
  *  history never changes what an old booking date resolves to -- a test that
  *  is meaningless if the "original" it compares against was itself
  *  corrupted by the act of cloning. */
-export function cloneOrg(org: OrgSnapshot): OrgSnapshot {
+export function cloneOrg(org: OrgSnapshot): MutableOrgSnapshot {
   return {
     associates: new Map(org.associates),
     gradeHistory: new Map(

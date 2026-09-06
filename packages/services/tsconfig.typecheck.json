@@ -1,0 +1,13 @@
+// tsconfig.json is the BUILD config: rootDir "src", emitting to dist. It
+// deliberately excludes test/, which meant the test suite was never
+// typechecked -- a refactor could move an export and `pnpm typecheck` would
+// stay green while every test importing it broke at runtime. That happened
+// (auth.ts -> password.ts). This config is what `typecheck` actually runs.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src", "test"]
+}

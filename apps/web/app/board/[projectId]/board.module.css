@@ -1,0 +1,761 @@
+/* Live inventory board.
+
+   Plain CSS Modules on purpose: apps/web carries no CSS framework and this
+   screen is not the place to introduce one.
+
+   Two constraints in docs/08-SCREENS.md and docs/12-NFR.md drive almost every
+   value below, and both are literal:
+
+     "legible in sunlight"  -> near-black text on light grounds, saturated
+                               borders, nothing important carried by a mid-grey,
+                               no type under 11px
+     "one-handed at 360px"  -> 44px minimum tap targets, a single column, and
+                               the primary action fixed inside thumb reach
+
+   Status colours are never the only signal. Each tone also sets a border style
+   (solid / dashed / double / dotted) and BLOCKED adds a hatch, so the grid
+   survives greyscale and colour blindness on top of the text label on every
+   tile. */
+
+.board {
+  --ink: #101418;
+  --ink-soft: #45505b;
+  --paper: #ffffff;
+  --paper-sunk: #f1f4f6;
+  --rule: #b9c2ca;
+  --rule-strong: #101418;
+  --focus: #0b3d91;
+
+  min-height: 100vh;
+  margin: 0;
+  padding: 0 10px 104px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.35;
+  -webkit-text-size-adjust: 100%;
+}
+
+.board *:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* ── Action bar ─────────────────────────────────────────────────────────── */
+
+.actionBar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 12;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--paper);
+  border-top: 2px solid var(--rule-strong);
+  box-shadow: 0 -4px 14px rgba(16, 20, 24, 0.14);
+}
+
+.actionBarInner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.refreshButton {
+  flex: 1 1 auto;
+  min-height: 52px;
+  padding: 0 18px;
+  border: 2px solid var(--focus);
+  border-radius: 6px;
+  background: var(--focus);
+  color: #ffffff;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.refreshButton:disabled {
+  background: #3b5f9e;
+  border-color: #3b5f9e;
+  cursor: progress;
+}
+
+.refreshGlyph {
+  margin-right: 8px;
+  font-size: 19px;
+}
+
+.syncLine {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.syncTime {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.syncMode {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.errorStrip {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 2px solid #a32014;
+  border-radius: 5px;
+  background: #fbe9e7;
+  color: #4a0f0a;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@media (min-width: 760px) {
+  .board {
+    padding-bottom: 32px;
+  }
+
+  .actionBar {
+    position: sticky;
+    top: 0;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    margin: 0 -10px;
+    border-top: 0;
+    border-bottom: 2px solid var(--rule-strong);
+    box-shadow: 0 4px 14px rgba(16, 20, 24, 0.1);
+  }
+
+  .refreshButton {
+    flex: 0 0 auto;
+  }
+}
+
+/* ── Header, towers, filters ────────────────────────────────────────────── */
+
+.header {
+  padding: 14px 0 10px;
+}
+
+.title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.towerBar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.towerButton {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 2px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.towerButton[aria-pressed="true"] {
+  border-color: var(--rule-strong);
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.towerCount {
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(16, 20, 24, 0.1);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.towerButton[aria-pressed="true"] .towerCount {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.filterHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 2px solid var(--rule);
+}
+
+.filterToggle {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.filterCount {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--focus);
+  color: #ffffff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary strong {
+  color: var(--ink);
+}
+
+.rail {
+  padding: 12px 0 14px;
+  border-bottom: 2px solid var(--rule);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  padding: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.select {
+  min-height: 46px;
+  padding: 0 10px;
+  border: 2px solid var(--rule);
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+}
+
+.chipFieldset {
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 2px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--tone-line, var(--rule-strong));
+  box-shadow: inset 0 0 0 2px var(--tone-line, var(--rule-strong));
+}
+
+.chipSwatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  border: 2px solid var(--tone-line);
+  border-radius: 3px;
+  background-color: var(--tone-bg);
+  background-image: var(--tone-overlay, none);
+  color: var(--tone-ink);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.chipLabel {
+  white-space: nowrap;
+}
+
+.chipCount {
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.chipAll[aria-pressed="true"] {
+  border-color: var(--rule-strong);
+  background: var(--ink);
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.secondaryButton {
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 0 16px;
+  border: 2px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 2px solid #8a6100;
+  border-radius: 6px;
+  background: #fff3d6;
+  color: #4a2a00;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bannerButton {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 2px solid #4a2a00;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #4a2a00;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ── Elevation grid ─────────────────────────────────────────────────────── */
+
+.grid {
+  padding-top: 12px;
+}
+
+.floorRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--paper-sunk);
+}
+
+.floorLabel {
+  display: flex;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 2px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.floorUnits {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 6px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 68px;
+  padding: 6px 7px;
+  border: 3px var(--tone-style, solid) var(--tone-line);
+  border-radius: 6px;
+  background-color: var(--tone-bg);
+  background-image: var(--tone-overlay, none);
+  color: var(--tone-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tileNumber {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.tileStatus {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tileGlyph {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.tileFoot {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+.tileUrgent {
+  box-shadow: inset 0 0 0 2px var(--tone-line);
+}
+
+.tileUrgent .tileFoot {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tileSelected {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.empty {
+  padding: 32px 8px;
+  text-align: center;
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.emptyBody {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+}
+
+/* ── Status tones ───────────────────────────────────────────────────────── */
+
+.toneAvailable {
+  --tone-bg: #e4f5e9;
+  --tone-line: #0b6b34;
+  --tone-ink: #06351a;
+  --tone-style: solid;
+}
+
+.toneHeld {
+  --tone-bg: #fff1d6;
+  --tone-line: #8a6100;
+  --tone-ink: #4a2a00;
+  --tone-style: dashed;
+}
+
+.toneBooked {
+  --tone-bg: #e3edfd;
+  --tone-line: #14459c;
+  --tone-ink: #0f265e;
+  --tone-style: solid;
+}
+
+.toneAgreement {
+  --tone-bg: #ede7fb;
+  --tone-line: #56258f;
+  --tone-ink: #2e1065;
+  --tone-style: double;
+}
+
+.toneRegistered {
+  --tone-bg: #dff1f4;
+  --tone-line: #0a6070;
+  --tone-ink: #06323a;
+  --tone-style: solid;
+}
+
+.tonePossession {
+  --tone-bg: #edebe0;
+  --tone-line: #6b6110;
+  --tone-ink: #33300a;
+  --tone-style: dotted;
+}
+
+/* Hatched as well as red: "not sellable" has to be obvious at arm's length in
+   sunlight, and to someone who cannot see the red at all. */
+.toneBlocked {
+  --tone-bg: #fbe9e7;
+  --tone-line: #a32014;
+  --tone-ink: #4a0f0a;
+  --tone-style: solid;
+  --tone-overlay: repeating-linear-gradient(
+    45deg,
+    rgba(163, 32, 20, 0.18) 0 5px,
+    rgba(163, 32, 20, 0) 5px 11px
+  );
+}
+
+/* ── Unit drawer ────────────────────────────────────────────────────────── */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(16, 20, 24, 0.5);
+}
+
+.drawer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 21;
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 0 14px calc(18px + env(safe-area-inset-bottom, 0px));
+  background: var(--paper);
+  border-top: 3px solid var(--rule-strong);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -10px 28px rgba(16, 20, 24, 0.3);
+}
+
+@media (min-width: 760px) {
+  .drawer {
+    top: 0;
+    bottom: 0;
+    left: auto;
+    width: min(430px, 100%);
+    max-height: none;
+    padding-bottom: 24px;
+    border-top: 0;
+    border-left: 3px solid var(--rule-strong);
+    border-radius: 0;
+    box-shadow: -10px 0 28px rgba(16, 20, 24, 0.22);
+  }
+}
+
+.drawerHeader {
+  position: sticky;
+  top: 0;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px 0 10px;
+  background: var(--paper);
+  border-bottom: 2px solid var(--rule);
+}
+
+.drawerTitle {
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.statusBadge {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  border: 2px var(--tone-style, solid) var(--tone-line);
+  border-radius: 5px;
+  background-color: var(--tone-bg);
+  background-image: var(--tone-overlay, none);
+  color: var(--tone-ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drawerClose {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  border: 2px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.drawerBody {
+  padding-top: 14px;
+}
+
+.detailHeading {
+  margin: 18px 0 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.detailHeading:first-child {
+  margin-top: 0;
+}
+
+.detailList {
+  margin: 0;
+}
+
+.detailRow {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--paper-sunk);
+}
+
+.detailTerm {
+  flex: 0 0 auto;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+
+.detailValue {
+  margin: 0;
+  flex: 1 1 auto;
+  font-weight: 600;
+  text-align: right;
+}
+
+.tag {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--ink-soft);
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.holdBlock {
+  padding: 12px 14px;
+  border: 3px dashed #8a6100;
+  border-radius: 8px;
+  background: #fff1d6;
+  color: #4a2a00;
+}
+
+.holdBlockUrgent {
+  box-shadow: inset 0 0 0 3px #8a6100;
+}
+
+.holdCountdown {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.holdCountdownUnit {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.holdMeta {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inlineButton {
+  padding: 2px 8px;
+  border: 2px solid #4a2a00;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #4a2a00;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.blockBlock {
+  padding: 12px 14px;
+  border: 3px solid #a32014;
+  border-radius: 8px;
+  background: #fbe9e7;
+  color: #4a0f0a;
+}
+
+.blockReason {
+  margin: 0;
+  font-weight: 600;
+}

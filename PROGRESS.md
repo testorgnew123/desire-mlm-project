@@ -22,22 +22,22 @@ the state. Update it as work lands, not at the end of a sprint.
 
 | | |
 |---|---|
-| **Current phase** | **Phase 1 — Inventory**, 7/17 done, **both gates passed** (hold concurrency proven against real Postgres, negative-control verified). Phase 0 sits at 15/17; its 2 stragglers need a Neon API key and a `/api/jobs/*` endpoint — the latter lands in this phase. Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
+| **Current phase** | **Phase 1 — Inventory**, 16/17 done, **both gates passed** (hold concurrency proven against real Postgres, negative-control verified). Only the lost-race UI remains, and it is genuinely blocked on there being no hold-taking action in the UI yet. Phase 0 sits at 16/17 — the `/api/jobs/*` endpoint that blocked its cron task now exists. Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
 | **Started** | 2026-09-05 |
 | **Target** | 18–22 weeks from start |
 | **Hosting** | **Live**: [desire-mlm-project.netlify.app](https://desire-mlm-project.netlify.app) — verified via `/api/health` returning `200` with a real hosted-Neon query. Hosted Neon (`ap-southeast-1`, Postgres 18.6). Local Docker Postgres 18 kept for offline dev / concurrency tests. Repo at `github.com/testorgnew123/desire-mlm-project`, connected for auto-deploy on push |
-| **Last updated** | 2026-09-05 |
+| **Last updated** | 2026-09-06 |
 
 | Phase | Tasks | Done | Gates | Status |
 |---|:-:|:-:|:-:|---|
-| 0 — Foundation | 17 | 15 | 1/1 | Live and deployed; 2 minor tasks remain (Phase 1-gated) |
-| 1 — Inventory | 17 | 7 | **2/2** | In progress — both gates passed |
+| 0 — Foundation | 17 | 16 | 1/1 | Live and deployed; 1 task remains (needs a Neon API key) |
+| 1 — Inventory | 17 | 16 | **2/2** | Near complete — both gates passed; lost-race UI open |
 | 2 — Sales & Collections | 23 | 0 | 0/2 | Not started |
 | 3 — Commission | 23 | 7 | 5/7 | In progress (engine only) |
 | 4 — Payouts | 14 | 0 | 0/3 | Not started |
 | 5 — Scale | 13 | 0 | 0/1 | Not started |
 | Pre-go-live | 11 | 0 | — | Not started |
-| **Total** | **118** | **29** | **8/16** | |
+| **Total** | **118** | **39** | **8/16** | |
 
 ---
 
@@ -126,23 +126,23 @@ database, not just the log text it produced.
 *3–4 weeks. Exit: two users cannot hold the same unit, proven by test. Holds
 auto-expire. Board refreshes within the configured interval.*
 
-- [ ] Project master with RERA fields and hold policy config
-- [ ] Tower, UnitType, Unit CRUD — carpet / built-up / saleable all captured — [19-GLOSSARY](docs/19-GLOSSARY.md)
-- [ ] Bulk unit import (CSV/XLSX) with validation report
-- [ ] `ChargeHead` master, `countsTowardCommission` flag
-- [ ] Versioned price lists, maker-checker publish (`preparedBy != approvedBy`)
-- [ ] Cost sheet computation — base, PLC, other charges, GST — [06-INVENTORY-SPEC §5](docs/06-INVENTORY-SPEC.md)
+- [x] Project master with RERA fields and hold policy config -- `packages/services/src/projects.ts`. RERA validity and hold policy are *validated*, not just stored: `ProjectReraInvalidError` and `InvalidHoldPolicyError` refuse incoherent config at the boundary, and `holds.ts` reads the same policy rather than a second copy
+- [x] Tower, UnitType, Unit CRUD — carpet / built-up / saleable all captured — [19-GLOSSARY](docs/19-GLOSSARY.md) -- `createTower`/`createUnitType`/`createUnit`/`updateUnit`. `resolveUnitAreas` applies per-unit overrides over the unit type's defaults, and `InvalidUnitAreasError` rejects carpet ≥ saleable — the confusion that misprices a unit by ~35%. `CrossProjectReferenceError` stops a unit pointing at another project's tower
+- [x] Bulk unit import (CSV/XLSX) with validation report -- `unit-import.ts`. Reports **every** problem in one pass with 1-based row numbers matching the user's spreadsheet, so a file is fixed once instead of yielding a new error per re-upload. 21 tests
+- [x] `ChargeHead` master, `countsTowardCommission` flag -- `charge-heads.ts`. `setCommissionableFlag` is separated from general update and requires a reason: flipping that flag silently re-bases everyone's commission
+- [x] Versioned price lists, maker-checker publish (`preparedBy != approvedBy`) -- `price-lists.ts`. Both identities come from the audit context, never a parameter — a caller-supplied approver id would let the preparer name a colleague and assert an approval that never happened. Proven: a user holding **both** permissions still cannot publish their own list. Publish archives the incumbent in the same transaction, so no reader can observe two ACTIVE lists; 10 concurrent drafts get 10 distinct versions. 8 tests
+- [x] Cost sheet computation — base, PLC, other charges, GST — [06-INVENTORY-SPEC §5](docs/06-INVENTORY-SPEC.md) -- `cost-sheet.ts`, pure. **Every expected number in its 19 tests is hand-computed from the spec, not read off the implementation**, because a wrong cost sheet produces a *plausible* number that flows into `agreementValue` → `commissionableValue` → what an associate is paid. GST is summed per line at that line's own rate; refundable IFMS and the whole GST take are excluded from the commissionable base
 - [x] Unit state machine with guards; every transition writes `UnitStatusHistory` -- `packages/services/src/unit-transitions.ts` (pure, no Prisma import) + `units.ts` (DB-backed `transitionUnitStatus`/`blockUnit`/`unblockUnit`, each writing history + audit inside the same transaction as the change). Unblock restores the unit to whatever status it held before blocking, read from `UnitStatusHistory` rather than passed in -- so an admin can't accidentally unblock a sold unit back to AVAILABLE
 - [x] Table-driven test over every (state, transition) pair -- all 7x7 = 49 combinations asserted explicitly, plus 5 named rule tests. The expected-legal set is transcribed independently from the doc, **not** imported from the implementation, so a bug in the table can't define its own correctness. 54 tests
 - [x] **GATE** Hold acquire inside `SELECT … FOR UPDATE` -- `packages/services/src/holds.ts`. Row lock serialises check-then-act; the partial unique index is the backstop, and a P2002 from it is converted to the same clean named rejection rather than a 500 — [06-INVENTORY-SPEC §2](docs/06-INVENTORY-SPEC.md)
 - [x] **GATE** 50-way concurrency test against real Postgres -- exactly 1 success, 49 clean `UnitNotAvailableError`s each naming the winning associate, plus an independent DB-level assertion that only one live hold row exists. **Proven non-vacuous**: with both defences removed (row lock bypassed AND index dropped) the test genuinely fails with raw transaction-layer errors, then passes again once restored. A second test holds 50 *different* units concurrently and expects all 50 to succeed -- catching the naive implementation that would pass the first test by serialising everything globally
 - [x] Lazy expiry on read -- `isHoldLive`/`effectiveUnitStatus` (pure) plus materialisation inside `acquireHold`'s lock, so a hold that expired but hasn't been swept is immediately re-holdable and the sweep can't disagree with a concurrent acquirer. Tested including the exact between-expiry-and-sweep state
-- [ ] Hold expiry sweep job, 5-min external cron — [21-TIER-LIMITS §11](docs/21-TIER-LIMITS.md)
+- [x] Hold expiry sweep job, 5-min external cron — [21-TIER-LIMITS §11](docs/21-TIER-LIMITS.md) -- `POST /api/jobs/holds/expire`, triggered by `.github/workflows/scheduled-jobs.yml` (`*/5 * * * *`), not a Netlify Scheduled Function. Auth is a timing-safe compare of `x-job-secret` that **fails closed when the env var is unset** — an unconfigured deploy rejects everything rather than exposing an open endpoint. Verified: `401` with no secret, `401` with a wrong secret, `200 {"ok":true,"processed":0}` with the right one. Note the sequencing lesson — those checks passed against the *local* dev server while every scheduled run was still 404ing, because the route existed only on disk and had never been committed. A green local check says nothing about the deploy
 - [x] Hold quota per grade, counted across projects -- reads `Grade.holdQuota` (currently a PLACEHOLDER default of 3; the *mechanism* doesn't need the real number, only the value does, so this is no longer blocked). An associate with no grade assignment gets a quota of 0, not an unlimited default · **BLOCKED#9** applies only to the confirmed value
 - [x] Hold extension, capped by `maxHoldExtensions` -- tested to succeed once then refuse
-- [ ] Delta endpoint + `@@index([orgId, updatedAt])`
-- [ ] Live inventory board — countdown on held tiles, filters, unit drawer, **manual refresh**, pause-on-blur at 60 s — [08-SCREENS](docs/08-SCREENS.md)
-- [ ] Lost-race UI names the winner ("Just taken by Ravi (A-0042)"), never a generic error
+- [x] Delta endpoint + `@@index([orgId, updatedAt])` -- `GET /api/v1/projects/[projectId]/units/deltas`, index present at `schema.prisma:891`. Auth is checked *before* validation, so a bad `?since` can't be used to probe which projects exist. Errors are RFC 7807 problem+json. Verified live: `401` unauthenticated, `200` with all 100 seeded units, `?since=<serverTime>` → 0 changed (the polling contract), `400` problem+json on a malformed `since`
+- [x] Live inventory board — countdown on held tiles, filters, unit drawer, **manual refresh**, pause-on-blur at 60 s — [08-SCREENS](docs/08-SCREENS.md) -- `apps/web/app/board/[projectId]/`. Polling stops when the tab is hidden *and* when no hold is live, so an idle board costs nothing against the free tier's invocation budget. Status is conveyed as a **text label**, not colour alone. Verified against the running app rather than trusting that it compiles: real seeded unit numbers render, and the tile mix reflects genuine DB state
+- [ ] Lost-race UI names the winner ("Just taken by Ravi (A-0042)"), never a generic error -- **service half done, UI half not started.** `acquireHold` raises `UnitNotAvailableError` carrying the winner's name and code, verified end-to-end against hosted Neon ("Unit is held by Demo Associate (A-DEMO-ASSOCIATE)"), and the board already names the holder of an already-held unit in its drawer. But there is no hold-taking action in the UI and no `POST .../holds` endpoint, so **no lost race can occur yet** — this stays open until a user can actually lose one
 
 ---
 

@@ -1,3 +1,9 @@
+// Session lifecycle and MFA.
+//
+// Password hashing and the login flow live in password.ts, NOT here: that
+// module imports @node-rs/argon2, a native .node addon webpack cannot parse.
+// validateSession is on the hot path for every request, so this file must stay
+// free of native dependencies -- do not import password.ts from here.
 // Hand-rolled session auth against the schema as designed, rather than
 // Auth.js's Prisma adapter conventions -- see docs/02-ARCHITECTURE.md and
 // PROGRESS.md decision log for why. Matches docs/10-SECURITY.md exactly:
@@ -5,30 +11,13 @@
 // 12h idle / 7d absolute timeout, per-account lockout after 5 failed
 // attempts, server-side revocation on demand.
 import { randomBytes, createHash } from "node:crypto";
-import { hash as argon2Hash, verify as argon2Verify } from "@node-rs/argon2";
 import { authenticator } from "otplib";
-import type { PrismaClient, Prisma, User } from "@desire/db";
+import type { PrismaClient, Prisma } from "@desire/db";
 import { decryptField, encryptField } from "./encryption";
 
 const SESSION_TOKEN_BYTES = 32;
-const FAILED_LOGIN_LOCKOUT_THRESHOLD = 5;
-const LOCKOUT_DURATION_MINUTES = 15;
 const SESSION_IDLE_TIMEOUT_MINUTES = 12 * 60;
 const SESSION_ABSOLUTE_TIMEOUT_DAYS = 7;
-
-export class AccountLockedError extends Error {
-  constructor(public readonly lockedUntil: Date) {
-    super(`Account is locked until ${lockedUntil.toISOString()}.`);
-    this.name = "AccountLockedError";
-  }
-}
-
-export class InvalidCredentialsError extends Error {
-  constructor() {
-    super("Invalid email or password.");
-    this.name = "InvalidCredentialsError";
-  }
-}
 
 export class SessionInvalidError extends Error {
   constructor(reason: string) {
@@ -37,79 +26,6 @@ export class SessionInvalidError extends Error {
   }
 }
 
-// ── Passwords ────────────────────────────────────────────────────────────
-
-/** argon2id, per docs/10-SECURITY.md. @node-rs/argon2 defaults to argon2id
- *  with OWASP-recommended parameters -- not overridden here, so a future
- *  library upgrade that revises its safe defaults upward is inherited for
- *  free rather than pinned to today's guess at "good enough". */
-export async function hashPassword(plaintext: string): Promise<string> {
-  return argon2Hash(plaintext);
-}
-
-export async function verifyPassword(hash: string, plaintext: string): Promise<boolean> {
-  return argon2Verify(hash, plaintext);
-}
-
-// ── Login, with per-account lockout ─────────────────────────────────────
-//
-// This covers ACCOUNT lockout (schema-backed: User.failedLoginCount /
-// lockedUntil). Per-IP rate limiting (docs/10-SECURITY.md: "5 / 15 min per
-// IP+account") additionally needs a request-rate store this schema does not
-// provide -- deliberately not implemented here rather than faked with an
-// in-memory counter that would not survive a serverless cold start or work
-// across concurrent function instances. See PROGRESS.md Phase 0 for the open
-// item; a Netlify edge rate limit or Upstash-backed counter are the likely
-// candidates once this is hosted.
-
-export interface LoginResult {
-  user: User;
-}
-
-export async function attemptLogin(
-  db: PrismaClient,
-  email: string,
-  orgId: string,
-  plaintextPassword: string,
-): Promise<LoginResult> {
-  const user = await db.user.findUnique({ where: { orgId_email: { orgId, email } } });
-
-  // Same error for "no such user" and "wrong password" -- do not let login
-  // reveal whether an email exists in the system.
-  if (!user) throw new InvalidCredentialsError();
-
-  if (user.lockedUntil && user.lockedUntil > new Date()) {
-    throw new AccountLockedError(user.lockedUntil);
-  }
-
-  const valid = await verifyPassword(user.passwordHash, plaintextPassword);
-  if (!valid) {
-    await recordFailedLogin(db, user.id, user.failedLoginCount);
-    throw new InvalidCredentialsError();
-  }
-
-  await db.user.update({
-    where: { id: user.id },
-    data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() },
-  });
-
-  return { user };
-}
-
-async function recordFailedLogin(db: PrismaClient, userId: string, currentCount: number): Promise<void> {
-  const newCount = currentCount + 1;
-  const shouldLock = newCount >= FAILED_LOGIN_LOCKOUT_THRESHOLD;
-
-  await db.user.update({
-    where: { id: userId },
-    data: {
-      failedLoginCount: newCount,
-      ...(shouldLock
-        ? { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60_000) }
-        : {}),
-    },
-  });
-}
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 //

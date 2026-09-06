@@ -35,6 +35,9 @@ importers:
       '@desire/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@desire/services':
+        specifier: workspace:*
+        version: link:../../packages/services
       next:
         specifier: ^15.1.0
         version: 15.5.25(@types/node@22.20.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

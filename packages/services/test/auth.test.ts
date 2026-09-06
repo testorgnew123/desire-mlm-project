@@ -6,16 +6,21 @@ import "dotenv/config";
 import { afterAll, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import {
-  AccountLockedError,
-  InvalidCredentialsError,
   SessionInvalidError,
-  attemptLogin,
   createSession,
-  hashPassword,
   revokeAllSessions,
   revokeSession,
   validateSession,
 } from "../src/auth";
+// Password hashing lives in its own module so that argon2's native .node addon
+// stays off every request path -- see the header of src/password.ts. Tests are
+// free to import it directly; auth.ts is not.
+import {
+  AccountLockedError,
+  InvalidCredentialsError,
+  attemptLogin,
+  hashPassword,
+} from "../src/password";
 
 const db = getPrismaClient();
 const TEST_ORG_ID = "org_test_auth";
