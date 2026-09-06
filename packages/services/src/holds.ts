@@ -404,21 +404,62 @@ export async function expireStaleHolds(
         where: { id: hold.id },
         data: { releasedAt: now, releaseReason: "EXPIRED" },
       });
-      await tx.unit.updateMany({
+      // Guarded on currentHoldId so the sweep can never free a unit that has
+      // moved on. The COUNT is then the authority for everything below it: an
+      // earlier version wrote the history row and counted the release
+      // unconditionally, so when this guard did not match, the unit stayed HELD
+      // while UnitStatusHistory recorded a HELD -> AVAILABLE that never
+      // happened. A false row in an append-only history is worse than the stuck
+      // unit -- it is the record used to reconstruct what the inventory did.
+      const { count } = await tx.unit.updateMany({
         where: { id: hold.unitId, currentHoldId: hold.id },
         data: { status: "AVAILABLE", currentHoldId: null },
       });
-      await tx.unitStatusHistory.create({
-        data: {
-          unitId: hold.unitId,
-          fromStatus: "HELD",
-          toStatus: "AVAILABLE",
-          reason: "hold expired (sweep)",
-          actorId: null,
-          actorLabel: "system:hold-expiry-sweep",
-        },
-      });
-      released.push({ holdId: hold.id, unitId: hold.unitId, associateId: hold.associateId });
+
+      let freed = count === 1;
+
+      if (!freed) {
+        // The one_active_hold_per_unit partial index guarantees this hold was
+        // the unit's only LIVE one, so the pointer cannot legitimately name a
+        // different live hold: the rows genuinely disagree. Leaving it here
+        // would strand the unit permanently -- its hold is now released, so no
+        // later sweep would ever look at it again, and it would be unsellable
+        // with no countdown and no holder.
+        const unit = await tx.unit.findUnique({
+          where: { id: hold.unitId },
+          select: { status: true, currentHoldId: true },
+        });
+        console.error(
+          `hold-expiry-sweep: unit ${hold.unitId} does not point at expiring hold ${hold.id} ` +
+            `(status=${unit?.status ?? "missing"}, currentHoldId=${unit?.currentHoldId ?? "null"}). ` +
+            `Releasing the hold row regardless.`,
+        );
+        // Only a unit still sitting in HELD is safe to free. BOOKED, SOLD and
+        // BLOCKED all outrank an expired hold, and forcing those to AVAILABLE
+        // would destroy a sale rather than repair a pointer.
+        if (unit?.status === "HELD") {
+          await tx.unit.update({
+            where: { id: hold.unitId },
+            data: { status: "AVAILABLE", currentHoldId: null },
+          });
+          freed = true;
+        }
+      }
+
+      // No history and no reported release unless the unit actually moved.
+      if (freed) {
+        await tx.unitStatusHistory.create({
+          data: {
+            unitId: hold.unitId,
+            fromStatus: "HELD",
+            toStatus: "AVAILABLE",
+            reason: "hold expired (sweep)",
+            actorId: null,
+            actorLabel: "system:hold-expiry-sweep",
+          },
+        });
+        released.push({ holdId: hold.id, unitId: hold.unitId, associateId: hold.associateId });
+      }
     });
   }
   return { released };

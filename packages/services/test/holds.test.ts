@@ -377,4 +377,91 @@ describe("expiry sweep", () => {
     const second = await expireStaleHolds(db);
     expect(second.released).toHaveLength(0);
   });
+
+  // Regression. Found by running the real cron against the real deploy with a
+  // hand-planted expired hold: the sweep released the hold row and wrote a
+  // HELD -> AVAILABLE history row, while the unit itself stayed HELD. The unit
+  // was then unsellable forever -- its hold was released, so no later sweep
+  // would ever consider it again -- and the append-only history asserted a
+  // transition that never happened.
+  it("frees a unit whose currentHoldId does not point at its own expiring hold, and never writes history for a move that did not happen", async () => {
+    const { units, associates } = await seedFixture({ associateCount: 1, units: 1 });
+    const unitId = units[0]!.id;
+
+    const held = await acquireHold(db, {
+      orgId: ORG,
+      unitId,
+      associateId: associates[0]!.id,
+      audit,
+    });
+
+    // Break the pointer, exactly as the planted hold did, and expire the hold.
+    await db.unit.update({ where: { id: unitId }, data: { currentHoldId: null } });
+    await db.unitHold.update({
+      where: { id: held.holdId },
+      data: { expiresAt: new Date(Date.now() - 60_000) },
+    });
+
+    const historyBefore = await db.unitStatusHistory.count({ where: { unitId } });
+
+    const { released } = await expireStaleHolds(db);
+
+    // The unit is recovered rather than stranded...
+    const unit = await db.unit.findUniqueOrThrow({ where: { id: unitId } });
+    expect(unit.status).toBe("AVAILABLE");
+    expect(unit.currentHoldId).toBeNull();
+
+    // ...and because it genuinely moved, it is reported and recorded exactly once.
+    expect(released).toHaveLength(1);
+    expect(released[0]?.holdId).toBe(held.holdId);
+    const written = await db.unitStatusHistory.findMany({
+      where: { unitId, actorLabel: "system:hold-expiry-sweep" },
+    });
+    expect(written).toHaveLength(1);
+    expect(await db.unitStatusHistory.count({ where: { unitId } })).toBe(historyBefore + 1);
+  });
+
+  // The other half of the same guard: when the unit has legitimately moved past
+  // HELD, the sweep must release the stale hold row WITHOUT touching the unit
+  // and WITHOUT claiming a transition. Forcing a sold unit back to AVAILABLE
+  // because a stale hold expired would destroy a sale.
+  it("never resurrects a BOOKED unit, and reports no release when nothing moved", async () => {
+    const { units, associates } = await seedFixture({ associateCount: 1, units: 1 });
+    const unitId = units[0]!.id;
+
+    const held = await acquireHold(db, {
+      orgId: ORG,
+      unitId,
+      associateId: associates[0]!.id,
+      audit,
+    });
+
+    // The unit progressed to BOOKED; the hold row was left behind and expires.
+    await db.unit.update({
+      where: { id: unitId },
+      data: { status: "BOOKED", currentHoldId: null },
+    });
+    await db.unitHold.update({
+      where: { id: held.holdId },
+      data: { expiresAt: new Date(Date.now() - 60_000) },
+    });
+
+    const { released } = await expireStaleHolds(db);
+
+    const unit = await db.unit.findUniqueOrThrow({ where: { id: unitId } });
+    expect(unit.status).toBe("BOOKED");
+
+    // Nothing moved, so nothing is reported and nothing is recorded...
+    expect(released).toHaveLength(0);
+    expect(
+      await db.unitStatusHistory.count({
+        where: { unitId, actorLabel: "system:hold-expiry-sweep" },
+      }),
+    ).toBe(0);
+
+    // ...but the expired hold row is still cleaned up, so it stops being scanned.
+    const sweptHold = await db.unitHold.findUniqueOrThrow({ where: { id: held.holdId } });
+    expect(sweptHold.releasedAt).not.toBeNull();
+    expect(sweptHold.releaseReason).toBe("EXPIRED");
+  });
 });
