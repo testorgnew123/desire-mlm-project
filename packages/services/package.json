@@ -12,8 +12,10 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@desire/commission": "workspace:*",
     "@desire/db": "workspace:*",
     "@node-rs/argon2": "^2.0.2",
+    "decimal.js": "^10.4.3",
     "otplib": "^12.0.1",
     "dotenv": "^16.4.7"
   },

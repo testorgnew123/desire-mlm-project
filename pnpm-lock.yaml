@@ -119,12 +119,18 @@ importers:
 
   packages/services:
     dependencies:
+      '@desire/commission':
+        specifier: workspace:*
+        version: link:../commission
       '@desire/db':
         specifier: workspace:*
         version: link:../db
       '@node-rs/argon2':
         specifier: ^2.0.2
         version: 2.2.0
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
       dotenv:
         specifier: ^16.4.7
         version: 16.6.1

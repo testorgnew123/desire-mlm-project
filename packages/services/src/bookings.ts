@@ -25,9 +25,12 @@ import {
   type CostSheetLineResult,
   type FixedChargeInput,
 } from "./cost-sheet";
+import { computeClawback } from "@desire/commission";
+import Decimal from "decimal.js";
 
 const CREATE_PERMISSION = "booking.create";
 const CONFIRM_PERMISSION = "booking.confirm";
+const CANCEL_PERMISSION = "booking.cancel";
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -77,6 +80,30 @@ export class InvalidBookingStateError extends Error {
   ) {
     super(`Booking ${bookingId} is ${currentStatus}, not ${expected}.`);
     this.name = "InvalidBookingStateError";
+  }
+}
+
+/** Unlike InvalidBookingStateError, this names the ONE state cancellation is
+ *  legal from (CONFIRMED), not an arbitrary "expected" state a caller
+ *  chose -- the unit state machine (unit-transitions.ts) only has a
+ *  BOOKED -> AVAILABLE path back, and nothing in this codebase yet moves a
+ *  booking past CONFIRMED (no AGREEMENT_SIGNED/REGISTERED/POSSESSION_GIVEN
+ *  transition exists), so CONFIRMED is not just "the current rule" but the
+ *  only status this can ever legally apply to today. */
+export class BookingNotCancellableError extends Error {
+  constructor(
+    public readonly bookingId: string,
+    public readonly currentStatus: string,
+  ) {
+    super(`Booking ${bookingId} is ${currentStatus}, not CONFIRMED; only a confirmed booking can be cancelled.`);
+    this.name = "BookingNotCancellableError";
+  }
+}
+
+export class CancellationReasonRequiredError extends Error {
+  constructor(public readonly bookingId: string) {
+    super(`Booking ${bookingId} cancellation requires a reason.`);
+    this.name = "CancellationReasonRequiredError";
   }
 }
 
@@ -505,6 +532,218 @@ export async function confirmBooking(
     });
 
     return { ...confirmed, costSheetLines };
+  });
+}
+
+// ── Cancellation + clawback ──────────────────────────────────────────────
+
+export interface ClawbackPreviewLine {
+  commissionEntryId: string;
+  beneficiaryAssociateId: string;
+  role: string;
+  level: number;
+  grossAmount: string;
+  releasedTotal: string;
+  contraAmount: string;
+  nettedAgainstPending: string;
+  recoveryAmount: string;
+}
+
+/** Shared by previewCancellation (read-only) and cancelBooking (which
+ *  persists this same computation) -- one place computing "what would the
+ *  clawback be", so preview can never drift from what confirming actually
+ *  does. Takes a bare db/tx (PrismaClient or TransactionClient) since the
+ *  preview runs outside any transaction while cancelBooking runs inside
+ *  one. REVERSED entries are excluded -- a booking can only be cancelled
+ *  once (guarded by BookingNotCancellableError), so they would only appear
+ *  here if a previous clawback already superseded them. */
+async function computeClawbackLines(db: PrismaClient | PrismaNS.TransactionClient, bookingId: string) {
+  const entries = await db.commissionEntry.findMany({
+    where: { bookingId, status: { not: "REVERSED" } },
+  });
+
+  const lines: Array<{ entry: (typeof entries)[number]; result: ReturnType<typeof computeClawback> }> = [];
+  for (const entry of entries) {
+    const releases = await db.commissionRelease.findMany({
+      where: { entryId: entry.id, reversedAt: null },
+    });
+    const releasedTotal = releases.reduce(
+      (sum, r) => sum.plus(new Decimal(r.amount.toString())),
+      new Decimal(0),
+    );
+
+    const otherPayable = await db.commissionEntry.aggregate({
+      where: { beneficiaryAssociateId: entry.beneficiaryAssociateId, status: "PAYABLE", id: { not: entry.id } },
+      _sum: { grossAmount: true },
+    });
+    const beneficiaryPendingPayable = new Decimal((otherPayable._sum.grossAmount ?? 0).toString());
+
+    const result = computeClawback({ releasedTotal, beneficiaryPendingPayable });
+    lines.push({ entry, result });
+  }
+  return lines;
+}
+
+function serializeClawbackLine(line: Awaited<ReturnType<typeof computeClawbackLines>>[number]): ClawbackPreviewLine {
+  return {
+    commissionEntryId: line.entry.id,
+    beneficiaryAssociateId: line.entry.beneficiaryAssociateId,
+    role: line.entry.role,
+    level: line.entry.level,
+    grossAmount: line.entry.grossAmount.toString(),
+    releasedTotal: line.result.contraAmount.negated().toFixed(2),
+    contraAmount: line.result.contraAmount.toFixed(2),
+    nettedAgainstPending: line.result.nettedAgainstPending.toFixed(2),
+    recoveryAmount: line.result.recoveryAmount.toFixed(2),
+  };
+}
+
+/** Read-only: no transaction, no mutation, no lock -- shows the UI "who
+ *  loses how much" before the irreversible cancelBooking call
+ *  (docs/08-SCREENS.md: "cancellation shows a clawback preview before
+ *  confirming"). */
+export async function previewCancellation(
+  db: PrismaClient,
+  params: { bookingId: string; orgId: string },
+): Promise<ClawbackPreviewLine[]> {
+  const booking = await db.booking.findFirst({ where: { id: params.bookingId, orgId: params.orgId } });
+  if (!booking) throw new BookingNotFoundError(params.bookingId);
+
+  const lines = await computeClawbackLines(db, params.bookingId);
+  return lines.map(serializeClawbackLine);
+}
+
+export interface CancelBookingResult extends Booking {
+  clawback: ClawbackPreviewLine[];
+}
+
+export async function cancelBooking(
+  db: PrismaClient,
+  params: { bookingId: string; reason: string; audit: AuditContext },
+): Promise<CancelBookingResult> {
+  const actorId = requireActor(params.audit);
+  const now = new Date();
+
+  if (!params.reason || !params.reason.trim()) {
+    throw new CancellationReasonRequiredError(params.bookingId);
+  }
+
+  return db.$transaction(async (tx) => {
+    // Same lock order as confirmBooking: Booking, then Unit.
+    await tx.$queryRaw`SELECT "id" FROM "bookings" WHERE "id" = ${params.bookingId} FOR UPDATE`;
+
+    const booking = await tx.booking.findUnique({ where: { id: params.bookingId } });
+    if (!booking) throw new BookingNotFoundError(params.bookingId);
+    if (booking.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`Booking ${params.bookingId} belongs to another organisation.`);
+    }
+
+    await assertPermission(tx, actorId, CANCEL_PERMISSION, { projectId: booking.projectId });
+
+    if (booking.status !== "CONFIRMED") {
+      throw new BookingNotCancellableError(booking.id, booking.status);
+    }
+
+    await tx.$queryRaw`SELECT "id" FROM "units" WHERE "id" = ${booking.unitId} FOR UPDATE`;
+    const unit = await tx.unit.findUniqueOrThrow({
+      where: { id: booking.unitId },
+      select: { id: true, status: true },
+    });
+    // A CONFIRMED booking's unit must be BOOKED -- this asserts that
+    // invariant rather than silently no-op-ing if it somehow isn't.
+    assertValidTransition(unit.status, "AVAILABLE");
+
+    const before = auditSnapshot(booking);
+
+    const cancelled = await tx.booking.update({
+      where: { id: booking.id },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledById: actorId,
+        cancellationReason: params.reason,
+      },
+    });
+
+    await tx.unit.update({ where: { id: unit.id }, data: { status: "AVAILABLE" } });
+    await tx.unitStatusHistory.create({
+      data: {
+        unitId: unit.id,
+        fromStatus: unit.status,
+        toStatus: "AVAILABLE",
+        reason: `booking ${booking.bookingNumber} cancelled: ${params.reason}`,
+        actorId: params.audit.actorId,
+        actorLabel: params.audit.actorLabel,
+      },
+    });
+
+    await tx.bookingStatusHistory.create({
+      data: {
+        bookingId: booking.id,
+        fromStatus: "CONFIRMED",
+        toStatus: "CANCELLED",
+        actorId: params.audit.actorId,
+        actorLabel: params.audit.actorLabel,
+      },
+    });
+
+    const lines = await computeClawbackLines(tx, booking.id);
+    for (const { entry, result } of lines) {
+      // The original is superseded by the contra row created below --
+      // CommissionEntryStatus.REVERSED's own schema comment. ADR-0006 (see
+      // clawback.ts) says never edit the original's amount; this only
+      // moves its status, the row's money fields are untouched.
+      await tx.commissionEntry.update({ where: { id: entry.id }, data: { status: "REVERSED" } });
+
+      // The contra is ALSO marked REVERSED, not PAYABLE: its whole effect
+      // (nettedAgainstPending + recoveryAmount) is fully disposed of right
+      // here -- against the beneficiary's other pending entries and via the
+      // Recovery row below -- not something a future payout batch should
+      // re-discover by summing PAYABLE rows. This is a genuine
+      // interpretation call (no payout-batch code exists yet to confirm
+      // against); revisit if Phase 3's batch logic reads status differently.
+      const contra = await tx.commissionEntry.create({
+        data: {
+          orgId: entry.orgId,
+          bookingId: entry.bookingId,
+          schemeId: entry.schemeId,
+          beneficiaryAssociateId: entry.beneficiaryAssociateId,
+          role: entry.role,
+          level: entry.level,
+          baseAmount: entry.baseAmount,
+          grossAmount: D(result.contraAmount.toFixed(2)),
+          status: "REVERSED",
+          snapshot: entry.snapshot as Prisma.InputJsonValue,
+          sourceEntryId: entry.id,
+          reversalReason: `Booking ${booking.bookingNumber} cancelled: ${params.reason}`,
+          idempotencyKey: `${entry.idempotencyKey}:CANCEL:${booking.id}`,
+        },
+      });
+
+      if (result.recoveryAmount.gt(0)) {
+        await tx.recovery.create({
+          data: {
+            orgId: booking.orgId,
+            associateId: entry.beneficiaryAssociateId,
+            sourceEntryId: entry.id,
+            amount: D(result.recoveryAmount.toFixed(2)),
+            outstandingAmount: D(result.recoveryAmount.toFixed(2)),
+            reason: `Booking ${booking.bookingNumber} cancelled -- clawback recovery (contra ${contra.id})`,
+          },
+        });
+      }
+    }
+
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "Booking",
+      entityId: booking.id,
+      before,
+      after: auditSnapshot(cancelled),
+      reason: params.reason,
+    });
+
+    return { ...cancelled, clawback: lines.map(serializeClawbackLine) };
   });
 }
 

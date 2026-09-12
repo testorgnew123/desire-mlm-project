@@ -22,7 +22,7 @@ the state. Update it as work lands, not at the end of a sprint.
 
 | | |
 |---|---|
-| **Current phase** | **Phase 2 — Sales & Collections, 1/23 done** (the booking confirm **GATE**, plus the draft-booking plumbing it depends on). Phase 2 is scoped as a sequence of slices, not one pass — this is Slice 1 (Draft → Confirm); the roadmap for what follows (discount routing, cancellation/clawback, payment plans + demands, receipts + the maker-checker verify GATE, escalation + notifications, CRM) is recorded in the Decision log. Phases 0 and 1 are both **complete** (17/17 each). **CI is green.** Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
+| **Current phase** | **Phase 2 — Sales & Collections, 3/23 done** (Booking Core, discount routing, cancellation + clawback preview). Phase 2 is scoped as a sequence of slices, not one pass — this is Slices 1–2; the roadmap for what follows (payment plans + demands, receipts + the maker-checker verify GATE, escalation + notifications, CRM) is recorded in the Decision log. Phases 0 and 1 are both **complete** (17/17 each). **CI is green.** Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
 | **Started** | 2026-09-05 |
 | **Target** | 18–22 weeks from start |
 | **Hosting** | **Live**: [desire-mlm-project.netlify.app](https://desire-mlm-project.netlify.app) — verified via `/api/health` returning `200` with a real hosted-Neon query. Hosted Neon (`ap-southeast-1`, Postgres 18.6). Local Docker Postgres 18 kept for offline dev / concurrency tests. Repo at `github.com/testorgnew123/desire-mlm-project`, connected for auto-deploy on push |
@@ -32,12 +32,12 @@ the state. Update it as work lands, not at the end of a sprint.
 |---|:-:|:-:|:-:|---|
 | 0 — Foundation | 17 | **17** | 1/1 | Complete. Per-PR Neon branches proven end-to-end on PR #1 |
 | 1 — Inventory | 17 | **17** | **2/2** | Complete. Both gates passed |
-| 2 — Sales & Collections | 23 | 2 | **1/2** | In progress — Slices 1-1b (booking core + discount) |
+| 2 — Sales & Collections | 23 | 3 | **1/2** | In progress — Slices 1-2 (booking core + discount + cancellation) |
 | 3 — Commission | 23 | 7 | 5/7 | In progress (engine only) |
 | 4 — Payouts | 14 | 0 | 0/3 | Not started |
 | 5 — Scale | 13 | 0 | 0/1 | Not started |
 | Pre-go-live | 11 | 0 | — | Not started |
-| **Total** | **118** | **43** | **9/16** | |
+| **Total** | **118** | **44** | **9/16** | |
 
 ---
 
@@ -163,7 +163,7 @@ receipt; an overdue demand escalates through every rung to the right people.*
 - [ ] Document checklist, upload, verification
 - [x] **GATE** On confirm: freeze `agreementValue` **and** `commissionableValue`, snapshot `CostSheetLine` — [06-INVENTORY-SPEC §5](docs/06-INVENTORY-SPEC.md) -- `confirmBooking`. Re-verifies HELD-by-the-same-associate under a fresh lock rather than trusting the draft's premise (the hold can expire in the gap -- tested explicitly, including the case where a *different* associate now holds it). Re-runs `computeCostSheet` against the pinned price list rather than trusting the draft's cached preview, matching the spec's own "never recompute it later" -- true from the confirm instant, not before it. Releases the hold via `HoldReleaseReason.CONVERTED_TO_BOOKING` (existed in the schema, unused until now -- `releaseHold` in `holds.ts` was the wrong function to call here, since it unconditionally sends the unit back to `AVAILABLE` rather than `BOOKED`) and transitions the unit `HELD → BOOKED` in the same transaction. Verified against real Postgres (20 tests: hold-ownership at both draft and confirm time, tenancy, RBAC-before-any-lock, a genuine concurrency race between two associates, audit rows) and end-to-end against a live dev server + real Postgres: draft → confirm → re-confirm (`409`) → confirm without permission (`403`) → draft against a unit held by someone else (`409`) → read-scoped `GET` (own booking `200`, no permission `403`, outside scope `404` not `403`, so a scoped reader can't detect a booking id exists outside their scope)
 - [ ] Allotment letter PDF
-- [ ] Cancellation with a **clawback preview shown before confirming**
+- [x] Cancellation with a **clawback preview shown before confirming** -- `packages/services/src/bookings.ts` `previewCancellation`/`cancelBooking`. Only legal from `CONFIRMED` -- the unit state machine (`unit-transitions.ts`) has no path back to `AVAILABLE` from `AGREEMENT_SIGNED`/`REGISTERED`/`POSSESSION` (and nothing in this codebase yet moves a booking that far anyway), so `CONFIRMED` is the one reachable state, not an arbitrary choice. "Approval required" ([06-INVENTORY-SPEC](docs/06-INVENTORY-SPEC.md)) is `booking.cancel`'s already-narrow SUPER_ADMIN/SALES_HEAD grant plus a mandatory reason, not a second workflow. `previewCancellation` and `cancelBooking` share one `computeClawbackLines` helper (real Prisma reads, feeding `packages/commission`'s pure `computeClawback`) so preview can never drift from what cancelling actually does. Per `CommissionEntry`: the original is marked `REVERSED` (its own schema comment -- "superseded by a contra entry"); a contra row is persisted (`sourceEntryId`, `grossAmount` = the negative `contraAmount`, original's amount untouched per ADR-0006) and marked `REVERSED` too, since its whole effect is already disposed of right here (netted against the beneficiary's other pending entries, or turned into a `Recovery` row) rather than something a future payout batch should re-discover -- a genuine interpretation call, noted in code, since no payout-batch logic exists yet to check it against. No commission-accrual service exists anywhere in this codebase yet (`accrue()` in `packages/commission` is pure and unwired into any booking flow -- Phase 3, not this slice), so 15 tests seed `CommissionEntry`/`CommissionRelease` rows directly to exercise the real caller: zero entries, fully released with/without other pending payable to net against, partial release, a reversed release correctly excluded, multiple entries (SELF + OVERRIDE) independently, plus the CONFIRMED-only gate, permission, reason-required, cross-org, and one audit-row check. Verified live against a real dev server + local Postgres: hold → draft → confirm → preview (`200`, empty clawback -- no entries exist) → cancel without permission (`403`) → cancel with empty reason (`422`) → cancel (`200`, unit `BOOKED → AVAILABLE`, status history `DRAFT → CONFIRMED → CANCELLED`) → re-cancel (`409`)
 
 ### Collections
 - [ ] Payment plan templates; demand schedule generated at confirmation
