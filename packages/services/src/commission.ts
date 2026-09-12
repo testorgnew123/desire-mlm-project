@@ -16,11 +16,19 @@ import type {
   SchemeConfig,
 } from "@desire/commission";
 import { Prisma } from "@desire/db";
-import type { Prisma as PrismaNS } from "@desire/db";
+import type { PrismaClient, Prisma as PrismaNS, CommissionEntry } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
-import { getActiveScheme, type ActiveScheme } from "./schemes";
+import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
+import { getActiveScheme, getSchemeById, SchemeNotFoundError, type ActiveScheme } from "./schemes";
 
-export { CommissionSchemeMisconfiguredError };
+export { CommissionSchemeMisconfiguredError, SchemeNotFoundError };
+
+const READ_PERMISSION = "commission.read";
+const SIMULATE_PERMISSION = "scheme.simulate";
+// commission.read's own role set (permission-matrix.ts) minus TEAM_LEAD/
+// ASSOCIATE, who get scoped via getAccessibleAssociateIds instead -- same
+// split associates.ts's ADMIN_ROLE_CODES already uses for associate.read.
+const UNRESTRICTED_ROLE_CODES: ReadonlySet<string> = new Set(["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD", "AUDITOR"]);
 
 const D = (v: Prisma.Decimal | string | number) => new Prisma.Decimal(v);
 
@@ -51,7 +59,7 @@ export class DuplicateAccrualError extends Error {
  *  gradeAsOf/uplineChainAsOf need. Prisma.Decimal has no place in an
  *  OrgSnapshot -- there isn't one; only dates need ISO-string conversion. */
 export async function buildOrgSnapshot(
-  tx: PrismaNS.TransactionClient,
+  tx: PrismaClient | PrismaNS.TransactionClient,
   orgId: string,
 ): Promise<OrgSnapshot> {
   const [associateRows, gradeRows, hierarchyRows] = await Promise.all([
@@ -257,4 +265,176 @@ export async function accrueCommission(
     entryCount: result.entries.length,
     breakage: D(result.breakage.toFixed(2)),
   };
+}
+
+// ── Reads -- Phase 3 Slice 5 (PROGRESS.md's scheme simulator, explain
+// drill-down, earnings screen) ─────────────────────────────────────────
+
+export class CommissionEntryNotFoundError extends Error {
+  constructor(public readonly entryId: string) {
+    super(`Commission entry ${entryId} not found.`);
+    this.name = "CommissionEntryNotFoundError";
+  }
+}
+
+async function resolveActorRoleCodes(db: PrismaClient, actorId: string): Promise<Set<string>> {
+  const roles = await db.userRole.findMany({ where: { userId: actorId }, select: { role: { select: { code: true } } } });
+  return new Set(roles.map((r) => r.role.code));
+}
+
+/** The O/T/admin scope rule every read below shares: an unrestricted role
+ *  sees everything in the org; anyone else sees only associate ids
+ *  resolveAccessibleAssociateIds (via the caller's own Associate row) would
+ *  return them -- own record, or own + downline for a TEAM_LEAD. */
+async function assertAssociateInScope(db: PrismaClient, actorId: string, targetAssociateId: string): Promise<void> {
+  const roleCodes = await resolveActorRoleCodes(db, actorId);
+  if ([...roleCodes].some((r) => UNRESTRICTED_ROLE_CODES.has(r))) return;
+
+  const caller = await db.associate.findUnique({ where: { userId: actorId }, select: { id: true } });
+  if (!caller) throw new ForbiddenError("This account has no associate profile.");
+  const mode: ScopeMode = roleCodes.has("TEAM_LEAD") ? "OWN_AND_DOWNLINE" : "OWN";
+  const accessible = await getAccessibleAssociateIds(db, caller.id, mode);
+  if (!accessible.includes(targetAssociateId)) {
+    throw new ForbiddenError(`Associate ${targetAssociateId} is outside this session's scope.`);
+  }
+}
+
+// ── Scheme simulator (no writes) ────────────────────────────────────────
+
+export interface SimulateSchemeParams {
+  schemeId: string;
+  hypotheticalBooking: {
+    bookingDate: string; // ISO 8601
+    commissionableValue: Prisma.Decimal | string;
+    saleableAreaAtBooking: Prisma.Decimal | string;
+    sellerAssociateId: string;
+  };
+  audit: AuditContext;
+}
+
+/** No writes -- the route's own contract (docs/07-API.md). Calls accrue()
+ *  directly against a caller-supplied hypothetical and returns the entries
+ *  it WOULD create; nothing is persisted, whether or not the scheme is
+ *  ACTIVE (a DRAFT scheme can be simulated before it is ever published). */
+export async function simulateScheme(db: PrismaClient, params: SimulateSchemeParams) {
+  if (!params.audit.actorId) {
+    throw new ForbiddenError("Simulating a scheme requires a user actor, not a system actor.");
+  }
+
+  const scheme = await getSchemeById(db, params.schemeId);
+  if (!scheme) throw new SchemeNotFoundError(params.schemeId);
+  if (scheme.orgId !== params.audit.orgId) {
+    throw new ForbiddenError(`Commission scheme ${params.schemeId} belongs to another organisation.`);
+  }
+
+  await assertPermission(db, params.audit.actorId, SIMULATE_PERMISSION, { projectId: scheme.projectId });
+
+  const org = await buildOrgSnapshot(db, scheme.orgId);
+  const config = toSchemeConfig(scheme);
+
+  return accrue(
+    {
+      bookingId: "SIMULATED",
+      bookingDate: params.hypotheticalBooking.bookingDate,
+      commissionableValue: new Decimal(params.hypotheticalBooking.commissionableValue.toString()),
+      saleableAreaAtBooking: new Decimal(params.hypotheticalBooking.saleableAreaAtBooking.toString()),
+      scheme: config,
+      seller: { associateId: params.hypotheticalBooking.sellerAssociateId },
+      computedAt: params.hypotheticalBooking.bookingDate,
+    },
+    org,
+  );
+}
+
+// ── Explain drill-down ───────────────────────────────────────────────────
+
+/** Powers docs/08-SCREENS.md §2's drill-down -- the entry with its snapshot
+ *  JSON (grade, rates, upline chain, scheme version) already attached,
+ *  since Prisma returns Json columns already parsed. */
+export async function explainEntry(db: PrismaClient, params: { entryId: string; audit: AuditContext }): Promise<CommissionEntry> {
+  if (!params.audit.actorId) {
+    throw new ForbiddenError("Explaining a commission entry requires a user actor, not a system actor.");
+  }
+
+  const entry = await db.commissionEntry.findUnique({ where: { id: params.entryId } });
+  if (!entry) throw new CommissionEntryNotFoundError(params.entryId);
+  if (entry.orgId !== params.audit.orgId) {
+    throw new ForbiddenError(`Commission entry ${params.entryId} belongs to another organisation.`);
+  }
+
+  await assertPermission(db, params.audit.actorId, READ_PERMISSION);
+  await assertAssociateInScope(db, params.audit.actorId, entry.beneficiaryAssociateId);
+
+  return entry;
+}
+
+// ── Earnings screen ──────────────────────────────────────────────────────
+
+export interface EarningsSummary {
+  associateId: string;
+  accrued: Prisma.Decimal;
+  payable: Prisma.Decimal;
+  paid: Prisma.Decimal;
+  /** grossAmount - Σ(non-reversed releases), summed over ACCRUED/PAYABLE
+   *  entries -- the money not yet released because collection hasn't
+   *  happened. */
+  blocked: Prisma.Decimal;
+  /** The SAME entries' bookings' outstanding demand balance -- the exact
+   *  canonical query docs/05-COLLECTIONS-SPEC.md already defines
+   *  (demand.amount + gstAmount - Σ non-reversed allocations), reusing
+   *  receipts.ts's allocatedTotalForDemand shape rather than re-deriving it. */
+  pendingCollections: Prisma.Decimal;
+}
+
+/** "₹X of your commission is blocked by ₹Y in pending collections"
+ *  (docs/04-COMMISSION-SPEC.md §6), computed from real numbers, not a
+ *  hardcoded string. Same O/T/admin scope rule as explainEntry. */
+export async function getEarnings(db: PrismaClient, params: { associateId: string; audit: AuditContext }): Promise<EarningsSummary> {
+  if (!params.audit.actorId) {
+    throw new ForbiddenError("Reading earnings requires a user actor, not a system actor.");
+  }
+
+  await assertPermission(db, params.audit.actorId, READ_PERMISSION);
+  await assertAssociateInScope(db, params.audit.actorId, params.associateId);
+
+  const entries = await db.commissionEntry.findMany({
+    where: { beneficiaryAssociateId: params.associateId, status: { not: "REVERSED" } },
+    include: { releases: { where: { reversedAt: null }, select: { amount: true } } },
+  });
+
+  let accrued = D(0);
+  let payable = D(0);
+  let paid = D(0);
+  let blocked = D(0);
+  const bookingIdsToCheck = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.status === "ACCRUED") accrued = accrued.plus(entry.grossAmount);
+    if (entry.status === "PAYABLE") payable = payable.plus(entry.grossAmount);
+    if (entry.status === "PAID") paid = paid.plus(entry.grossAmount);
+
+    if (entry.status === "ACCRUED" || entry.status === "PAYABLE") {
+      const released = entry.releases.reduce((sum, r) => sum.plus(r.amount), D(0));
+      const entryBlocked = D(entry.grossAmount).minus(released);
+      if (entryBlocked.greaterThan(0)) {
+        blocked = blocked.plus(entryBlocked);
+        bookingIdsToCheck.add(entry.bookingId);
+      }
+    }
+  }
+
+  let pendingCollections = D(0);
+  if (bookingIdsToCheck.size > 0) {
+    const demands = await db.demand.findMany({
+      where: { bookingId: { in: [...bookingIdsToCheck] }, status: { not: "WAIVED" } },
+      include: { allocations: { where: { reversedAt: null }, select: { amount: true } } },
+    });
+    for (const demand of demands) {
+      const allocated = demand.allocations.reduce((sum, a) => sum.plus(a.amount), D(0));
+      const owed = D(demand.amount).plus(demand.gstAmount).minus(allocated);
+      if (owed.greaterThan(0)) pendingCollections = pendingCollections.plus(owed);
+    }
+  }
+
+  return { associateId: params.associateId, accrued, payable, paid, blocked, pendingCollections };
 }

@@ -220,9 +220,9 @@ test passes, a full sale produces correct entries for seller + 3 uplines.*
 - [x] Clawback → contra entries → `Recovery`, with per-cycle deduction cap — pure computation (`computeClawback`) done and tested; contra entry + `Recovery` persistence shipped in Phase 2 Slice 2 (`bookings.ts`'s `cancelBooking`); the deduction cap (`PAYOUT_RECOVERY_MAX_DEDUCTION_PCT`, PLACEHOLDER 50%) now closed at payout-batch time — `packages/services/src/payouts.ts`'s `prepareBatch`, deducting oldest-outstanding-`Recovery`-first, capped at 50% of each line's gross, tested against a recovery larger than the cap and one fully satisfied under it
 - [x] **GATE** Golden-file fixtures, all cases in [§8](docs/04-COMMISSION-SPEC.md), **100% branch coverage** — 15 cases (12 from the spec + 3 extensions the implementation surfaced), `vitest run --coverage` exits 0 against a 100% threshold on every metric
 - [x] **GATE** Reproducibility test — mutate tree and grades, re-run, byte-identical — passing, plus a negative-control test proving the mutation would have mattered on a different booking date (so the main test isn't accidentally vacuous)
-- [ ] Scheme simulator (no writes)
-- [ ] Explain drill-down — [08-SCREENS §2](docs/08-SCREENS.md)
-- [ ] Earnings screen with **"₹X blocked by ₹Y in pending collections"**
+- [x] Scheme simulator (no writes) — `packages/services/src/commission.ts`'s `simulateScheme`, calls `accrue()` directly against a caller-supplied hypothetical, works against a DRAFT scheme too, tested to write zero rows
+- [x] Explain drill-down — [08-SCREENS §2](docs/08-SCREENS.md) — `explainEntry`, `GET /commission/entries/:id/explain`, verified live over HTTP
+- [x] Earnings screen with **"₹X blocked by ₹Y in pending collections"** — `getEarnings`, `GET /associates/:id/earnings`, both numbers computed from real `CommissionRelease`/`Demand`/`ReceiptAllocation` rows (the exact canonical outstanding-balance query `receipts.ts`'s `allocatedTotalForDemand` already established), verified live over HTTP
 - [ ] Dispute workflow
 - [ ] **GATE** Invariant monitor live and paging — ships with the engine, not after
 

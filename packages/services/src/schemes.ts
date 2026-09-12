@@ -384,6 +384,22 @@ export type ActiveScheme = CommissionScheme & {
   }>;
 };
 
+/** Any status, by id -- simulateScheme's "what would THIS scheme (however
+ *  still DRAFT) produce" doesn't restrict to ACTIVE the way accrual does. */
+export async function getSchemeById(
+  db: PrismaClient | Prisma.TransactionClient,
+  schemeId: string,
+): Promise<ActiveScheme | null> {
+  return db.commissionScheme.findUnique({
+    where: { id: schemeId },
+    include: {
+      gradeRates: { include: { grade: { select: { code: true } } } },
+      levelRates: true,
+      schedules: { include: { slabs: true } },
+    },
+  });
+}
+
 /** Same shape as getActivePriceList -- the scheme a booking made on `asOf`
  *  must be resolved from. */
 export async function getActiveScheme(
