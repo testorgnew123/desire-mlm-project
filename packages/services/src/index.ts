@@ -22,3 +22,4 @@ export * from "./grades";
 export * from "./associates";
 export * from "./schemes";
 export * from "./commission";
+export * from "./payouts";
