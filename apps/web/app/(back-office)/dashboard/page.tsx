@@ -3,6 +3,7 @@ import { getPrismaClient, Prisma } from "@desire/db";
 import { getCollectionsConsole } from "@desire/services/collections-sweep";
 import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
+import { formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const metadata: Metadata = {
@@ -13,25 +14,42 @@ export const metadata: Metadata = {
 const STOCK_OVERVIEW_ROLES = new Set(["SUPER_ADMIN", "SALES_HEAD", "PROJECT_MANAGER"]);
 
 /** Role-branched landing (docs/08-SCREENS.md: "Dashboard -- Role-specific
- *  landing"). Deepened further in Slice 6; this is the real Slice 2
- *  minimum for every role that lands here -- ASSOCIATE/TEAM_LEAD never do,
- *  they land on the PWA Home tab instead (apps/web/app/page.tsx). */
+ *  landing"), one widget set per role's own duties rather than a single
+ *  either/or view -- ASSOCIATE/TEAM_LEAD never land here, they land on the
+ *  PWA Home tab instead (apps/web/app/page.tsx). No backend gaps: every
+ *  widget below reads an existing table or the existing
+ *  getCollectionsConsole function, nothing new. */
 export default async function DashboardPage() {
   const session = await requireSession();
   const db = getPrismaClient();
+  const { orgId } = session.user;
+  const actorId = session.user.id;
 
-  const roleCodes = await getRoleCodes(db, session.user.id);
+  const roleCodes = await getRoleCodes(db, actorId);
+  const isSuperAdmin = roleCodes.has("SUPER_ADMIN");
 
   return (
     <main className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Dashboard</h1>
-      {roleCodes.has("FINANCE_ADMIN") ? (
-        <CollectionsAgingSummary db={db} orgId={session.user.orgId} actorId={session.user.id} />
-      ) : [...roleCodes].some((code) => STOCK_OVERVIEW_ROLES.has(code)) ? (
-        <StockAndBookingSummary db={db} orgId={session.user.orgId} />
-      ) : (
-        <OpenItemsSummary db={db} orgId={session.user.orgId} />
-      )}
+
+      {[...roleCodes].some((code) => STOCK_OVERVIEW_ROLES.has(code)) ? (
+        <StockAndBookingSummary db={db} orgId={orgId} />
+      ) : null}
+
+      {isSuperAdmin || roleCodes.has("FINANCE_ADMIN") ? (
+        <>
+          <CollectionsAgingSummary db={db} orgId={orgId} actorId={actorId} />
+          <CommissionOverview db={db} orgId={orgId} />
+        </>
+      ) : null}
+
+      {isSuperAdmin || roleCodes.has("PROJECT_MANAGER") ? <PendingPriceLists db={db} orgId={orgId} /> : null}
+
+      {isSuperAdmin || roleCodes.has("SALES_HEAD") ? <PendingDiscountApprovals db={db} orgId={orgId} /> : null}
+
+      {roleCodes.has("AUDITOR") ? <RecentAuditLog db={db} orgId={orgId} /> : null}
+
+      {roleCodes.has("SALES_ADMIN") || roleCodes.has("AUDITOR") ? <OpenItemsSummary db={db} orgId={orgId} /> : null}
     </main>
   );
 }
@@ -137,6 +155,135 @@ async function CollectionsAgingSummary({
             <p className="text-xs text-muted-foreground">{bucket.count} demand(s)</p>
           </div>
         ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+async function CommissionOverview({ db, orgId }: { db: ReturnType<typeof getPrismaClient>; orgId: string }) {
+  const byStatus = await db.commissionEntry.groupBy({
+    by: ["status"],
+    where: { orgId, status: { not: "REVERSED" } },
+    _sum: { grossAmount: true },
+  });
+  const totalByStatus = new Map(byStatus.map((row) => [row.status, row._sum.grossAmount ?? new Prisma.Decimal(0)]));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Commission overview</CardTitle>
+        <CardDescription>Organization-wide, non-reversed entries</CardDescription>
+      </CardHeader>
+      <CardContent className="grid grid-cols-3 gap-3 text-sm">
+        {(["ACCRUED", "PAYABLE", "PAID"] as const).map((status) => (
+          <div key={status}>
+            <p className="text-xs text-muted-foreground">{status}</p>
+            <p className="font-medium tabular-nums">{formatMoney(totalByStatus.get(status) ?? "0")}</p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+async function PendingPriceLists({ db, orgId }: { db: ReturnType<typeof getPrismaClient>; orgId: string }) {
+  const priceLists = await db.priceList.findMany({
+    where: { orgId, status: "PENDING_APPROVAL" },
+    select: { id: true, name: true, version: true, project: { select: { name: true } } },
+    orderBy: { createdAt: "asc" },
+    take: 10,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Price lists pending approval</CardTitle>
+        <CardDescription>{priceLists.length} awaiting sign-off</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-sm">
+        {priceLists.length === 0 ? (
+          <p className="text-muted-foreground">Nothing pending.</p>
+        ) : (
+          priceLists.map((priceList) => (
+            <div key={priceList.id} className="flex justify-between">
+              <span>
+                {priceList.project.name} — {priceList.name}
+              </span>
+              <span className="text-muted-foreground">v{priceList.version}</span>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+async function PendingDiscountApprovals({ db, orgId }: { db: ReturnType<typeof getPrismaClient>; orgId: string }) {
+  const requests = await db.discountRequest.findMany({
+    where: { status: "PENDING", approverRoleCode: "SALES_HEAD", booking: { orgId } },
+    select: {
+      id: true,
+      amount: true,
+      pctOfBase: true,
+      booking: { select: { bookingNumber: true } },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 10,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Discount approvals pending you</CardTitle>
+        <CardDescription>{requests.length} request(s)</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-sm">
+        {requests.length === 0 ? (
+          <p className="text-muted-foreground">Nothing pending.</p>
+        ) : (
+          requests.map((request) => (
+            <div key={request.id} className="flex justify-between">
+              <span>{request.booking.bookingNumber}</span>
+              <span className="tabular-nums text-muted-foreground">
+                {formatMoney(request.amount)} ({request.pctOfBase.toString()}%)
+              </span>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+async function RecentAuditLog({ db, orgId }: { db: ReturnType<typeof getPrismaClient>; orgId: string }) {
+  const entries = await db.auditLog.findMany({
+    where: { orgId },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { id: true, actorLabel: true, action: true, entity: true, entityId: true, createdAt: true },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Recent activity</CardTitle>
+        <CardDescription>
+          Last {entries.length} audited change(s) — full browsing lands in a later slice
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col divide-y divide-border text-sm">
+        {entries.length === 0 ? (
+          <p className="text-muted-foreground">No activity yet.</p>
+        ) : (
+          entries.map((entry) => (
+            <div key={entry.id} className="flex items-center justify-between py-1.5 first:pt-0 last:pb-0">
+              <span>
+                {entry.actorLabel} — {entry.action} {entry.entity} {entry.entityId.slice(-6)}
+              </span>
+              <span className="text-xs tabular-nums text-muted-foreground">{formatDateTime(entry.createdAt)}</span>
+            </div>
+          ))
+        )}
       </CardContent>
     </Card>
   );

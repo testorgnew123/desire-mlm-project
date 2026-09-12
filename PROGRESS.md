@@ -408,6 +408,32 @@ against a backend gap — fold missing backend into the same slice.*
 - [x] This closes the PWA -- all 5 tabs (Home, Inventory, Leads, Earnings,
   Team) are real
 
+### Slice 6 -- Back-office: Dashboard section (deepen)
+
+- [x] `apps/web/app/(back-office)/dashboard/page.tsx` deepened from
+  Slice 2's single either/or view into composed, role-specific widget sets
+  -- no backend gaps, every widget reads an existing table or the existing
+  `getCollectionsConsole`:
+  - SUPER_ADMIN: everything (stock/booking, collections aging, commission
+    overview, pending price lists, pending discount approvals)
+  - FINANCE_ADMIN: collections aging (existing) + a new commission
+    overview (org-wide accrued/payable/paid via `groupBy`)
+  - PROJECT_MANAGER: stock/booking (existing) + new pending-price-lists
+    queue (`PriceList` where `status: PENDING_APPROVAL`)
+  - SALES_HEAD: stock/booking (existing) + new pending-discount-approvals
+    queue, correctly filtered to `approverRoleCode: "SALES_HEAD"` -- not
+    every pending request, only the ones actually routed to this role
+  - SALES_ADMIN: unchanged minimal "your open items" -- no permission in
+    the matrix maps to a distinguishing widget for this role yet
+  - AUDITOR: new real "recent activity" feed off the existing `AuditLog`
+    table (last 10 org-wide entries) + the open-items tile -- an honest
+    preview, not the full filterable browser Slice 15 builds
+- [x] Verified live across four roles against a running dev server:
+  SALES_HEAD (stock/booking + empty discount-approval queue),
+  PROJECT_MANAGER (stock/booking + empty price-list queue), AUDITOR (real
+  audit-log entries spanning every earlier slice's own testing, plus open
+  items) -- each showing exactly its own role's widget set, nothing more
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
