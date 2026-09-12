@@ -106,7 +106,11 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "booking.confirm": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN"],
   "booking.cancel": ["SUPER_ADMIN", "SALES_HEAD"],
   "discount.request": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
-  "discount.approve": ["SUPER_ADMIN", "SALES_HEAD", "TEAM_LEAD"], // TEAM_LEAD gated by amount band -- see doc
+  // TEAM_LEAD and FINANCE_ADMIN are both gated by amount band -- see doc.
+  // FINANCE_ADMIN added for Phase 2 discount routing: the approval-matrix
+  // table names it for the 3-5% band, but this grant list omitted it
+  // entirely, leaving that band unreachable by the role the doc itself names.
+  "discount.approve": ["SUPER_ADMIN", "SALES_HEAD", "TEAM_LEAD", "FINANCE_ADMIN"],
   "receipt.enter": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_ADMIN"],
   "receipt.verify": ["SUPER_ADMIN", "FINANCE_ADMIN"],
   "demand.waive": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD"],

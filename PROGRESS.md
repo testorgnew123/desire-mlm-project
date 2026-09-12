@@ -32,12 +32,12 @@ the state. Update it as work lands, not at the end of a sprint.
 |---|:-:|:-:|:-:|---|
 | 0 — Foundation | 17 | **17** | 1/1 | Complete. Per-PR Neon branches proven end-to-end on PR #1 |
 | 1 — Inventory | 17 | **17** | **2/2** | Complete. Both gates passed |
-| 2 — Sales & Collections | 23 | 1 | **1/2** | In progress — Slice 1 (booking core) |
+| 2 — Sales & Collections | 23 | 2 | **1/2** | In progress — Slices 1-1b (booking core + discount) |
 | 3 — Commission | 23 | 7 | 5/7 | In progress (engine only) |
 | 4 — Payouts | 14 | 0 | 0/3 | Not started |
 | 5 — Scale | 13 | 0 | 0/1 | Not started |
 | Pre-go-live | 11 | 0 | — | Not started |
-| **Total** | **118** | **42** | **9/16** | |
+| **Total** | **118** | **43** | **9/16** | |
 
 ---
 
@@ -159,7 +159,7 @@ receipt; an overdue demand escalates through every rung to the right people.*
 
 ### Booking
 - [x] Draft booking from a held unit; pins `priceListId` -- `packages/services/src/bookings.ts` `createDraftBooking`. Verifies the unit is HELD **by the drafting associate specifically** (not just HELD by anyone) via the existing `effectiveUnitStatus`/`isHoldLive` predicates -- a real gap this closes: without it, associate A could draft against a unit associate B legitimately holds. `bookingNumber` is a new placeholder format (`{project.code}-{4-digit sequence}`, e.g. `SKYLINE-0001`) with a real correctness backstop (`@@unique([orgId, bookingNumber])` + retry-on-P2002), same placeholder-vs-structure status as the grade ladder. Discount fixed at 0 this slice (bands are `BLOCKED#10`, see below)
-- [ ] Discount request routed by the approval matrix · **BLOCKED#10** -- deliberately deferred; `computeCostSheet` already accepts a `discount` param, so wiring this in later is additive, not a rewrite
+- [x] Discount request routed by the approval matrix · **BLOCKED#10** (bands stay PLACEHOLDER; the mechanism is real) -- `packages/services/src/discounts.ts`. Maker-checker modeled directly on `publishPriceList`'s pattern (plain columns + an inline assertion), not the unused generic `ApprovalRequest` model. `resolveApproverRoles` is a pure band lookup; `decideDiscount` checks the decider holds `discount.approve` **and** their role is in the resolved band's set, **and** they aren't the requester -- three distinct rejections, each tested. Found and fixed a real gap while wiring this: `FINANCE_ADMIN` is named in the 3-5% band but the permission matrix never granted them `discount.approve` at all -- that band was unreachable by the role the doc itself names; fixed in `permission-matrix.ts` and `docs/09-RBAC-MATRIX.md`. Approval writes `discountAmount` onto the booking; `confirmBooking` already re-reads that column fresh at confirm time, so no change was needed there. Verified live: request 4% → team_lead (wrong band) `403` naming the required roles → finance_admin (correct band) `200` → confirm reflects it exactly (`agreementValue` 5,981,750 → 5,781,750, minus the 200,000 discount)
 - [ ] Document checklist, upload, verification
 - [x] **GATE** On confirm: freeze `agreementValue` **and** `commissionableValue`, snapshot `CostSheetLine` — [06-INVENTORY-SPEC §5](docs/06-INVENTORY-SPEC.md) -- `confirmBooking`. Re-verifies HELD-by-the-same-associate under a fresh lock rather than trusting the draft's premise (the hold can expire in the gap -- tested explicitly, including the case where a *different* associate now holds it). Re-runs `computeCostSheet` against the pinned price list rather than trusting the draft's cached preview, matching the spec's own "never recompute it later" -- true from the confirm instant, not before it. Releases the hold via `HoldReleaseReason.CONVERTED_TO_BOOKING` (existed in the schema, unused until now -- `releaseHold` in `holds.ts` was the wrong function to call here, since it unconditionally sends the unit back to `AVAILABLE` rather than `BOOKED`) and transitions the unit `HELD → BOOKED` in the same transaction. Verified against real Postgres (20 tests: hold-ownership at both draft and confirm time, tenancy, RBAC-before-any-lock, a genuine concurrency race between two associates, audit rows) and end-to-end against a live dev server + real Postgres: draft → confirm → re-confirm (`409`) → confirm without permission (`403`) → draft against a unit held by someone else (`409`) → read-scoped `GET` (own booking `200`, no permission `403`, outside scope `404` not `403`, so a scoped reader can't detect a booking id exists outside their scope)
 - [ ] Allotment letter PDF

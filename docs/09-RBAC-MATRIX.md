@@ -44,7 +44,7 @@ is confined to their own towers.
 | `booking.confirm` | ✓ | – | – | ✓ | ✓ | – | – | – |
 | `booking.cancel` | ✓ | – | – | ✓ | – | – | – | – |
 | `discount.request` | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | – |
-| `discount.approve` | ✓ | – | – | ✓ | – | band | – | – |
+| `discount.approve` | ✓ | band | – | ✓ | – | band | – | – |
 | `receipt.enter` | ✓ | ✓ | – | – | ✓ | – | – | – |
 | `receipt.verify` | ✓ | ✓ | – | – | – | – | – | – |
 | `demand.waive` | ✓ | ✓ | – | ✓ | – | – | – | – |
@@ -109,10 +109,18 @@ Bands are `PLACEHOLDER` — confirm with the client.
 |---|---|
 | ≤ 1% | `TEAM_LEAD` |
 | 1–3% | `SALES_HEAD` |
-| 3–5% | `SALES_HEAD` + `FINANCE_ADMIN` |
+| 3–5% | `SALES_HEAD` **or** `FINANCE_ADMIN` |
 | > 5% | `SUPER_ADMIN` |
 
-Routing is a config row, resolved into `ApprovalRequest.requiredRoleCode`.
+"3–5%" lists two roles because `DiscountRequest` has one `decidedById` --
+either one may decide, this is not dual sign-off. `FINANCE_ADMIN` is
+therefore granted `discount.approve` band-restricted to this row only
+(the permission matrix above previously omitted it entirely, leaving this
+band unreachable by the role the table itself names -- fixed to match).
+
+Routing is a config row, resolved into `DiscountRequest.approverRoleCode` --
+the model already carries this field directly; the generic
+`ApprovalRequest` table is not used for discounts (see Decision log).
 
 ## MFA
 
