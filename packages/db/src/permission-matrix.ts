@@ -54,7 +54,10 @@ export const PERMISSION_CODES = [
   "hold.create",
   "hold.force_release",
   "lead.read",
+  "lead.write",
+  "lead.activity",
   "lead.reassign",
+  "sitevisit.create",
   "booking.read",
   "booking.create",
   "booking.confirm",
@@ -96,7 +99,23 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "hold.create": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
   "hold.force_release": ["SUPER_ADMIN", "PROJECT_MANAGER", "SALES_HEAD", "SALES_ADMIN"],
   "lead.read": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE", "AUDITOR"],
+  // Added for Phase 2 CRM: no write permission existed for leads at all
+  // (only read/reassign). Flat ✓ for TEAM_LEAD/ASSOCIATE, same shape as
+  // booking.create -- the actual OWN-only restriction (an associate can only
+  // create/update a lead assigned to themselves; a TEAM_LEAD, their downline)
+  // is enforced in leads.ts via the same scope resolver as everywhere else,
+  // not by narrowing the grant itself. Covers createLead AND updateLead,
+  // mirroring project.write's create+update combo.
+  "lead.write": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
+  // Logging an activity (and the STAGE_CHANGE case, which also moves
+  // Lead.stage) is a distinct enough action from lead.write to audit
+  // separately, same reasoning booking.confirm is split from booking.create.
+  "lead.activity": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
   "lead.reassign": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD"],
+  // Covers scheduleSiteVisit AND completeSiteVisit (project.write's
+  // create+update combo again) -- SiteVisit is its own resource, not a Lead
+  // mutation, so it gets its own code rather than reusing lead.write.
+  "sitevisit.create": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
   // Added for Phase 2 booking-core: no read permission existed for bookings
   // at all (only create/confirm/cancel) -- mirrors lead.read's role set and
   // scope split exactly (ASSOCIATE = own, TEAM_LEAD = own + downline via

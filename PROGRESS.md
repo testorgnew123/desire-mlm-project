@@ -22,7 +22,7 @@ the state. Update it as work lands, not at the end of a sprint.
 
 | | |
 |---|---|
-| **Current phase** | **Phase 2 — Sales & Collections, 3/23 done** (Booking Core, discount routing, cancellation + clawback preview). Phase 2 is scoped as a sequence of slices, not one pass — this is Slices 1–2; the roadmap for what follows (payment plans + demands, receipts + the maker-checker verify GATE, escalation + notifications, CRM) is recorded in the Decision log. Phases 0 and 1 are both **complete** (17/17 each). **CI is green.** Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
+| **Current phase** | **Phase 2 — Sales & Collections, 7/23 done** (Booking Core, discount routing, cancellation + clawback preview, CRM). Phase 2 is scoped as a sequence of slices, not one pass — this is Slices 1–3; the roadmap for what follows (payment plans + demands, receipts + the maker-checker verify GATE, escalation + notifications) is recorded in the Decision log. Phases 0 and 1 are both **complete** (17/17 each). **CI is green.** Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
 | **Started** | 2026-09-05 |
 | **Target** | 18–22 weeks from start |
 | **Hosting** | **Live**: [desire-mlm-project.netlify.app](https://desire-mlm-project.netlify.app) — verified via `/api/health` returning `200` with a real hosted-Neon query. Hosted Neon (`ap-southeast-1`, Postgres 18.6). Local Docker Postgres 18 kept for offline dev / concurrency tests. Repo at `github.com/testorgnew123/desire-mlm-project`, connected for auto-deploy on push |
@@ -32,12 +32,12 @@ the state. Update it as work lands, not at the end of a sprint.
 |---|:-:|:-:|:-:|---|
 | 0 — Foundation | 17 | **17** | 1/1 | Complete. Per-PR Neon branches proven end-to-end on PR #1 |
 | 1 — Inventory | 17 | **17** | **2/2** | Complete. Both gates passed |
-| 2 — Sales & Collections | 23 | 3 | **1/2** | In progress — Slices 1-2 (booking core + discount + cancellation) |
+| 2 — Sales & Collections | 23 | 7 | **1/2** | In progress — Slices 1-3 (booking core + discount + cancellation + CRM) |
 | 3 — Commission | 23 | 7 | 5/7 | In progress (engine only) |
 | 4 — Payouts | 14 | 0 | 0/3 | Not started |
 | 5 — Scale | 13 | 0 | 0/1 | Not started |
 | Pre-go-live | 11 | 0 | — | Not started |
-| **Total** | **118** | **44** | **9/16** | |
+| **Total** | **118** | **48** | **9/16** | |
 
 ---
 
@@ -152,10 +152,10 @@ auto-expire. Board refreshes within the configured interval.*
 receipt; an overdue demand escalates through every rung to the right people.*
 
 ### CRM
-- [ ] Lead capture, `phoneHash` / `emailHash` dedup at entry
-- [ ] Claim window with expiry; walk-in matching a live claim surfaces the conflict **before** booking
-- [ ] Assignment, manager reassignment with reason
-- [ ] Activities, site visits, task reminders
+- [x] Lead capture, `phoneHash` / `emailHash` dedup at entry -- `packages/services/src/leads.ts` `createLead`. `hashForDedup` is SHA-256, matching the schema's own comment exactly; phone normalisation is a stated PLACEHOLDER (India-only E.164, `+91`) since every phone example anywhere in this codebase is a bare 10-digit Indian mobile with no country code. Verified live: `"98765 43210"` and `"+91-9876543210"` hash identically and correctly conflict
+- [x] Claim window with expiry; walk-in matching a live claim surfaces the conflict **before** booking -- claiming is not a separate action: `createLead` both creates the `Lead` and its first `LeadClaim` in one transaction (docs/07-API.md: create itself "returns a conflict if a live claim exists"), naming the claiming associate rather than silently merging. Window is 90 days, PLACEHOLDER per the schema's own comment. A claim past `expiresAt` returns the lead to the pool lazily (no sweep), mirrored from `isHoldLive`/`effectiveUnitStatus`'s exact shape -- tested directly (backdating `expiresAt` lets a second associate claim fresh)
+- [x] Assignment, manager reassignment with reason -- `reassignLead`: releases the current live claim, creates a new one for the target, moves `assignedAssociateId`, reason mandatory. A gap found while wiring `resolveAssigneeId` (who may be named as assignee/reassignment target): bookings.ts's equivalent `resolveSellingAssociateId` requires the CALLER to already have an Associate profile before it even checks admin-ness, which would make a pure manager account (no Associate row) unable to assign a lead to anyone else. Fixed in this new file by checking the admin/downline bypass first -- not backported to bookings.ts, which is unrelated to this slice
+- [x] Activities, site visits (**task reminders not built** -- that needs Slice 7's notification queue, not this slice) -- `logActivity` (STAGE_CHANGE also moves `Lead.stage`, stamping `fromStage`/`toStage` -- the activity log **is** the stage history) and `scheduleSiteVisit`/`completeSiteVisit`. All four write actions (`lead.write`, `lead.activity`, `lead.reassign`, `sitevisit.create`) enforce the same `O`/`T` scope split `lead.read` documents (docs/09-RBAC-MATRIX.md) against the SPECIFIC lead being touched, not just permission possession -- an `ASSOCIATE` holding `lead.write` cannot edit a colleague's lead; a `TEAM_LEAD` can act on their downline's but not a stranger's. `lead.write`, `lead.activity` and `sitevisit.create` are new permission codes (no write permission existed for leads at all); `completeSiteVisit` has no route yet (docs/07-API.md names only the schedule endpoint) but is built and tested since otherwise `completedAt`/`feedback`/`interestLevel` would be permanently unreachable columns. 34 tests against real Postgres, organized by invariant (dedup, assignee resolution, update, activity/stage-change, reassign, site visits, scoped listing, tenancy). Verified live: create → dedup conflict (`409`, names the claimant) → update (`200`) → `STAGE_CHANGE` activity (`201`, `NEW`→`QUALIFIED`) → missing `toStage` (`422`) → reassign without permission (`403`) → reassign with reason (`200`) → empty reason (`422`) → scoped `GET /leads` (associate sees own, admin sees the whole org)
 
 ### Booking
 - [x] Draft booking from a held unit; pins `priceListId` -- `packages/services/src/bookings.ts` `createDraftBooking`. Verifies the unit is HELD **by the drafting associate specifically** (not just HELD by anyone) via the existing `effectiveUnitStatus`/`isHoldLive` predicates -- a real gap this closes: without it, associate A could draft against a unit associate B legitimately holds. `bookingNumber` is a new placeholder format (`{project.code}-{4-digit sequence}`, e.g. `SKYLINE-0001`) with a real correctness backstop (`@@unique([orgId, bookingNumber])` + retry-on-P2002), same placeholder-vs-structure status as the grade ladder. Discount fixed at 0 this slice (bands are `BLOCKED#10`, see below)
