@@ -64,6 +64,7 @@ export const PERMISSION_CODES = [
   "booking.cancel",
   "discount.request",
   "discount.approve",
+  "demand.raise",
   "receipt.enter",
   "receipt.verify",
   "demand.waive",
@@ -130,6 +131,11 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   // table names it for the 3-5% band, but this grant list omitted it
   // entirely, leaving that band unreachable by the role the doc itself names.
   "discount.approve": ["SUPER_ADMIN", "SALES_HEAD", "TEAM_LEAD", "FINANCE_ADMIN"],
+  // Added for Phase 2 demand generation: no permission gated raising a
+  // demand at all (only waiving it). Mirrors receipt.enter's exact role
+  // set -- the same finance/back-office population that handles collections
+  // paperwork, not associates.
+  "demand.raise": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_ADMIN"],
   "receipt.enter": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_ADMIN"],
   "receipt.verify": ["SUPER_ADMIN", "FINANCE_ADMIN"],
   "demand.waive": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD"],

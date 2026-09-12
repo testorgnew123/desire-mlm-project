@@ -48,6 +48,7 @@ is confined to their own towers.
 | `booking.cancel` | ✓ | – | – | ✓ | – | – | – | – |
 | `discount.request` | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | – |
 | `discount.approve` | ✓ | band | – | ✓ | – | band | – | – |
+| `demand.raise` | ✓ | ✓ | – | – | ✓ | – | – | – |
 | `receipt.enter` | ✓ | ✓ | – | – | ✓ | – | – | – |
 | `receipt.verify` | ✓ | ✓ | – | – | – | – | – | – |
 | `demand.waive` | ✓ | ✓ | – | ✓ | – | – | – | – |

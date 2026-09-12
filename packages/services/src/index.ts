@@ -14,3 +14,4 @@ export * from "./unit-import";
 export * from "./bookings";
 export * from "./discounts";
 export * from "./leads";
+export * from "./payment-plans";

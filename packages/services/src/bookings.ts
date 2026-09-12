@@ -27,6 +27,7 @@ import {
 } from "./cost-sheet";
 import { computeClawback } from "@desire/commission";
 import Decimal from "decimal.js";
+import { generateDemandSchedule } from "./payment-plans";
 
 const CREATE_PERMISSION = "booking.create";
 const CONFIRM_PERMISSION = "booking.confirm";
@@ -468,6 +469,12 @@ export async function confirmBooking(
         commissionableValue: final.commissionableValue,
       },
     });
+
+    // Right after the freeze, same transaction: a CONFIRMED booking with a
+    // payment plan but no demand schedule is an inconsistent state worth
+    // preventing atomically, not patching after the fact. A booking with no
+    // paymentPlanId gets no schedule -- nothing to generate, not an error.
+    await generateDemandSchedule(tx, { bookingId: confirmed.id, audit: params.audit, now });
 
     const costSheetLines = await Promise.all(
       final.lines.map((line: CostSheetLineResult) =>
