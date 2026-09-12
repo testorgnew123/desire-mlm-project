@@ -55,6 +55,7 @@ export const PERMISSION_CODES = [
   "hold.force_release",
   "lead.read",
   "lead.reassign",
+  "booking.read",
   "booking.create",
   "booking.confirm",
   "booking.cancel",
@@ -96,6 +97,11 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "hold.force_release": ["SUPER_ADMIN", "PROJECT_MANAGER", "SALES_HEAD", "SALES_ADMIN"],
   "lead.read": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE", "AUDITOR"],
   "lead.reassign": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD"],
+  // Added for Phase 2 booking-core: no read permission existed for bookings
+  // at all (only create/confirm/cancel) -- mirrors lead.read's role set and
+  // scope split exactly (ASSOCIATE = own, TEAM_LEAD = own + downline via
+  // getAccessibleAssociateIds, AUDITOR for oversight).
+  "booking.read": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE", "AUDITOR"],
   "booking.create": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
   "booking.confirm": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN"],
   "booking.cancel": ["SUPER_ADMIN", "SALES_HEAD"],

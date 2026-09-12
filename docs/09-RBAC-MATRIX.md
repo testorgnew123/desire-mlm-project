@@ -39,6 +39,7 @@ is confined to their own towers.
 | `hold.force_release` | ✓ | – | ✓ | ✓ | ✓ | – | – | – |
 | `lead.read` | ✓ | – | – | ✓ | ✓ | T | O | ✓ |
 | `lead.reassign` | ✓ | – | – | ✓ | ✓ | T | – | – |
+| `booking.read` | ✓ | – | – | ✓ | ✓ | T | O | ✓ |
 | `booking.create` | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | – |
 | `booking.confirm` | ✓ | – | – | ✓ | ✓ | – | – | – |
 | `booking.cancel` | ✓ | – | – | ✓ | – | – | – | – |
