@@ -319,6 +319,35 @@ against a backend gap — fold missing backend into the same slice.*
   ASSOCIATE / shown for TEAM_LEAD); keyboard-focus spot check on the
   back-office sidebar shows a visible focus ring
 
+### Slice 3 -- PWA: Home tab polish + Inventory tab
+
+- [x] Home tab deepened: today's task count + unread-alert count stat
+  tiles, plus a real Alerts card (`listNotifications`, unread bolded)
+- [x] Inventory tab -- `apps/web/app/(pwa)/inventory/page.tsx` (project
+  picker) + `[projectId]/page.tsx` + `InventoryList.tsx`. Reuses, does not
+  duplicate: board's `useUnitDeltas` hook completely unmodified (it turned
+  out to already be presentation-agnostic -- only `InventoryBoard.tsx`'s
+  tower/floor grid layout is desktop-specific, not the hook itself),
+  `STATUS_PRESENTATION` data, and the existing hold route
+  (`POST .../units/:id/holds`) via a client-side `fetch` -- the one place
+  that's justified over a Server Action, matching the board's own pattern
+- [x] **Real bug caught during live testing, fixed before commit**: the
+  delta poll carries no holder identity (docs/06-INVENTORY-SPEC.md section
+  6), and a first draft kept showing the PAGE-LOAD snapshot's `isMine`/
+  `heldByName` even after a live delta changed a unit's status --
+  mislabelling a hold as "Held by Another associate" when it could easily
+  have been the viewer's own hold, or vice versa. Board already solved
+  this exact problem (`InventoryBoard.tsx`'s `holderIsFromSnapshot`); the
+  PWA list now mirrors it exactly -- a unit whose status came from `live`
+  strips `isMine`/`heldByName` and shows "Taken since this list loaded --
+  Refresh to see who" instead of guessing
+- [x] Verified live: held/available/blocked units render with the correct
+  colour + glyph + label (no colour-only status), tapping a unit opens a
+  real detail sheet with real area figures, holding an available unit
+  succeeds (201, confirmed via network log), the list picks it up on the
+  next poll, and a full reload correctly resolves "Your hold expires" for
+  the viewer's own hold
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely

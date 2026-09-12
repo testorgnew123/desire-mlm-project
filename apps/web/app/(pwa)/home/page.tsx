@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { getPrismaClient } from "@desire/db";
 import { getEarnings } from "@desire/services/commission";
+import { listNotifications } from "@desire/services/notifications";
 import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
+import { formatDateTime } from "@/lib/format";
 import { formatIstClock } from "@/app/board/[projectId]/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -10,10 +12,10 @@ export const metadata: Metadata = {
   title: "Home — Desire",
 };
 
-/** ASSOCIATE/TEAM_LEAD landing: earnings blocked-by-collections, plus
- *  today's scheduled site visits ("today's follow-ups" -- docs/08-SCREENS.md
- *  Home tab). Finished further in Slice 3; this is the real Slice 2 minimum,
- *  not lorem ipsum. */
+/** ASSOCIATE/TEAM_LEAD landing (docs/08-SCREENS.md Home tab: "today's
+ *  tasks, alerts, this-month stats"): today's task count + unread alert
+ *  count, earnings blocked-by-collections, today's scheduled site visits,
+ *  and recent notifications. */
 export default async function PwaHomePage() {
   const session = await requireSession();
   const db = getPrismaClient();
@@ -58,9 +60,28 @@ export default async function PwaHomePage() {
     orderBy: { scheduledAt: "asc" },
   });
 
+  const notifications = await listNotifications(db, { userId: session.user.id });
+  const unreadCount = notifications.filter((notification) => !notification.readAt).length;
+  const recentNotifications = notifications.slice(0, 5);
+
   return (
     <main className="flex flex-col gap-4 p-4">
       <h1 className="text-lg font-semibold">Hi, {session.user.name.split(" ")[0]}</h1>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>{todaysVisits.length}</CardTitle>
+            <CardDescription>Today&apos;s tasks</CardDescription>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{unreadCount}</CardTitle>
+            <CardDescription>Unread alerts</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
 
       <Card>
         <CardHeader>
@@ -100,6 +121,32 @@ export default async function PwaHomePage() {
                 <span className="tabular-nums text-muted-foreground">
                   {formatIstClock(visit.scheduledAt.toISOString())}
                 </span>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Alerts</CardTitle>
+          <CardDescription>{unreadCount} unread</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {recentNotifications.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No notifications yet.</p>
+          ) : (
+            recentNotifications.map((notification) => (
+              <div key={notification.id} className="flex flex-col gap-0.5 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className={notification.readAt ? "text-muted-foreground" : "font-medium"}>
+                    {notification.title}
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {formatDateTime(notification.createdAt)}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">{notification.body}</p>
               </div>
             ))
           )}
