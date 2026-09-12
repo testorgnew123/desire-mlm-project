@@ -16,3 +16,4 @@ export * from "./discounts";
 export * from "./leads";
 export * from "./payment-plans";
 export * from "./receipts";
+export * from "./collections-sweep";

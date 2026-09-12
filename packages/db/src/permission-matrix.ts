@@ -68,6 +68,7 @@ export const PERMISSION_CODES = [
   "receipt.enter",
   "receipt.verify",
   "demand.waive",
+  "demand.follow_up",
   "associate.read",
   "associate.move",
   "grade.change",
@@ -139,6 +140,10 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "receipt.enter": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_ADMIN"],
   "receipt.verify": ["SUPER_ADMIN", "FINANCE_ADMIN"],
   "demand.waive": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD"],
+  // Closing an overdue alert with a FollowUpOutcome (docs/05-COLLECTIONS-
+  // SPEC.md section 4) is an associate-level action, not a finance one --
+  // mirrors discount.request's exact role set, not demand.raise/waive's.
+  "demand.follow_up": ["SUPER_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE"],
   "associate.read": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD", "SALES_ADMIN", "TEAM_LEAD", "ASSOCIATE", "AUDITOR"],
   "associate.move": ["SUPER_ADMIN", "SALES_HEAD"],
   "grade.change": ["SUPER_ADMIN", "SALES_HEAD"],

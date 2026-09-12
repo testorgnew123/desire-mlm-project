@@ -37,6 +37,7 @@ const D = (v: string | number) => new Prisma.Decimal(v);
 
 async function reset() {
   for (const orgId of [ORG, OTHER_ORG]) {
+    await db.collectionAlert.deleteMany({ where: { orgId } });
     await db.receiptAllocation.deleteMany({ where: { receipt: { orgId } } });
     await db.receipt.deleteMany({ where: { orgId } });
     await db.commissionRelease.deleteMany({ where: { entry: { orgId } } });

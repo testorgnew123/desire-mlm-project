@@ -26,17 +26,17 @@ name: Scheduled jobs
 on:
   schedule:
     - cron: '*/5 * * * *'   # hold expiry sweep
-    # The 08:00 IST and 00:00 IST schedules are NOT registered yet, on purpose.
-    # /api/jobs/holds/expire is currently the only job route that exists;
-    # collections/sweep, grades/qualify, monitor/invariants and backup/dump
-    # would each 404, retry three times and exit 1 -- two guaranteed-red runs
-    # every day, forever.
+    - cron: '30 2 * * *'    # collections escalation sweep -- 08:00 IST
+    # The 00:00 IST schedules (grades/qualify, monitor/invariants,
+    # backup/dump) are NOT registered yet, on purpose. Those routes do not
+    # exist yet -- they would each 404, retry three times and exit 1, a
+    # guaranteed-red run every night, forever.
     #
     # That is not a cosmetic problem. There is no heartbeat table yet, so
     # /api/health still reports jobs as "not yet implemented": the GitHub
-    # Actions run status is currently the ONLY signal that the 5-minute hold
-    # sweep is alive. Two known-bogus failures a day trains everyone to ignore
-    # exactly the channel a real sweep failure arrives on.
+    # Actions run status is currently the ONLY signal that a sweep is alive.
+    # A known-bogus failure trains everyone to ignore exactly the channel a
+    # real sweep failure arrives on.
     #
     # Re-add each cron in the same commit that adds its route. The intended
     # cadence is recorded in docs/21-TIER-LIMITS.md section 11, so nothing is
@@ -49,6 +49,7 @@ on:
         type: choice
         options:
           - holds/expire
+          - collections/sweep
 
 concurrency:
   group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
@@ -63,6 +64,7 @@ jobs:
         run: |
           case "${{ github.event.schedule }}" in
             '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
+            '30 2 * * *')   echo 'jobs=collections/sweep' >> "$GITHUB_OUTPUT" ;;
             *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
           esac
 

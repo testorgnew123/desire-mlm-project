@@ -52,6 +52,7 @@ is confined to their own towers.
 | `receipt.enter` | ✓ | ✓ | – | – | ✓ | – | – | – |
 | `receipt.verify` | ✓ | ✓ | – | – | – | – | – | – |
 | `demand.waive` | ✓ | ✓ | – | ✓ | – | – | – | – |
+| `demand.follow_up` | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | – |
 | `associate.read` | ✓ | ✓ | – | ✓ | ✓ | T | O | ✓ |
 | `associate.move` | ✓ | – | – | ✓ | – | – | – | – |
 | `grade.change` | ✓ | – | – | ✓ | – | – | – | – |

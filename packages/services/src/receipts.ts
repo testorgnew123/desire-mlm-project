@@ -11,6 +11,7 @@ import { computeRelease } from "@desire/commission";
 import Decimal from "decimal.js";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError, isInScope } from "./rbac";
+import { fireCollectionAlert } from "./collections-sweep";
 
 const ENTER_PERMISSION = "receipt.enter";
 // clearReceipt/allocateReceipt/bounceReceipt are gated by the SAME
@@ -536,12 +537,21 @@ export async function bounceReceipt(db: PrismaClient, params: { receiptId: strin
     const activeAllocations = await tx.receiptAllocation.findMany({ where: { receiptId: receipt.id, reversedAt: null } });
     const allocatedTotal = activeAllocations.reduce((sum, a) => sum.plus(a.amount), D(0));
 
+    const affectedDemandIds = new Set<string>();
     for (const allocation of activeAllocations) {
       await tx.receiptAllocation.update({
         where: { id: allocation.id },
         data: { reversedAt: now, reversedReason: params.bounceReason },
       });
       await syncDemandStatus(tx, allocation.demandId);
+      affectedDemandIds.add(allocation.demandId);
+    }
+
+    // CHEQUE_BOUNCED fires from here directly, not the sweep
+    // (docs/05-COLLECTIONS-SPEC.md's escalation table says so explicitly)
+    // -- one per demand this receipt had touched.
+    for (const demandId of affectedDemandIds) {
+      await fireCollectionAlert(tx, { orgId: receipt.orgId, demandId, rung: "CHEQUE_BOUNCED", sellingAssociateId: booking.sellingAssociateId });
     }
 
     // Whatever of this receipt had flowed into creditBalance (never
