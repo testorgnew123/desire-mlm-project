@@ -239,6 +239,78 @@ hold TTL.
 
 ---
 
+## Phase 3.5 — Frontend
+
+*New phase, not a renumbering — Phase 4/5 below keep their names, numbers,
+and scope as-is. Sequenced per the approved plan
+(`i-am-working-on-functional-fountain.md`): Associate PWA first, then
+back-office by docs/08-SCREENS.md's own section order. Never ship a screen
+against a backend gap — fold missing backend into the same slice.*
+
+### Slice 1 — Foundation (stack, session, formatters, login + MFA)
+
+- [x] Tailwind v4 + shadcn/ui (`base-nova` style, `@base-ui/react` primitives —
+  the current `npx shadcn@latest init` default, not classic Radix) —
+  `apps/web/postcss.config.mjs`, `apps/web/app/globals.css` (design tokens:
+  slate neutrals, `--primary` blue-600 `#2563eb`, `--success`/`--warning`/
+  `--danger`), `apps/web/components.json`
+- [x] `apps/web/lib/session.ts` (`getSession`/`requireSession`) and
+  `apps/web/lib/api-session.ts` (`readSessionToken`, `SESSION_COOKIE_NAME`) —
+  `board/[projectId]/page.tsx` migrated off its inline cookie-read
+- [x] `apps/web/lib/format.ts` (`formatDate`, `formatDateTime`,
+  `formatCountdown`, `groupIndian`) + `apps/web/lib/money.ts`
+  (`formatMoney`, `formatMoneyCompact`, `formatArea`) — **split into two
+  files, not the one the plan named**: `lib/format.ts`'s money/area helpers
+  need `Prisma.Decimal` from `@desire/db`, and board's `InventoryBoard.tsx`
+  (a client component) re-exports board's own formatters through the same
+  module — one file would have dragged `pg`/`net`/`tls` into the browser
+  bundle. Board's `format.ts` now just re-exports the shared pieces it used
+  to duplicate.
+- [x] `packages/services/src/rbac.ts`: `getSessionPermissions`
+- [x] Login + MFA (first ever in this repo) — `apps/web/app/login/{page,actions}.tsx`,
+  `login/mfa/`, `login/mfa-enroll/`, `login/pending.ts`, `login/session.ts`.
+  MFA requirement is checked via **`Role.requiresMfa` from the DB**
+  (`packages/services/src/auth.ts`'s new `userRequiresMfa`), not a
+  role-code string match against `MFA_REQUIRED_ROLE_CODES` — that constant
+  is test/seed-assertion only, per its own comment. QR rendered server-side
+  (`qrcode` package, SVG) from `buildMfaEnrollmentUri`; the pending
+  password-verified-but-not-yet-MFA-verified state travels in a short-lived
+  (5 min) cookie encrypted with the existing `encryptField`/`PII_ENCRYPTION_KEY`
+  primitive rather than a new signing scheme.
+- [x] `apps/web/app/page.tsx` redirects: unauthenticated → `/login`,
+  ASSOCIATE/TEAM_LEAD → `/home`, everyone else → `/dashboard`. Both targets
+  are minimal real placeholder pages (Slice 2 fleshes them out) rather than
+  routes that don't exist yet.
+- [x] Verified live end-to-end against a running dev server + seeded Neon
+  data (`pnpm db:seed`, 8 demo users): plain login (PROJECT_MANAGER, no
+  MFA) → `/dashboard`; invalid-credentials error shown inline; MFA
+  enrollment (SALES_HEAD, real QR scanned via a script computing the TOTP
+  from the displayed secret) → session created; MFA challenge on a second
+  login (same user, now `mfaEnabled`) → verified against the persisted
+  encrypted secret; the live inventory board re-tested after the
+  session/format refactor (unchanged rendering, area labels correct).
+
+**Decision log:**
+- `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
+  resolved via `db.organization.findFirst()` since the system is genuinely
+  single-tenant today (one seeded `Organization` row). A second real org
+  needs this revisited.
+- **Build fix, not a workaround**: `serverExternalPackages` alone does not
+  stop webpack from opening `@node-rs/argon2` and its platform-specific
+  sibling package, even though `packages/db`'s Prisma/`pg` externals use
+  the same mechanism successfully — confirmed by testing both a Server
+  Action and a plain Route Handler that import
+  `packages/services/src/password.ts`. Fixed with a webpack-level function
+  external in `apps/web/next.config.ts`, matched on the `@node-rs/argon2`
+  request prefix. This is the first request-path code in the repo to
+  import `password.ts`, so the gap was real, not previously exercised.
+- `PII_ENCRYPTION_KEY`/`PII_ENCRYPTION_KEY_ID` added to
+  `apps/web/.env.local` (local-only value, generated for this dev machine)
+  — required by `encryptField`, previously only exercised by CI's own
+  secret; local dev had never hit this path before the login flow.
+
+---
+
 ## Phase 4 — Payouts
 
 *2–3 weeks. Exit: one clean month-end run reconciled to the rupee, CA sign-off

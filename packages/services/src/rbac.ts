@@ -53,6 +53,18 @@ async function getPermissionCodes(
   return codes;
 }
 
+/** Public wrapper around getPermissionCodes -- the one-round-trip permission
+ *  set a UI shell needs to filter its nav to what the actor can reach
+ *  (Phase 3.5 plan, Shared patterns). hasPermission/assertPermission keep
+ *  calling getPermissionCodes directly rather than routing through this. */
+export async function getSessionPermissions(
+  db: PrismaClient | Prisma.TransactionClient,
+  userId: string,
+  options?: PermissionCheckOptions,
+): Promise<Set<string>> {
+  return getPermissionCodes(db, userId, options);
+}
+
 export async function hasPermission(
   db: PrismaClient | Prisma.TransactionClient,
   userId: string,

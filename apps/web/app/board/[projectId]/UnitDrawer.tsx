@@ -217,15 +217,15 @@ export function UnitDrawer({
               <dt className={styles.detailTerm}>
                 Carpet <span className={styles.tag}>RERA</span>
               </dt>
-              <dd className={styles.detailValue}>{unit.carpetArea} sq ft (carpet)</dd>
+              <dd className={styles.detailValue}>{unit.carpetArea}</dd>
             </div>
             <div className={styles.detailRow}>
               <dt className={styles.detailTerm}>Built-up</dt>
-              <dd className={styles.detailValue}>{unit.builtUpArea} sq ft (built-up)</dd>
+              <dd className={styles.detailValue}>{unit.builtUpArea}</dd>
             </div>
             <div className={styles.detailRow}>
               <dt className={styles.detailTerm}>Saleable</dt>
-              <dd className={styles.detailValue}>{unit.saleableArea} sq ft (saleable)</dd>
+              <dd className={styles.detailValue}>{unit.saleableArea}</dd>
             </div>
           </dl>
         </div>

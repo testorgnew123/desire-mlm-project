@@ -8,9 +8,10 @@
 // {id, unitNumber, floor, status, currentHoldExpiresAt, updatedAt}
 // (docs/06-INVENTORY-SPEC.md section 6).
 //
-// Gated with exactly the auth the delta endpoint uses -- same cookie name, same
-// validateSession, same assertPermission("unit.read", { projectId }). The two
-// have to agree: a page that rendered for an anonymous caller would then poll
+// Gated with exactly the auth the delta endpoint uses -- same session cookie
+// (via lib/session.ts's getSession()), same assertPermission("unit.read",
+// { projectId }). The two have to agree: a page that rendered for an
+// anonymous caller would then poll
 // an endpoint that answers 401 to that same caller, so the board would paint
 // once and show "Refresh failed (HTTP 401)" from the first poll onward, which
 // reads as a flaky network rather than as a missing session.
@@ -30,15 +31,14 @@
 //     so the poll this page starts is still not org-scoped even though the
 //     first paint now is. The filter belongs next to that query.
 import type { Metadata, Viewport } from "next";
-import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
-import type { Prisma, PrismaClient } from "@desire/db";
 // Narrow subpath imports -- see the note in the deltas route: the barrel drags
 // a native .node addon into the build graph via auth.ts.
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
-import { SessionInvalidError, validateSession } from "@desire/services/auth";
 import { effectiveUnitStatus } from "@desire/services/holds";
+import { getSession } from "@/lib/session";
+import { formatArea } from "@/lib/money";
 import { InventoryBoard } from "./InventoryBoard";
 import type { BoardTower, BoardUnit } from "./types";
 
@@ -58,12 +58,6 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-/** The cookie the deltas route pinned as the convention for the rest of
- *  apps/web (apps/web/app/api/v1/projects/[projectId]/units/deltas/route.ts).
- *  Duplicated rather than shared because apps/web still has no auth helper
- *  module; if the name ever moves, it moves in both places together. */
-const SESSION_COOKIE_NAME = "desire_session";
-
 export default async function InventoryBoardPage({
   params,
 }: {
@@ -73,16 +67,10 @@ export default async function InventoryBoardPage({
   const { projectId } = await params;
   const db = getPrismaClient();
 
-  // cookies() is a promise in Next.js 15 too. An empty value counts as absent:
-  // a cleared session cookie is no session, not a token that happens to hash
-  // to nothing.
-  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
-  if (!token) notFound();
-
-  // Actor resolved ONCE per render (docs/07-API.md, Auth row) -- validateSession
-  // writes lastActiveAt, so a second call would refresh the idle timeout twice
-  // for one page view.
-  const session = await resolveBoardReader(db, token, projectId);
+  // Actor resolved ONCE per render (docs/07-API.md, Auth row) -- getSession's
+  // validateSession call writes lastActiveAt, so a second call would refresh
+  // the idle timeout twice for one page view.
+  const session = await resolveBoardReader(projectId);
   const orgId = session.user.orgId;
 
   // Taken BEFORE the reads, deliberately. This timestamp becomes the client's
@@ -180,9 +168,9 @@ export default async function InventoryBoardPage({
       unitTypeCode: row.unitType.code,
       unitTypeName: row.unitType.name,
       bedrooms: row.unitType.bedrooms,
-      carpetArea: formatArea(row.carpetAreaOverride ?? row.unitType.carpetArea),
-      builtUpArea: formatArea(row.unitType.builtUpArea),
-      saleableArea: formatArea(row.saleableAreaOverride ?? row.unitType.saleableArea),
+      carpetArea: formatArea(row.carpetAreaOverride ?? row.unitType.carpetArea, "carpet"),
+      builtUpArea: formatArea(row.unitType.builtUpArea, "builtUp"),
+      saleableArea: formatArea(row.saleableAreaOverride ?? row.unitType.saleableArea, "saleable"),
       blockReason: row.blockReason,
       status,
       currentHoldExpiresAt: liveHold ? liveHold.expiresAt.toISOString() : null,
@@ -216,37 +204,21 @@ export default async function InventoryBoardPage({
  *  "Handlers never authorize") -- this only maps the two expected failures onto
  *  what a page can render.
  *
- *  Both land on notFound() rather than on distinct pages. apps/web has no login
- *  route to redirect an anonymous caller to yet, so there is nowhere useful to
- *  send them, and a page that said "forbidden" would confirm this project id
- *  exists to someone with no right to know it -- the same reason the deltas
- *  route authenticates before it parses ?since. Anything else thrown is a real
- *  fault and belongs in the error boundary, not swallowed as a 404. */
-async function resolveBoardReader(db: PrismaClient, token: string, projectId: string) {
+ *  Both land on notFound() rather than on distinct pages -- deliberately not
+ *  requireSession()'s redirect-to-/login: a page that said "forbidden" (or
+ *  redirected to log in) would confirm this project id exists to someone with
+ *  no right to know it, the same reason the deltas route authenticates before
+ *  it parses ?since. Anything else thrown is a real fault and belongs in the
+ *  error boundary, not swallowed as a 404. */
+async function resolveBoardReader(projectId: string) {
+  const session = await getSession();
+  if (!session) notFound();
+
   try {
-    const session = await validateSession(db, token);
-    await assertPermission(db, session.userId, "unit.read", { projectId });
+    await assertPermission(getPrismaClient(), session.user.id, "unit.read", { projectId });
     return session;
   } catch (error) {
-    if (error instanceof SessionInvalidError || error instanceof ForbiddenError) notFound();
+    if (error instanceof ForbiddenError) notFound();
     throw error;
   }
-}
-
-/** Areas are Decimal in the schema and are formatted straight from the decimal
- *  string, never through Number() -- the same rule money follows (docs/12-NFR.md,
- *  "no float arithmetic anywhere in a money path"; areas to 2dp). */
-function formatArea(value: Prisma.Decimal): string {
-  const fixed = value.toFixed(2);
-  const point = fixed.indexOf(".");
-  return `${groupIndian(fixed.slice(0, point))}.${fixed.slice(point + 1)}`;
-}
-
-/** Indian digit grouping (docs/08-SCREENS.md): last three digits, then pairs.
- *  1234567 -> "12,34,567". */
-function groupIndian(digits: string): string {
-  if (digits.length <= 3) return digits;
-  const lastThree = digits.slice(-3);
-  const rest = digits.slice(0, -3);
-  return `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ",")},${lastThree}`;
 }

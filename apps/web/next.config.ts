@@ -11,13 +11,37 @@ const nextConfig: NextConfig = {
   // straight through it, because neither parses the binary; only building or
   // actually running the app surfaces it.
   //
-  // The matching problem for @node-rs/argon2 is NOT solved here: listing it
-  // had no effect, because its index.js requires a PLATFORM-SPECIFIC sibling
-  // (@node-rs/argon2-win32-x64-msvc locally, -linux-x64-gnu on Netlify) that
-  // is a different request string. That one is solved structurally instead --
-  // password hashing lives in packages/services/src/password.ts, which nothing
-  // on a request path imports. See the note at the top of that file.
+  // @node-rs/argon2 itself being listed was not enough on its own -- its
+  // index.js requires a PLATFORM-SPECIFIC sibling package (a different
+  // require() request string), so that sibling has to be externalized too:
+  // -win32-x64-msvc locally, -linux-x64-gnu on Netlify. Needed now that
+  // Phase 3.5's login flow (apps/web/app/login/actions.ts) is the first
+  // request-path code to import packages/services/src/password.ts.
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg"],
+
+  // serverExternalPackages alone does not stop webpack from opening
+  // @node-rs/argon2/index.js and its platform-specific sibling package
+  // (confirmed by testing both a Server Action and a plain Route Handler
+  // that import packages/services/src/password.ts) -- combined with
+  // transpilePackages above, Next still traces into @node-rs/argon2's own
+  // requires rather than treating the bare specifier as external. A
+  // webpack-level function external, matched on the request string, is the
+  // documented fallback when serverExternalPackages doesn't take effect.
+  webpack(config, { isServer }) {
+    if (isServer) {
+      const originalExternals = Array.isArray(config.externals) ? config.externals : [];
+      config.externals = [
+        ...originalExternals,
+        ({ request }: { request?: string }, callback: (err?: null, result?: string) => void) => {
+          if (request && request.startsWith("@node-rs/argon2")) {
+            return callback(null, `commonjs ${request}`);
+          }
+          callback();
+        },
+      ];
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

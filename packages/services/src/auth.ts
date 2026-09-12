@@ -137,6 +137,17 @@ export function encryptMfaSecret(plainSecret: string): string {
   return encryptField(plainSecret);
 }
 
+/** Whether ANY of the user's current roles requires MFA. `Role.requiresMfa`
+ *  is the seeded source of truth (see the comment on MFA_REQUIRED_ROLE_CODES
+ *  below) -- this is the real check the login flow calls, a DB lookup
+ *  through the user's actual roles rather than a role-code string match. */
+export async function userRequiresMfa(db: PrismaClient, userId: string): Promise<boolean> {
+  const count = await db.userRole.count({
+    where: { userId, role: { requiresMfa: true } },
+  });
+  return count > 0;
+}
+
 /** Roles requiring MFA per docs/09-RBAC-MATRIX.md. `Role.requiresMfa` in the
  *  schema is the seeded source of truth the real login flow checks (via a
  *  DB lookup through the user's actual roles) -- this constant exists for
