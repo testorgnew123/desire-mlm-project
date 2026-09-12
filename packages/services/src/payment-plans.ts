@@ -12,6 +12,7 @@ import type { PrismaClient, Prisma as PrismaNS, PaymentPlan, PaymentPlanMileston
 export type { PaymentPlan, PaymentPlanMilestone, Demand };
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError } from "./rbac";
+import { applyCreditBalanceToNewDemand } from "./receipts";
 
 const PLAN_WRITE_PERMISSION = "project.write";
 const RAISE_PERMISSION = "demand.raise";
@@ -322,7 +323,13 @@ export async function raiseDemand(db: PrismaClient, params: { demandId: string; 
     }
 
     const before = auditSnapshot(demand);
-    const updated = await tx.demand.update({ where: { id: demand.id }, data: { status: "RAISED", raisedAt: now } });
+    let updated = await tx.demand.update({ where: { id: demand.id }, data: { status: "RAISED", raisedAt: now } });
+
+    // "Auto-applied to the next demand raised" (docs/05-COLLECTIONS-SPEC.md
+    // rule 3) -- any credit sitting on the booking from a prior receipt's
+    // overflow is applied against THIS demand immediately, same transaction.
+    await applyCreditBalanceToNewDemand(tx, { bookingId: updated.bookingId, demandId: updated.id });
+    updated = await tx.demand.findUniqueOrThrow({ where: { id: updated.id } });
 
     await writeAuditLog(tx, params.audit, {
       action: "UPDATE",
