@@ -11,6 +11,7 @@ import type { PrismaClient, Prisma as PrismaNS, AlertRung, CollectionAlert, Paym
 export type { CollectionAlert, PaymentFollowUp };
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
+import { evaluateNotificationRules } from "./notifications";
 
 // Duplicated per file, this codebase's own convention (see payment-plans.ts's
 // DemandNotFoundError / receipts.ts's AllocationDemandNotFoundError) -- also
@@ -111,6 +112,22 @@ async function fireAlert(
   await tx.collectionAlert.create({
     data: { orgId: params.orgId, demandId: params.demandId, rung: params.rung, recipients },
   });
+
+  // A no-op unless a NotificationRule with this exact code is configured
+  // and enabled (notifications.ts) -- nothing seeds one by default, so this
+  // is real, wired plumbing sitting quiet until config exists, not a
+  // pretend integration.
+  await evaluateNotificationRules(tx, {
+    orgId: params.orgId,
+    code: `DEMAND_${params.rung}`,
+    associateId: params.sellingAssociateId,
+    title: `Payment ${params.rung.toLowerCase().replace(/_/g, " ")}`,
+    body: `Demand ${params.demandId} reached ${params.rung}.`,
+    actionUrl: `/collections/demands/${params.demandId}`,
+    entity: "Demand",
+    entityId: params.demandId,
+  });
+
   return true;
 }
 
