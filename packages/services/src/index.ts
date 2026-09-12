@@ -18,3 +18,5 @@ export * from "./payment-plans";
 export * from "./receipts";
 export * from "./collections-sweep";
 export * from "./notifications";
+export * from "./grades";
+export * from "./associates";

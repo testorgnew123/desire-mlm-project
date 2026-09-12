@@ -193,13 +193,13 @@ test passes, a full sale produces correct entries for seller + 3 uplines.*
 > on placeholders means rebuilding the fixtures when the real rates arrive.
 
 ### Network
-- [ ] Grade master with qualification thresholds · **BLOCKED#4, #8**
-- [ ] Effective-dated `AssociateGrade` — close-and-insert, never update
-- [ ] Hierarchy with materialised `path`; subtree recompute on move
-- [ ] **GATE** Cycle detection and self-referral block on every move
-- [ ] Tree move rejected while a payout period is open
+- [x] Grade master with qualification thresholds · **BLOCKED#4, #8** still open — mechanism real, PLACEHOLDER values only — `packages/services/src/grades.ts`'s `createGrade`/`updateGrade`
+- [x] Effective-dated `AssociateGrade` — close-and-insert, never update — `assignGrade`
+- [x] Hierarchy with materialised `path`; subtree recompute on move — `packages/services/src/associates.ts`'s `moveAssociate`
+- [x] **GATE** Cycle detection and self-referral block on every move — tested against a multi-level fixture, proven live over HTTP
+- [x] Tree move rejected while a payout period is open — `PayoutPeriodOpenError`, tested
 - [ ] Grade auto-qualification job (daily, external cron)
-- [ ] Visual org tree
+- [ ] Visual org tree — UI screen, out of scope: nothing in this project has a frontend yet
 
 ### Engine — built ahead of order this block (risk-first, see Decision log)
 
