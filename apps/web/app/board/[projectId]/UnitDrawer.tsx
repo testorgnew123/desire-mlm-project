@@ -23,13 +23,23 @@ export interface UnitDrawerProps {
   isReloading: boolean;
   onReload: () => void;
   onClose: () => void;
+  /** True while a POST to take this hold is in flight. */
+  isHolding: boolean;
+  /** Set after a failed hold attempt -- on a lost race this is already the
+   *  exact "Unit is held by Ravi (A-0042)." string from the API, shown
+   *  verbatim (docs/08-SCREENS.md: "never a generic error"). Cleared by the
+   *  parent whenever the selected unit changes. */
+  holdError: string | null;
+  onHold: () => void;
 }
 
-/** The unit drawer of docs/08-SCREENS.md. The live cost sheet, floor plan and
- *  hold button belong here too; they need the ACTIVE price list read and the
- *  POST /units/:id/hold endpoint, neither of which exists yet. Nothing is
- *  stubbed in their place -- an inert Hold button on the board is worse than
- *  no button, because an associate will tap it in front of a customer. */
+/** The unit drawer of docs/08-SCREENS.md. The hold button now exists (POST
+ *  /api/v1/projects/:id/units/:unitId/holds), calling straight back to the
+ *  GATE-tested acquireHold (packages/services/src/holds.ts) with no client
+ *  guess in between -- a genuine lost race comes back as `holdError` and is
+ *  shown verbatim, never a generic message. The live cost sheet and floor
+ *  plan still belong here too and are still not built: they need the ACTIVE
+ *  price list read, which nothing in this pass adds. */
 export function UnitDrawer({
   unit,
   status,
@@ -43,6 +53,9 @@ export function UnitDrawer({
   isReloading,
   onReload,
   onClose,
+  isHolding,
+  holdError,
+  onHold,
 }: UnitDrawerProps) {
   const headingId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -139,6 +152,27 @@ export function UnitDrawer({
               <p className={styles.blockReason}>
                 {unit.blockReason ?? "No reason recorded."}
               </p>
+            </section>
+          ) : null}
+
+          {status === "AVAILABLE" ? (
+            <section>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={onHold}
+                disabled={isHolding}
+              >
+                {isHolding ? "Holding…" : "Hold this unit"}
+              </button>
+              {/* role="alert", not "status" like the board's own banners: this
+                  is the direct result of a tap and should interrupt assistive
+                  tech immediately rather than wait to be polled. */}
+              {holdError ? (
+                <p className={styles.errorStrip} role="alert">
+                  {holdError}
+                </p>
+              ) : null}
             </section>
           ) : null}
 

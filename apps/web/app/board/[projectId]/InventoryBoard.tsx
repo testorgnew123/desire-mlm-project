@@ -14,11 +14,17 @@ import {
   type BoardFilters,
 } from "./filters";
 import { useUnitDeltas } from "./useUnitDeltas";
-import type { BoardTower, BoardUnit, LiveUnitState } from "./types";
+import type { BoardTower, BoardUnit, HoldResponse, LiveUnitState } from "./types";
 import styles from "./board.module.css";
 
 /** Unit.towerId is nullable in the schema, so "no tower" is a real group. */
 const NO_TOWER = "__no_tower__";
+
+/** A stalled request on 4G must not hang the drawer's Hold button forever.
+ *  Same value and reasoning as useUnitDeltas.ts's REQUEST_TIMEOUT_MS -- not
+ *  imported, since that file does not export it and duplicating one constant
+ *  does not justify a shared module yet. */
+const HOLD_REQUEST_TIMEOUT_MS = 15_000;
 
 export interface InventoryBoardProps {
   projectId: string;
@@ -79,6 +85,8 @@ export function InventoryBoard({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
+  const [isHolding, setIsHolding] = useState(false);
+  const [holdError, setHoldError] = useState<string | null>(null);
   const lastTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Collapsed by default so the grid is the first thing on a 360px phone, open
@@ -90,6 +98,14 @@ export function InventoryBoard({
   useEffect(() => {
     setIsReloading(false);
   }, [serverTime]);
+
+  // A hold error is about the PREVIOUSLY selected unit -- switching to a
+  // different one (or closing the drawer) must not carry it along and show a
+  // stale "Unit is held by..." message for a unit nobody just tried to hold.
+  useEffect(() => {
+    setHoldError(null);
+    setIsHolding(false);
+  }, [selectedUnitId]);
 
   const towerGroups = useMemo(() => {
     const counts = new Map<string, number>();
@@ -230,6 +246,58 @@ export function InventoryBoard({
     setIsReloading(true);
     router.refresh();
   }, [router]);
+
+  // Success needs no new state here: refreshNow() re-polls the delta endpoint,
+  // the response lands in `live[unitId]`, and the existing HELD branch below
+  // (driven by `selectedStatus`, derived from `liveOf(selectedUnit)`) takes
+  // over on the very next render. Only failure needs anything new to show.
+  const handleTakeHold = useCallback(async () => {
+    if (selectedUnitId === null) return;
+
+    setIsHolding(true);
+    setHoldError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), HOLD_REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(selectedUnitId)}/holds`,
+        {
+          method: "POST",
+          signal: controller.signal,
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        },
+      );
+
+      if (response.ok) {
+        // 201 (fresh acquire) or 200 (idempotent retry of the caller's own
+        // hold) are both success -- the body shape is identical either way.
+        (await response.json()) as HoldResponse;
+        refreshNow();
+        return;
+      }
+
+      // RFC 7807 problem+json (docs/07-API.md). `detail` on a 409 is already
+      // the exact "Unit is held by Ravi (A-0042)." string, verbatim, from the
+      // route -- shown as-is, never replaced with a generic message.
+      const problem = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setHoldError(problem?.detail ?? `Hold failed (HTTP ${response.status}).`);
+    } catch (caught) {
+      setHoldError(
+        controller.signal.aborted
+          ? "Hold request timed out."
+          : caught instanceof Error
+            ? caught.message
+            : "Hold failed.",
+      );
+    } finally {
+      clearTimeout(timeoutId);
+      setIsHolding(false);
+    }
+  }, [projectId, selectedUnitId, refreshNow]);
 
   const handleClearFilters = useCallback(() => setFilters(EMPTY_FILTERS), []);
 
@@ -447,6 +515,9 @@ export function InventoryBoard({
           isReloading={isReloading}
           onReload={handleReload}
           onClose={handleCloseDrawer}
+          isHolding={isHolding}
+          holdError={holdError}
+          onHold={handleTakeHold}
         />
       ) : null}
     </div>

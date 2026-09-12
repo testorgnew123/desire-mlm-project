@@ -68,6 +68,17 @@ export interface LiveUnitState {
   updatedAt: string;
 }
 
+/** Response shape of POST /api/v1/projects/:id/units/:unitId/holds
+ *  (apps/web/app/api/v1/projects/[projectId]/units/[unitId]/holds/route.ts).
+ *  Returned on both 201 (fresh acquire) and 200 (idempotent retry of a hold
+ *  the caller already holds) -- identical shape either way. */
+export interface HoldResponse {
+  holdId: string;
+  unitId: string;
+  expiresAt: string;
+  auditId: string;
+}
+
 /** Response shape of GET /api/v1/projects/:id/units/deltas?since=
  *  (apps/web/app/api/v1/projects/[projectId]/units/deltas/route.ts). */
 export interface DeltaResponse {
