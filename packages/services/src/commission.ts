@@ -277,7 +277,7 @@ export class CommissionEntryNotFoundError extends Error {
   }
 }
 
-async function resolveActorRoleCodes(db: PrismaClient, actorId: string): Promise<Set<string>> {
+async function resolveActorRoleCodes(db: PrismaClient | PrismaNS.TransactionClient, actorId: string): Promise<Set<string>> {
   const roles = await db.userRole.findMany({ where: { userId: actorId }, select: { role: { select: { code: true } } } });
   return new Set(roles.map((r) => r.role.code));
 }
@@ -286,7 +286,7 @@ async function resolveActorRoleCodes(db: PrismaClient, actorId: string): Promise
  *  sees everything in the org; anyone else sees only associate ids
  *  resolveAccessibleAssociateIds (via the caller's own Associate row) would
  *  return them -- own record, or own + downline for a TEAM_LEAD. */
-async function assertAssociateInScope(db: PrismaClient, actorId: string, targetAssociateId: string): Promise<void> {
+async function assertAssociateInScope(db: PrismaClient | PrismaNS.TransactionClient, actorId: string, targetAssociateId: string): Promise<void> {
   const roleCodes = await resolveActorRoleCodes(db, actorId);
   if ([...roleCodes].some((r) => UNRESTRICTED_ROLE_CODES.has(r))) return;
 
@@ -437,4 +437,166 @@ export async function getEarnings(db: PrismaClient, params: { associateId: strin
   }
 
   return { associateId: params.associateId, accrued, payable, paid, blocked, pendingCollections };
+}
+
+// ── Dispute workflow -- Phase 3 Slice 6 ─────────────────────────────────
+
+const DISPUTE_RESOLVE_PERMISSION = "commission.dispute_resolve";
+
+export class CommissionDisputeNotFoundError extends Error {
+  constructor(public readonly disputeId: string) {
+    super(`Commission dispute ${disputeId} not found.`);
+    this.name = "CommissionDisputeNotFoundError";
+  }
+}
+
+export class DuplicateDisputeError extends Error {
+  constructor(public readonly entryId: string) {
+    super(`Commission entry ${entryId} already has a PENDING dispute.`);
+    this.name = "DuplicateDisputeError";
+  }
+}
+
+export class DisputeAlreadyResolvedError extends Error {
+  constructor(
+    public readonly disputeId: string,
+    public readonly status: string,
+  ) {
+    super(`Commission dispute ${disputeId} is already ${status}, not PENDING.`);
+    this.name = "DisputeAlreadyResolvedError";
+  }
+}
+
+/** Gated by commission.read: if you can see the entry (own, or downline as
+ *  a TEAM_LEAD, or unrestricted), you can dispute it -- the same scope rule
+ *  explainEntry already uses. Sets the entry ON_HOLD (schema's own enum
+ *  comment: "disputed or withheld"), so it drops out of any payout batch
+ *  until resolved. */
+export async function raiseDispute(
+  db: PrismaClient,
+  params: { entryId: string; description: string; audit: AuditContext },
+): Promise<{ disputeId: string }> {
+  if (!params.audit.actorId) {
+    throw new ForbiddenError("Raising a dispute requires a user actor, not a system actor.");
+  }
+  const actorId = params.audit.actorId;
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "commission_entries" WHERE "id" = ${params.entryId} FOR UPDATE`;
+
+    const entry = await tx.commissionEntry.findUnique({ where: { id: params.entryId } });
+    if (!entry) throw new CommissionEntryNotFoundError(params.entryId);
+    if (entry.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`Commission entry ${params.entryId} belongs to another organisation.`);
+    }
+
+    await assertPermission(tx, actorId, READ_PERMISSION);
+    await assertAssociateInScope(tx, actorId, entry.beneficiaryAssociateId);
+
+    const existing = await tx.commissionDispute.findFirst({ where: { entryId: entry.id, status: "PENDING" } });
+    if (existing) throw new DuplicateDisputeError(entry.id);
+
+    const dispute = await tx.commissionDispute.create({
+      data: { orgId: params.audit.orgId, entryId: entry.id, raisedById: actorId, description: params.description, status: "PENDING" },
+    });
+
+    if (entry.status !== "ON_HOLD") {
+      await tx.commissionEntry.update({ where: { id: entry.id }, data: { status: "ON_HOLD" } });
+    }
+
+    await writeAuditLog(tx, params.audit, {
+      action: "CREATE",
+      entity: "CommissionDispute",
+      entityId: dispute.id,
+      after: { entryId: entry.id, description: params.description },
+    });
+
+    return { disputeId: dispute.id };
+  });
+}
+
+export interface ResolveDisputeParams {
+  disputeId: string;
+  resolution: "APPROVED" | "REJECTED";
+  resolutionNote?: string;
+  /** Signed -- positive credits the associate, negative debits them.
+   *  Optional: not every resolution changes the amount (docs/04-COMMISSION-
+   *  SPEC.md's own posture -- Adjustment CRUD itself stays out of scope,
+   *  this is the one place Phase 3 creates a row in it). */
+  adjustmentAmount?: Prisma.Decimal | string;
+  audit: AuditContext;
+}
+
+/** Restores the entry to its prior status either way (a rejected dispute
+ *  changes nothing; an approved one is a separate Adjustment row, never a
+ *  hand-edit of the entry's own grossAmount -- "never UPDATE gross_amount"
+ *  is the ledger's own schema comment). Prior status is recomputed rather
+ *  than stored: an entry with any non-reversed CommissionRelease was
+ *  PAYABLE before the dispute; otherwise it was ACCRUED. */
+export async function resolveDispute(db: PrismaClient, params: ResolveDisputeParams): Promise<{ disputeId: string; adjustmentId: string | null }> {
+  if (!params.audit.actorId) {
+    throw new ForbiddenError("Resolving a dispute requires a user actor, not a system actor.");
+  }
+  const actorId = params.audit.actorId;
+  const now = new Date();
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "commission_disputes" WHERE "id" = ${params.disputeId} FOR UPDATE`;
+
+    const dispute = await tx.commissionDispute.findUnique({ where: { id: params.disputeId } });
+    if (!dispute) throw new CommissionDisputeNotFoundError(params.disputeId);
+    if (dispute.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`Commission dispute ${params.disputeId} belongs to another organisation.`);
+    }
+
+    await assertPermission(tx, actorId, DISPUTE_RESOLVE_PERMISSION);
+    if (dispute.status !== "PENDING") {
+      throw new DisputeAlreadyResolvedError(dispute.id, dispute.status);
+    }
+
+    const entry = await tx.commissionEntry.findUniqueOrThrow({ where: { id: dispute.entryId } });
+    const hasReleases = (await tx.commissionRelease.count({ where: { entryId: entry.id, reversedAt: null } })) > 0;
+    const restoredStatus = hasReleases ? "PAYABLE" : "ACCRUED";
+
+    let adjustmentId: string | null = null;
+    if (params.adjustmentAmount !== undefined) {
+      const amount = D(params.adjustmentAmount);
+      const adjustment = await tx.adjustment.create({
+        data: {
+          orgId: params.audit.orgId,
+          associateId: entry.beneficiaryAssociateId,
+          type: amount.isNegative() ? "DEBIT" : "CREDIT",
+          amount: amount.abs(),
+          reason: params.resolutionNote ?? `Dispute ${dispute.id} resolved ${params.resolution}`,
+          requestedById: actorId,
+          approvedById: actorId,
+          approvedAt: now,
+        },
+      });
+      adjustmentId = adjustment.id;
+    }
+
+    await tx.commissionEntry.update({ where: { id: entry.id }, data: { status: restoredStatus } });
+
+    const updatedDispute = await tx.commissionDispute.update({
+      where: { id: dispute.id },
+      data: {
+        status: params.resolution,
+        resolvedById: actorId,
+        resolvedAt: now,
+        resolution: params.resolutionNote ?? undefined,
+        adjustmentId: adjustmentId ?? undefined,
+      },
+    });
+
+    await writeAuditLog(tx, params.audit, {
+      action: params.resolution === "APPROVED" ? "APPROVE" : "REJECT",
+      entity: "CommissionDispute",
+      entityId: updatedDispute.id,
+      before: { status: "PENDING" },
+      after: { status: params.resolution, adjustmentId },
+    });
+
+    return { disputeId: updatedDispute.id, adjustmentId };
+  });
 }

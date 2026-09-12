@@ -76,6 +76,7 @@ export const PERMISSION_CODES = [
   "scheme.approve",
   "scheme.simulate",
   "commission.read",
+  "commission.dispute_resolve",
   "payout.prepare",
   "payout.approve",
   "payout.export",
@@ -151,6 +152,10 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "scheme.approve": ["SUPER_ADMIN", "SALES_HEAD"],
   "scheme.simulate": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD", "AUDITOR"],
   "commission.read": ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD", "TEAM_LEAD", "ASSOCIATE", "AUDITOR"],
+  // Resolving a money dispute is finance-adjacent -- mirrors payout.approve's
+  // exact role set, the same population that already owns clawbacks and
+  // payout approval. Nothing gated this before Phase 3 Slice 6.
+  "commission.dispute_resolve": ["SUPER_ADMIN", "FINANCE_ADMIN"],
   "payout.prepare": ["SUPER_ADMIN", "FINANCE_ADMIN"],
   "payout.approve": ["SUPER_ADMIN", "FINANCE_ADMIN"],
   "payout.export": ["SUPER_ADMIN", "FINANCE_ADMIN"],

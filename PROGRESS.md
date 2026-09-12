@@ -198,7 +198,7 @@ test passes, a full sale produces correct entries for seller + 3 uplines.*
 - [x] Hierarchy with materialised `path`; subtree recompute on move — `packages/services/src/associates.ts`'s `moveAssociate`
 - [x] **GATE** Cycle detection and self-referral block on every move — tested against a multi-level fixture, proven live over HTTP
 - [x] Tree move rejected while a payout period is open — `PayoutPeriodOpenError`, tested
-- [ ] Grade auto-qualification job (daily, external cron)
+- [x] Grade auto-qualification job (daily, external cron) — `packages/services/src/grades.ts`'s `runGradeQualificationSweep`, copies `expireStaleHolds`/`runCollectionsSweep`'s exact one-transaction-per-associate shape; a grade with every threshold null is vacuously never auto-qualified into (tested); `/api/jobs/grades/qualify`, registered in `.github/workflows/scheduled-jobs.yml` at the same 08:00 IST slot as the collections sweep, verified live (both the authorized 200 and the unauthorized 401 path) against a running dev server
 - [ ] Visual org tree — UI screen, out of scope: nothing in this project has a frontend yet
 
 ### Engine — built ahead of order this block (risk-first, see Decision log)
@@ -223,7 +223,7 @@ test passes, a full sale produces correct entries for seller + 3 uplines.*
 - [x] Scheme simulator (no writes) — `packages/services/src/commission.ts`'s `simulateScheme`, calls `accrue()` directly against a caller-supplied hypothetical, works against a DRAFT scheme too, tested to write zero rows
 - [x] Explain drill-down — [08-SCREENS §2](docs/08-SCREENS.md) — `explainEntry`, `GET /commission/entries/:id/explain`, verified live over HTTP
 - [x] Earnings screen with **"₹X blocked by ₹Y in pending collections"** — `getEarnings`, `GET /associates/:id/earnings`, both numbers computed from real `CommissionRelease`/`Demand`/`ReceiptAllocation` rows (the exact canonical outstanding-balance query `receipts.ts`'s `allocatedTotalForDemand` already established), verified live over HTTP
-- [ ] Dispute workflow
+- [x] Dispute workflow — `packages/services/src/commission.ts`'s `raiseDispute` (gated by `commission.read`, same O/T/admin scope as `explainEntry`, sets the entry `ON_HOLD`) and `resolveDispute` (new `commission.dispute_resolve` permission, mirroring `payout.approve`'s exact role set; restores the entry to its prior status either way, recomputed from whether it has a non-reversed `CommissionRelease` rather than stored; an `Adjustment` row created only when the resolution names a signed amount)
 - [ ] **GATE** Invariant monitor live and paging — ships with the engine, not after
 
 ---

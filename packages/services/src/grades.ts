@@ -10,7 +10,7 @@ import { Prisma } from "@desire/db";
 import type { PrismaClient, Grade, AssociateGrade } from "@desire/db";
 export type { Grade, AssociateGrade };
 import { writeAuditLog, type AuditContext } from "./audit";
-import { assertPermission, ForbiddenError } from "./rbac";
+import { assertPermission, ForbiddenError, getAccessibleAssociateIds } from "./rbac";
 
 const GRADE_WRITE_PERMISSION = "project.write";
 const ASSIGN_PERMISSION = "grade.change";
@@ -240,4 +240,131 @@ export async function assignGrade(db: PrismaClient, params: AssignGradeParams): 
 
     return created;
   });
+}
+
+// ── Grade auto-qualification sweep -- Phase 3 Slice 6 ───────────────────
+
+// PLACEHOLDER: the spec doesn't define the "personal bookings in period"
+// window, stated explicitly rather than silently assumed.
+const QUALIFICATION_BOOKINGS_WINDOW_MONTHS = 12;
+
+interface QualificationStats {
+  cumulativeSalesValue: Prisma.Decimal;
+  personalBookingsInPeriod: number;
+  teamSize: number;
+  tenureMonths: number;
+}
+
+/** A grade with every threshold field null is vacuously never auto-
+ *  qualified into (schema's own comment: "null = not evaluated") -- this
+ *  guards the accidental promote-everyone bug a naive "every non-null check
+ *  passes" predicate would have on an unconfigured grade. */
+function qualifiesFor(grade: Grade, stats: QualificationStats): boolean {
+  const thresholds = [grade.minCumulativeSalesValue, grade.minBookingsInPeriod, grade.minTeamSize, grade.minTenureMonths];
+  if (thresholds.every((t) => t === null)) return false;
+
+  if (grade.minCumulativeSalesValue !== null && stats.cumulativeSalesValue.lessThan(grade.minCumulativeSalesValue)) return false;
+  if (grade.minBookingsInPeriod !== null && stats.personalBookingsInPeriod < grade.minBookingsInPeriod) return false;
+  if (grade.minTeamSize !== null && stats.teamSize < grade.minTeamSize) return false;
+  if (grade.minTenureMonths !== null && stats.tenureMonths < grade.minTenureMonths) return false;
+  return true;
+}
+
+function describeThresholdsMet(grade: Grade, stats: QualificationStats): string {
+  const parts: string[] = [];
+  if (grade.minCumulativeSalesValue !== null) parts.push(`cumulativeSalesValue ${stats.cumulativeSalesValue.toString()}>=${grade.minCumulativeSalesValue.toString()}`);
+  if (grade.minBookingsInPeriod !== null) parts.push(`personalBookingsInPeriod ${stats.personalBookingsInPeriod}>=${grade.minBookingsInPeriod}`);
+  if (grade.minTeamSize !== null) parts.push(`teamSize ${stats.teamSize}>=${grade.minTeamSize}`);
+  if (grade.minTenureMonths !== null) parts.push(`tenureMonths ${stats.tenureMonths}>=${grade.minTenureMonths}`);
+  return parts.join(", ");
+}
+
+function monthsBetween(from: Date, to: Date): number {
+  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+}
+
+export interface GradeQualificationSweepResult {
+  evaluated: number;
+  promoted: number;
+}
+
+/** Copies expireStaleHolds/runCollectionsSweep's exact shape: one
+ *  transaction per associate, a system actor (actorId: null), no RBAC
+ *  check -- this is a cron job gated by the route's x-job-secret, not a
+ *  user-facing mutation, so it does NOT go through assignGrade (which
+ *  requires a user actor by design: "Grade mutations require a user actor,
+ *  not a system actor"). It reimplements the same close-and-insert
+ *  discipline directly, with approvedById left null to honestly record
+ *  that nobody personally approved this promotion. */
+export async function runGradeQualificationSweep(db: PrismaClient, params: { now?: Date } = {}): Promise<GradeQualificationSweepResult> {
+  const now = params.now ?? new Date();
+  let evaluated = 0;
+  let promoted = 0;
+
+  const associates = await db.associate.findMany({ where: { status: "ACTIVE" }, select: { id: true, orgId: true, joinDate: true } });
+
+  for (const associate of associates) {
+    await db.$transaction(async (tx) => {
+      evaluated++;
+
+      const current = await tx.associateGrade.findFirst({
+        where: { associateId: associate.id, validTo: null },
+        include: { grade: true },
+      });
+
+      const grades = await tx.grade.findMany({ where: { orgId: associate.orgId, isActive: true }, orderBy: { rank: "desc" } });
+      const higherGrades = grades.filter((g) => !current || g.rank > current.grade.rank);
+      if (higherGrades.length === 0) return;
+
+      const windowStart = new Date(now);
+      windowStart.setMonth(windowStart.getMonth() - QUALIFICATION_BOOKINGS_WINDOW_MONTHS);
+
+      const [salesAgg, bookingsInPeriod, accessibleIds] = await Promise.all([
+        tx.commissionEntry.aggregate({
+          where: { beneficiaryAssociateId: associate.id, role: "SELF", status: { not: "REVERSED" } },
+          _sum: { baseAmount: true },
+        }),
+        tx.booking.count({ where: { sellingAssociateId: associate.id, status: { not: "DRAFT" }, bookingDate: { gte: windowStart, lte: now } } }),
+        getAccessibleAssociateIds(tx, associate.id, "OWN_AND_DOWNLINE"),
+      ]);
+
+      const stats: QualificationStats = {
+        cumulativeSalesValue: salesAgg._sum.baseAmount ?? new Prisma.Decimal(0),
+        personalBookingsInPeriod: bookingsInPeriod,
+        teamSize: accessibleIds.length - 1, // exclude self
+        tenureMonths: monthsBetween(associate.joinDate, now),
+      };
+
+      // Highest-rank qualifying grade above the current one -- grades is
+      // already rank-desc, so the first match is the best available.
+      const target = higherGrades.find((g) => qualifiesFor(g, stats));
+      if (!target) return;
+
+      if (current) {
+        await tx.associateGrade.update({ where: { id: current.id }, data: { validTo: now } });
+      }
+      const created = await tx.associateGrade.create({
+        data: {
+          associateId: associate.id,
+          gradeId: target.id,
+          validFrom: now,
+          validTo: null,
+          reason: `Auto-qualified: ${describeThresholdsMet(target, stats)}`,
+          approvedById: null,
+        },
+      });
+
+      await writeAuditLog(tx, { orgId: associate.orgId, actorId: null, actorLabel: "system:grade-qualification-sweep" }, {
+        action: "CREATE",
+        entity: "AssociateGrade",
+        entityId: created.id,
+        after: auditSnapshot(created),
+        reason: created.reason ?? undefined,
+      });
+
+      promoted++;
+    });
+  }
+
+  return { evaluated, promoted };
 }
