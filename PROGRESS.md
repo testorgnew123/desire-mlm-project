@@ -434,6 +434,49 @@ against a backend gap — fold missing backend into the same slice.*
   audit-log entries spanning every earlier slice's own testing, plus open
   items) -- each showing exactly its own role's widget set, nothing more
 
+### Slice 7 -- Back-office: Projects section
+
+- [x] **Backend gap closed**: `schemes.ts`'s `createScheme`/`publishScheme`
+  had zero HTTP routes since Phase 3 -- added
+  `apps/web/app/api/v1/schemes/route.ts` (POST create) and
+  `.../[schemeId]/publish/route.ts` (POST publish), both using
+  `readSessionToken` from `lib/api-session.ts`, request bodies narrowed by
+  hand-written parsers (no `any`) rather than trusting the shape.
+  **Naming correction caught by the dev server itself**: the publish
+  route's dynamic segment had to be named `[schemeId]`, matching its
+  sibling `simulate` route, not `[id]` as first written -- Next.js refuses
+  to boot when siblings at the same path depth disagree on a slug name,
+  and the dev server crash on start made this impossible to miss
+- [x] Detail page (`apps/web/app/(back-office)/projects/[projectId]/page.tsx`)
+  covers List/Detail/Towers/Units/Price lists/Payment plans/Commission
+  scheme on one page rather than six routes -- 08-SCREENS.md lists them as
+  one "Projects" section. "Units" here is the unit-TYPE catalogue a price
+  list prices against (a project-configuration concern), not live
+  inventory monitoring -- that stays on the board, linked in from Slice 8.
+  Real create actions for towers, unit types, draft price lists (+
+  publish), payment plans (single 100%-on-booking milestone -- full
+  milestone editing explicitly deferred), and commission schemes (+
+  publish) -- all calling the existing service functions directly via
+  Server Actions, per the back-office data pattern, not through the new
+  HTTP routes
+- [x] **Real bug caught during live testing, fixed before commit**: every
+  mutation above can genuinely fail on an expected business rule (wrong
+  role, maker-checker, a duplicate code) -- a first pass let these throw
+  uncaught, crashing to Next's generic "Application error" page instead of
+  a message. Fixed with a shared `runAction` wrapper that catches and
+  redirects with the real error text as a query param -- these are
+  internal back-office actors, so the actual service error message is
+  safe and useful to show verbatim, same discipline as the login flow
+- [x] Verified live end-to-end against a running dev server across three
+  roles: PROJECT_MANAGER created a tower and a unit type; SALES_HEAD hit
+  the friendly `pricelist.approve`/`project.write` permission errors
+  correctly (confirming the fix) then successfully published a draft
+  price list (confirmed the outgoing version auto-archived); SUPER_ADMIN
+  created a payment plan and a draft commission scheme, hit the
+  maker-checker violation publishing their own scheme, and SALES_HEAD then
+  published it successfully as the second approver (confirmed ACTIVE +
+  the prior version ARCHIVED)
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
