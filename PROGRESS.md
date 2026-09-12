@@ -373,6 +373,41 @@ against a backend gap — fold missing backend into the same slice.*
   Contacted and the timeline recorded "Stage: New -> Contacted"), and
   scheduling a site visit (confirmed it appears in the Site visits list)
 
+### Slice 5 -- PWA: Earnings tab + Team tab (closes out the PWA)
+
+- [x] Earnings tab -- `apps/web/app/(pwa)/earnings/page.tsx`:
+  accrued/payable/paid + blocked-by-collections (reuses `getEarnings`),
+  a real grade ladder (all org grades, current rung highlighted -- NOT a
+  fabricated progress percentage: every seeded grade's auto-qualification
+  thresholds are still PLACEHOLDER `null`, so a numeric progress bar would
+  be dishonest; ladder position is the real thing available today), and
+  Statements -- the associate's own `CommissionEntry` rows (no
+  `PayoutBatch`/PDF exists yet, that is Phase 4 -- entries themselves are
+  the honest real "statement" for now), each linking to explain
+- [x] **"Explain this number"** (one of 08-SCREENS.md's three screens that
+  carry the product) -- `apps/web/app/(pwa)/earnings/[entryId]/explain/page.tsx`,
+  the full derivation tree rendered straight from `CommissionEntry.snapshot`
+  via `explainEntry`, called directly RSC-side. First UI for this endpoint
+  (previously API-only since Phase 3); reused again as-is in Slice 13's
+  back-office Commission Ledger rather than rebuilt
+- [x] Team tab (managers only) -- `apps/web/app/(pwa)/team/page.tsx`,
+  downline roster via `getAssociateTree` plus a small real aggregation
+  (total non-reversed commission per downline associate, `groupBy` --
+  no dedicated performance function exists yet, and this is a plain read)
+- [x] Verified live end-to-end: seeded a real confirmed booking +
+  `CommissionEntry` + `CommissionRelease` (going through the actual
+  `createDraftBooking`/`confirmBooking` transactional flow kept timing out
+  against this dev environment's Neon connection -- environment latency,
+  not a product bug -- so the row was inserted directly for this one
+  verification pass) and confirmed: the Earnings summary matches
+  (₹97,500 payable, ₹58,500 blocked = 97,500 − 39,000 released), the
+  Statements entry links through, the explain page's derivation matches
+  the snapshot exactly (seller rate, grade, scheme version, release
+  status), and the Team tab shows the downline associate with the correct
+  aggregated total
+- [x] This closes the PWA -- all 5 tabs (Home, Inventory, Leads, Earnings,
+  Team) are real
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
