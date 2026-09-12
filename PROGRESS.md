@@ -348,6 +348,31 @@ against a backend gap — fold missing backend into the same slice.*
   next poll, and a full reload correctly resolves "Your hold expires" for
   the viewer's own hold
 
+### Slice 4 -- PWA: Leads tab
+
+- [x] `apps/web/app/(pwa)/leads/page.tsx` (list, stage-filter chips via
+  `?stage=`) and `[leadId]/page.tsx` (detail + activity timeline + "log
+  activity" + "schedule site visit" forms as Server Actions). Wires
+  entirely to the existing `leads.ts` -- no backend gap. The single-lead
+  read reuses `listLeads` (already correctly scoped: ASSOCIATE own,
+  TEAM_LEAD own + downline) and finds the one row, rather than an unscoped
+  direct lookup -- no scoped single-lead getter exists yet, and this reuse
+  is honestly correct at demo scale even though it is not the most
+  efficient shape
+- [x] **Real bug caught during live testing, fixed before commit**: the
+  "log activity" form let a caller pick a target stage regardless of
+  activity type, but `logActivity` only ever applies `toStage` when
+  `type === "STAGE_CHANGE"` (by design -- a stage move is its own event,
+  not an attribute on a call or note). The form silently accepted a stage
+  pick on a "Call" entry and dropped it, which reads as a bug to whoever
+  is filling it in. Fixed with a clarifying label rather than hidden
+  client-side show/hide logic, keeping the form plain RSC + Server Action
+- [x] Verified live end-to-end against a running dev server (with one lead
+  seeded via `createLead` for this check): logging a "Call" with a note,
+  then a "Stage change" (confirmed `Lead.stage` actually moved New ->
+  Contacted and the timeline recorded "Stage: New -> Contacted"), and
+  scheduling a site visit (confirmed it appears in the Site visits list)
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
