@@ -7,7 +7,8 @@
 import { Prisma } from "@desire/db";
 import type { PrismaClient, Prisma as PrismaNS, Receipt, ReceiptAllocation, ReceiptMode } from "@desire/db";
 export type { Receipt, ReceiptAllocation };
-import { computeRelease } from "@desire/commission";
+import { computeRelease, resolveMilestoneCumulativePct } from "@desire/commission";
+import type { ReleaseScheduleSlab } from "@desire/commission";
 import Decimal from "decimal.js";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError, isInScope } from "./rbac";
@@ -154,6 +155,78 @@ async function syncDemandStatus(tx: PrismaNS.TransactionClient, demandId: string
   const nextStatus = allocated.greaterThanOrEqualTo(owed) && owed.greaterThan(0) ? "PAID" : allocated.greaterThan(0) ? "PARTIALLY_PAID" : "RAISED";
   if (nextStatus !== demand.status) {
     await tx.demand.update({ where: { id: demand.id }, data: { status: nextStatus } });
+    if (nextStatus === "PAID") {
+      await releaseMilestoneCommission(tx, { bookingId: demand.bookingId, triggerDemandId: demand.id });
+    }
+  }
+}
+
+/** MILESTONE release, fired when a demand reaches PAID (the one
+ *  ReleaseTriggerType.DEMAND_PAID case that is genuinely fireable today --
+ *  no code anywhere moves Booking.status past CONFIRMED, so
+ *  AGREEMENT_SIGNED/REGISTRATION/POSSESSION slabs cannot fire yet, a future
+ *  phase's booking-lifecycle work, not invented here).
+ *
+ *  A PayoutScheduleSlab's triggerRef for a DEMAND_PAID slab is a
+ *  PaymentPlanMilestone id, the exact value payment-plans.ts's
+ *  generateDemandSchedule already stamps onto Demand.milestoneRef -- so
+ *  "which triggers have fired" is just every PAID demand's own
+ *  milestoneRef, org-wide history not required since this only ever reads
+ *  the CURRENT status of this booking's own demands. */
+async function releaseMilestoneCommission(
+  tx: PrismaNS.TransactionClient,
+  params: { bookingId: string; triggerDemandId: string },
+): Promise<void> {
+  const entries = await tx.commissionEntry.findMany({ where: { bookingId: params.bookingId, status: { not: "REVERSED" } } });
+  if (entries.length === 0) return;
+
+  const paidDemands = await tx.demand.findMany({
+    where: { bookingId: params.bookingId, status: "PAID", milestoneRef: { not: null } },
+    select: { milestoneRef: true },
+  });
+  const firedTriggerRefs = new Set(paidDemands.map((d) => d.milestoneRef!));
+
+  for (const entry of entries) {
+    const scheme = await tx.commissionScheme.findUnique({ where: { id: entry.schemeId }, include: { schedules: { include: { slabs: true } } } });
+    const schedule = scheme?.schedules[0];
+    if (!schedule || schedule.mode !== "MILESTONE") continue;
+
+    const slabs: ReleaseScheduleSlab[] = schedule.slabs
+      .filter((s) => s.triggerType === "DEMAND_PAID")
+      .map((s) => ({ sequence: s.sequence, triggerType: s.triggerType, triggerRef: s.triggerRef, releasePct: new Decimal(s.releasePct.toString()) }));
+    // A scheme with no matching PayoutSchedule slabs is skipped, not
+    // half-computed -- same posture as PRO_RATA_COLLECTION's own guard above.
+    if (slabs.length === 0) continue;
+
+    const cumulativePct = resolveMilestoneCumulativePct(slabs, firedTriggerRefs);
+    if (cumulativePct.isZero()) continue;
+
+    const releases = await tx.commissionRelease.findMany({ where: { entryId: entry.id, reversedAt: null }, select: { amount: true } });
+    const alreadyReleased = releases.reduce((sum, r) => sum.plus(new Decimal(r.amount.toString())), new Decimal(0));
+
+    const delta = computeRelease({
+      entryGrossAmount: new Decimal(entry.grossAmount.toString()),
+      entryAlreadyReleased: alreadyReleased,
+      cumulativeReleasePct: cumulativePct,
+    });
+    if (delta.lessThanOrEqualTo(0)) continue;
+
+    // Idempotent on (entryId, triggerType, triggerRef): a re-sync of the
+    // same demand (e.g. a bounce-then-reallocate cycle landing back on PAID)
+    // must not release the same delta twice.
+    await tx.commissionRelease.create({
+      data: {
+        entryId: entry.id,
+        triggerType: "DEMAND_PAID",
+        triggerRef: params.triggerDemandId,
+        cumulativePct: D(cumulativePct.toFixed(4)),
+        amount: D(delta.toFixed(2)),
+      },
+    });
+
+    if (entry.status === "ACCRUED") {
+      await tx.commissionEntry.update({ where: { id: entry.id }, data: { status: "PAYABLE" } });
+    }
   }
 }
 

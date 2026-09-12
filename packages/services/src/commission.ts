@@ -181,6 +181,12 @@ export async function accrueCommission(
   // Throws CommissionSchemeMisconfiguredError before returning if the
   // maxTotalPct ceiling would be breached -- nothing below has run yet.
   const result = accrue(input, org);
+  // ON_BOOKING releases 100% immediately, in this SAME transaction as the
+  // accrual -- there is no later event to wait for (docs/04-COMMISSION-SPEC.md's
+  // ReleaseTriggerType.BOOKING_CONFIRMED is fired by the confirm itself).
+  // MILESTONE's DEMAND_PAID trigger is wired separately, into
+  // receipts.ts's syncDemandStatus, since it depends on a later event.
+  const isOnBooking = activeScheme.schedules[0]?.mode === "ON_BOOKING";
 
   try {
     for (const entry of result.entries) {
@@ -194,7 +200,7 @@ export async function accrueCommission(
           level: entry.level,
           baseAmount: D(entry.baseAmount.toFixed(2)),
           grossAmount: D(entry.grossAmount.toFixed(2)),
-          status: "ACCRUED",
+          status: isOnBooking ? "PAYABLE" : "ACCRUED",
           snapshot: entry.snapshot as unknown as Prisma.InputJsonValue,
           idempotencyKey: entry.idempotencyKey,
         },
@@ -211,6 +217,18 @@ export async function accrueCommission(
           grossAmount: entry.grossAmount.toString(),
         },
       });
+
+      if (isOnBooking) {
+        await tx.commissionRelease.create({
+          data: {
+            entryId: created.id,
+            triggerType: "BOOKING_CONFIRMED",
+            triggerRef: booking.id,
+            cumulativePct: D("100"),
+            amount: D(entry.grossAmount.toFixed(2)),
+          },
+        });
+      }
     }
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {

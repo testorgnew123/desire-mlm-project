@@ -13,9 +13,11 @@
 import { Prisma } from "@desire/db";
 import type {
   CommissionScheme,
+  PayoutMode,
   PrismaClient,
   PublishStatus,
   RateType,
+  ReleaseTriggerType,
 } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError } from "./rbac";
@@ -372,6 +374,14 @@ export async function publishScheme(
 export type ActiveScheme = CommissionScheme & {
   gradeRates: Array<{ gradeId: string; grade: { code: string }; rateType: RateType; rateValue: Prisma.Decimal }>;
   levelRates: Array<{ level: number; pctOfSellerCommission: Prisma.Decimal }>;
+  /** One payout schedule per scheme, by this codebase's own convention
+   *  (nothing in the schema enforces it, but nothing has ever created a
+   *  second one either) -- `schedules[0]?.mode` is what accrueCommission
+   *  (ON_BOOKING) and releaseMilestoneCommission (MILESTONE) key off. */
+  schedules: Array<{
+    mode: PayoutMode;
+    slabs: Array<{ sequence: number; triggerType: ReleaseTriggerType; triggerRef: string | null; releasePct: Prisma.Decimal }>;
+  }>;
 };
 
 /** Same shape as getActivePriceList -- the scheme a booking made on `asOf`
@@ -391,6 +401,7 @@ export async function getActiveScheme(
     include: {
       gradeRates: { include: { grade: { select: { code: true } } } },
       levelRates: true,
+      schedules: { include: { slabs: true } },
     },
     orderBy: { version: "desc" },
   });
