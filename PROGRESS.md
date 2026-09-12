@@ -290,6 +290,35 @@ against a backend gap — fold missing backend into the same slice.*
   encrypted secret; the live inventory board re-tested after the
   session/format refactor (unchanged rendering, area labels correct).
 
+### Slice 2 -- Role-aware shell + dashboards
+
+- [x] `apps/web/lib/nav.ts` -- static nav-tree data (section -> gating
+  permission code(s) -> route) for both shells, filtered by a permission
+  SET (`filterNav`), not a role-name string check. Collections needs a
+  union of several role-specific grants (no single permission covers it);
+  every other section uses one representative code.
+- [x] Back-office shell -- `apps/web/app/(back-office)/layout.tsx`, shadcn's
+  `Sidebar` (base-nova/`@base-ui` uses a `render` prop, not classic Radix
+  `asChild`, on `SidebarMenuButton`)
+- [x] PWA shell -- `apps/web/app/(pwa)/layout.tsx`, a plain fixed bottom tab
+  bar (not the desktop `Sidebar`) filtered the same way -- Team correctly
+  hidden for a plain ASSOCIATE and shown for TEAM_LEAD, verified live
+- [x] Real dashboards (no lorem ipsum): `(pwa)/home/page.tsx` (ASSOCIATE/
+  TEAM_LEAD landing -- `getEarnings` + today's scheduled `SiteVisit` rows as
+  "today's follow-ups"); `(back-office)/dashboard/page.tsx` role-branched --
+  SUPER_ADMIN/SALES_HEAD/PROJECT_MANAGER see project/unit/booking counts,
+  FINANCE_ADMIN sees a real collections-aging bucket summary (built on
+  `getCollectionsConsole`, no new aggregation function needed), everyone
+  else (SALES_ADMIN, AUDITOR) gets a real minimal "your open items" tile
+  (project/unit/open-lead counts) rather than a placeholder
+- [x] Verified live against a running dev server across every role in the
+  seed (SALES_HEAD, AUDITOR, ASSOCIATE, TEAM_LEAD): sidebar/tab filtering
+  matches `packages/db/src/permission-matrix.ts` exactly per role
+  (Payouts/Admin hidden from SALES_HEAD, Admin shown to AUDITOR via
+  `audit.read`, Collections hidden from AUDITOR, Team hidden from
+  ASSOCIATE / shown for TEAM_LEAD); keyboard-focus spot check on the
+  back-office sidebar shows a visible focus ring
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
