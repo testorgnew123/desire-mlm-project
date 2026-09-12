@@ -22,11 +22,11 @@ the state. Update it as work lands, not at the end of a sprint.
 
 | | |
 |---|---|
-| **Current phase** | **Phase 1 — Inventory**, 16/17 done, **both gates passed** (hold concurrency proven against real Postgres, negative-control verified). Only the lost-race UI remains, and it is genuinely blocked on there being no hold-taking action in the UI yet. Phase 0 is **complete** (17/17). **CI, however, has never passed** — see the decision log; tests now run but a real coverage shortfall on `projects.ts`, `charge-heads.ts` and `units.ts` keeps it red. Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
+| **Current phase** | **Phase 1 — Inventory**, 16/17 done, **both gates passed** (hold concurrency proven against real Postgres, negative-control verified). Only the lost-race UI remains, blocked on there being no hold-taking action in the UI yet. Phase 0 is **complete** (17/17). **CI is green** — first successful run on GitHub Actions after fixing the pnpm/corepack ordering, turbo strict-env mode, and a real coverage shortfall on `projects.ts`/`charge-heads.ts`/`units.ts` (85 new tests, package now 83% lines / 85% branches). Phase 3's pure engine built ahead of order — risk-first sequencing, see Decision log |
 | **Started** | 2026-09-05 |
 | **Target** | 18–22 weeks from start |
 | **Hosting** | **Live**: [desire-mlm-project.netlify.app](https://desire-mlm-project.netlify.app) — verified via `/api/health` returning `200` with a real hosted-Neon query. Hosted Neon (`ap-southeast-1`, Postgres 18.6). Local Docker Postgres 18 kept for offline dev / concurrency tests. Repo at `github.com/testorgnew123/desire-mlm-project`, connected for auto-deploy on push |
-| **Last updated** | 2026-09-06 |
+| **Last updated** | 2026-09-12 |
 
 | Phase | Tasks | Done | Gates | Status |
 |---|:-:|:-:|:-:|---|
