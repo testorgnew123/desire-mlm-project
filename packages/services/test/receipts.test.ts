@@ -149,9 +149,17 @@ async function seedFixture(orgId: string = ORG) {
   });
   await db.associateHierarchy.create({ data: { associateId: stranger.associate!.id, parentId: null, path: "/", depth: 0, validFrom: new Date("2024-01-01") } });
 
+  // Deliberately NOT status: ACTIVE -- these schemes exist only as foreign
+  // keys for seedEntry's manually-controlled CommissionEntry rows and for
+  // releaseCommissionForBooking's schemeId->mode lookup (which reads by id,
+  // not by active status). Now that confirmBooking's own accrueCommission
+  // (Phase 3 Slice 2) genuinely resolves whichever scheme IS active, keeping
+  // both DRAFT means confirmBooking accrues nothing on its own, leaving
+  // seedEntry's manually-seeded entries as the only ones -- exactly what
+  // every assertion in this file already expects.
   const scheme = await db.commissionScheme.create({
     data: {
-      orgId, projectId: project.id, name: "Standard", version: 1, status: "ACTIVE",
+      orgId, projectId: project.id, name: "Standard", version: 1, status: "DRAFT",
       validFrom: new Date("2020-01-01"), baseDefinition: { chargeHeadCodes: ["BSP"] }, preparedById: admin.user.id,
     },
   });
@@ -159,7 +167,7 @@ async function seedFixture(orgId: string = ORG) {
 
   const milestoneScheme = await db.commissionScheme.create({
     data: {
-      orgId, projectId: project.id, name: "Milestone", version: 2, status: "ACTIVE",
+      orgId, projectId: project.id, name: "Milestone", version: 2, status: "DRAFT",
       validFrom: new Date("2020-01-01"), baseDefinition: { chargeHeadCodes: ["BSP"] }, preparedById: admin.user.id,
     },
   });

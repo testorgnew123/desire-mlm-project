@@ -28,6 +28,7 @@ import {
 import { computeClawback } from "@desire/commission";
 import Decimal from "decimal.js";
 import { generateDemandSchedule } from "./payment-plans";
+import { accrueCommission } from "./commission";
 
 const CREATE_PERMISSION = "booking.create";
 const CONFIRM_PERMISSION = "booking.confirm";
@@ -475,6 +476,12 @@ export async function confirmBooking(
     // preventing atomically, not patching after the fact. A booking with no
     // paymentPlanId gets no schedule -- nothing to generate, not an error.
     await generateDemandSchedule(tx, { bookingId: confirmed.id, audit: params.audit, now });
+
+    // Same transaction: a CONFIRMED booking's commission entries must exist
+    // (or the project must genuinely have no scheme yet) atomically with the
+    // confirm itself -- see commission.ts's accrueCommission for why a
+    // misconfigured scheme rolls back the whole confirm.
+    await accrueCommission(tx, { bookingId: confirmed.id, audit: params.audit, now });
 
     const costSheetLines = await Promise.all(
       final.lines.map((line: CostSheetLineResult) =>

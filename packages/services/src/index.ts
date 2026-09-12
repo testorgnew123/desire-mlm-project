@@ -20,3 +20,5 @@ export * from "./collections-sweep";
 export * from "./notifications";
 export * from "./grades";
 export * from "./associates";
+export * from "./schemes";
+export * from "./commission";

@@ -130,9 +130,17 @@ async function seedFixture(orgId: string = ORG) {
   });
   const customer = await db.customer.create({ data: { orgId, name: "Test Buyer", phone: "9999999999" } });
 
+  // Deliberately NOT status: ACTIVE -- this scheme exists only as a foreign
+  // key for seedEntry's manually-controlled CommissionEntry rows (this
+  // file's own comment: "no accrual service exists yet -- Phase 3"). Now
+  // that confirmBooking's own accrueCommission (Phase 3 Slice 2) genuinely
+  // resolves and runs accrue() against whichever scheme IS active, keeping
+  // this one DRAFT means confirmBooking accrues nothing on its own, leaving
+  // seedEntry's manually-seeded entries as the only ones -- exactly what
+  // every assertion in this file already expects.
   const scheme = await db.commissionScheme.create({
     data: {
-      orgId, projectId: project.id, name: "Standard", version: 1, status: "ACTIVE",
+      orgId, projectId: project.id, name: "Standard", version: 1, status: "DRAFT",
       validFrom: new Date("2020-01-01"), baseDefinition: { chargeHeadCodes: ["BSP"] },
       preparedById: "u_test",
     },
