@@ -27,10 +27,9 @@ on:
   schedule:
     - cron: '*/5 * * * *'   # hold expiry sweep
     - cron: '30 2 * * *'    # collections escalation sweep + grade qualification -- both 08:00 IST
-    # The 00:00 IST schedules (monitor/invariants, backup/dump) are NOT
-    # registered yet, on purpose. Those routes do not exist yet -- they
-    # would each 404, retry three times and exit 1, a guaranteed-red run
-    # every night, forever.
+    - cron: '30 18 * * *'   # invariant monitor -- 00:00 IST
+    # The backup/dump route does not exist yet -- it would 404, retry three
+    # times and exit 1, a guaranteed-red run every night, forever.
     #
     # That is not a cosmetic problem. There is no heartbeat table yet, so
     # /api/health still reports jobs as "not yet implemented": the GitHub
@@ -51,6 +50,7 @@ on:
           - holds/expire
           - collections/sweep
           - grades/qualify
+          - monitor/invariants
 
 concurrency:
   group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
@@ -66,6 +66,7 @@ jobs:
           case "${{ github.event.schedule }}" in
             '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
             '30 2 * * *')   echo 'jobs=collections/sweep grades/qualify' >> "$GITHUB_OUTPUT" ;;
+            '30 18 * * *')  echo 'jobs=monitor/invariants' >> "$GITHUB_OUTPUT" ;;
             *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
           esac
 

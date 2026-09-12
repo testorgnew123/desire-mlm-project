@@ -734,6 +734,22 @@ export async function cancelBooking(
         },
       });
 
+      // Same convention as commission.ts's accrueCommission: every real
+      // CommissionEntry row gets its own CREATE audit row, not just the
+      // booking-level cancellation record above.
+      await writeAuditLog(tx, params.audit, {
+        action: "CREATE",
+        entity: "CommissionEntry",
+        entityId: contra.id,
+        after: {
+          bookingId: entry.bookingId,
+          beneficiaryAssociateId: entry.beneficiaryAssociateId,
+          sourceEntryId: entry.id,
+          grossAmount: contra.grossAmount.toString(),
+          reversalReason: contra.reversalReason,
+        },
+      });
+
       if (result.recoveryAmount.gt(0)) {
         await tx.recovery.create({
           data: {

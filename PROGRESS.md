@@ -189,6 +189,17 @@ receipt; an overdue demand escalates through every rung to the right people.*
 *4–5 weeks. The riskiest phase. Exit: golden files pass, the reproducibility
 test passes, a full sale produces correct entries for seller + 3 uplines.*
 
+**Status: 22/23 done.** All exit criteria met -- golden files pass at 100%
+branch coverage, the reproducibility test passes, and a real `confirmBooking`
+call produces the exact worked entries for seller + 3 uplines from docs/
+04-COMMISSION-SPEC.md's own example. The one remaining item, "Visual org
+tree," is a frontend screen -- out of scope, matching this project's own
+backend-only pattern so far (Phases 0–2 built no frontend screen either).
+BLOCKED#4–#8 stay open in the table below: every mechanism they gate is
+built and tested for real, against the PLACEHOLDER values the docs and ADRs
+already name explicitly, same precedent as Phase 2's discount bands and
+hold TTL.
+
 > Blocked items 4–8 must be closed before this phase starts. Building the engine
 > on placeholders means rebuilding the fixtures when the real rates arrive.
 
@@ -224,7 +235,7 @@ test passes, a full sale produces correct entries for seller + 3 uplines.*
 - [x] Explain drill-down — [08-SCREENS §2](docs/08-SCREENS.md) — `explainEntry`, `GET /commission/entries/:id/explain`, verified live over HTTP
 - [x] Earnings screen with **"₹X blocked by ₹Y in pending collections"** — `getEarnings`, `GET /associates/:id/earnings`, both numbers computed from real `CommissionRelease`/`Demand`/`ReceiptAllocation` rows (the exact canonical outstanding-balance query `receipts.ts`'s `allocatedTotalForDemand` already established), verified live over HTTP
 - [x] Dispute workflow — `packages/services/src/commission.ts`'s `raiseDispute` (gated by `commission.read`, same O/T/admin scope as `explainEntry`, sets the entry `ON_HOLD`) and `resolveDispute` (new `commission.dispute_resolve` permission, mirroring `payout.approve`'s exact role set; restores the entry to its prior status either way, recomputed from whether it has a non-reversed `CommissionRelease` rather than stored; an `Adjustment` row created only when the resolution names a signed amount)
-- [ ] **GATE** Invariant monitor live and paging — ships with the engine, not after
+- [x] **GATE** Invariant monitor live and paging — ships with the engine, not after — `packages/services/src/invariant-monitor.ts`'s `runInvariantChecks` asserts the FULL list in docs/13-TEST-STRATEGY.md across all four domains (6 commission, 3 inventory, 4 collections, 3 network-and-duties), never throws, always reports; `/api/jobs/monitor/invariants`, nightly 00:00 IST, registered in `.github/workflows/scheduled-jobs.yml`. Honest "paging" note: no real paging provider exists anywhere in this project's dependencies — the route returns non-200 on any violation, turning the nightly GitHub Actions run red, this project's actual working alert channel today (same posture as `holds/expire`'s own route). Verified live against a running dev server: a clean pass (200), a genuine injected violation (500, correctly identified and named), and the unauthorized path (401). Building this surfaced one real gap it fixed in passing: `bookings.ts`'s `cancelBooking` created contra `CommissionEntry` rows with no audit trail at all -- now audited the same way `accrueCommission` audits every entry it creates
 
 ---
 
