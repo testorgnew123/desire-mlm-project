@@ -23,7 +23,7 @@ export interface NavItem {
 export const BACK_OFFICE_NAV: NavItem[] = [
   { key: "dashboard", label: "Dashboard", href: "/dashboard" },
   { key: "projects", label: "Projects", href: "/projects", permissions: ["project.read"] },
-  { key: "inventory", label: "Inventory", href: "/board", permissions: ["unit.read"] },
+  { key: "inventory", label: "Inventory", href: "/stock", permissions: ["unit.read"] },
   { key: "crm", label: "CRM", href: "/crm", permissions: ["lead.read"] },
   { key: "bookings", label: "Bookings", href: "/bookings", permissions: ["booking.read"] },
   {

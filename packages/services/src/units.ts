@@ -248,3 +248,173 @@ export async function getUnitDeltas(
 
   return { units, serverTime: now };
 }
+
+// ── Back-office reads (Phase 3.5 Slice 8) ───────────────────────────────
+//
+// No permission check inside these two -- same convention getUnitDeltas
+// above already established in this file: the caller (an RSC page)
+// asserts unit.read itself, the same way board/[projectId]/page.tsx does.
+
+export interface ActiveHoldRow {
+  holdId: string;
+  unitId: string;
+  unitNumber: string;
+  projectId: string;
+  projectName: string;
+  expiresAt: Date;
+  associateId: string;
+  associateName: string;
+  associateCode: string;
+}
+
+/** Every currently-live hold org-wide (or scoped to one project) -- the
+ *  delta-since endpoint the board polls cannot answer "list them all",
+ *  only "what changed"; this is the narrow full-list read Slice 8 needs. */
+export async function listActiveHolds(
+  db: PrismaClient,
+  params: { orgId: string; projectId?: string; now?: Date },
+): Promise<ActiveHoldRow[]> {
+  const now = params.now ?? new Date();
+  const holds = await db.unitHold.findMany({
+    where: {
+      orgId: params.orgId,
+      releasedAt: null,
+      expiresAt: { gt: now },
+      ...(params.projectId ? { unit: { projectId: params.projectId } } : {}),
+    },
+    select: {
+      id: true,
+      expiresAt: true,
+      unit: { select: { id: true, unitNumber: true, projectId: true, project: { select: { name: true } } } },
+      associate: { select: { id: true, code: true, user: { select: { name: true } } } },
+    },
+    orderBy: { expiresAt: "asc" },
+  });
+
+  return holds.map((hold) => ({
+    holdId: hold.id,
+    unitId: hold.unit.id,
+    unitNumber: hold.unit.unitNumber,
+    projectId: hold.unit.projectId,
+    projectName: hold.unit.project.name,
+    expiresAt: hold.expiresAt,
+    associateId: hold.associate.id,
+    associateName: hold.associate.user.name,
+    associateCode: hold.associate.code,
+  }));
+}
+
+export interface BlockedUnitRow {
+  unitId: string;
+  unitNumber: string;
+  projectId: string;
+  projectName: string;
+  blockReason: string | null;
+  blockedAt: Date | null;
+  blockedByLabel: string | null;
+}
+
+/** Every unit currently BLOCKED org-wide (or scoped to one project). */
+export async function listBlockedUnits(
+  db: PrismaClient,
+  params: { orgId: string; projectId?: string },
+): Promise<BlockedUnitRow[]> {
+  const units = await db.unit.findMany({
+    where: {
+      orgId: params.orgId,
+      status: "BLOCKED",
+      ...(params.projectId ? { projectId: params.projectId } : {}),
+    },
+    select: {
+      id: true,
+      unitNumber: true,
+      projectId: true,
+      project: { select: { name: true } },
+      blockReason: true,
+      blockedAt: true,
+      blockedById: true,
+    },
+    orderBy: { blockedAt: "desc" },
+  });
+
+  const blockerIds = units.map((unit) => unit.blockedById).filter((id): id is string => id !== null);
+  const blockers = blockerIds.length
+    ? await db.user.findMany({ where: { id: { in: blockerIds } }, select: { id: true, name: true } })
+    : [];
+  const blockerNameById = new Map(blockers.map((user) => [user.id, user.name]));
+
+  return units.map((unit) => ({
+    unitId: unit.id,
+    unitNumber: unit.unitNumber,
+    projectId: unit.projectId,
+    projectName: unit.project.name,
+    blockReason: unit.blockReason,
+    blockedAt: unit.blockedAt,
+    blockedByLabel: unit.blockedById ? (blockerNameById.get(unit.blockedById) ?? null) : null,
+  }));
+}
+
+export interface StockStatementRow {
+  towerName: string | null;
+  unitTypeName: string;
+  status: UnitStatus;
+  count: number;
+}
+
+/** Units grouped by tower/unit-type/EFFECTIVE status for one project -- the
+ *  "Stock statement" screen. No existing aggregation covers this shape
+ *  (getUnitDeltas is a flat per-unit list; board's own page.tsx loads the
+ *  full catalogue for display, not a grouped count).
+ *
+ *  Deliberately fetch-then-reduce in JS, not a SQL-side groupBy on the raw
+ *  `status` column: a hold past its expiresAt reads as AVAILABLE everywhere
+ *  else in this codebase (effectiveUnitStatus) even before the sweep
+ *  materialises the release, and a statement grouping on the raw column
+ *  would disagree with the board and the holds screen for as long as an
+ *  expired hold sits unswept -- confirmed live during Slice 8's own
+ *  verification. A project's unit count is bounded (hundreds, per board's
+ *  own precedent of loading the full catalogue), so this is cheap. */
+export async function getStockStatement(
+  db: PrismaClient,
+  params: { orgId: string; projectId: string; now?: Date },
+): Promise<StockStatementRow[]> {
+  const now = params.now ?? new Date();
+
+  const units = await db.unit.findMany({
+    where: { orgId: params.orgId, projectId: params.projectId },
+    select: { towerId: true, unitTypeId: true, status: true, currentHoldId: true },
+  });
+
+  const holdIds = units.map((unit) => unit.currentHoldId).filter((id): id is string => id !== null);
+  const holds = holdIds.length
+    ? await db.unitHold.findMany({ where: { id: { in: holdIds } }, select: { id: true, expiresAt: true, releasedAt: true } })
+    : [];
+  const holdById = new Map(holds.map((hold) => [hold.id, hold]));
+
+  const [towers, unitTypes] = await Promise.all([
+    db.tower.findMany({ where: { projectId: params.projectId }, select: { id: true, name: true } }),
+    db.unitType.findMany({ where: { projectId: params.projectId }, select: { id: true, name: true } }),
+  ]);
+  const towerNameById = new Map(towers.map((tower) => [tower.id, tower.name]));
+  const unitTypeNameById = new Map(unitTypes.map((unitType) => [unitType.id, unitType.name]));
+
+  const counts = new Map<string, StockStatementRow>();
+  for (const unit of units) {
+    const hold = unit.currentHoldId ? (holdById.get(unit.currentHoldId) ?? null) : null;
+    const status = effectiveUnitStatus({ status: unit.status }, hold, now);
+    const towerName = unit.towerId ? (towerNameById.get(unit.towerId) ?? null) : null;
+    const unitTypeName = unitTypeNameById.get(unit.unitTypeId) ?? unit.unitTypeId;
+    const key = `${towerName ?? ""} ${unitTypeName} ${status}`;
+
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(key, { towerName, unitTypeName, status, count: 1 });
+    }
+  }
+
+  return [...counts.values()].sort(
+    (a, b) => (a.towerName ?? "").localeCompare(b.towerName ?? "") || a.unitTypeName.localeCompare(b.unitTypeName),
+  );
+}

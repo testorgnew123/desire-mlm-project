@@ -477,6 +477,37 @@ against a backend gap — fold missing backend into the same slice.*
   published it successfully as the second approver (confirmed ACTIVE +
   the prior version ARCHIVED)
 
+### Slice 8 -- Back-office: Inventory section
+
+- [x] **Backend gap closed**: no existing function answered "list all
+  current holds" or "list blocked units" (`getUnitDeltas` is delta-since
+  only) or "units grouped by tower/type/status" -- added `listActiveHolds`,
+  `listBlockedUnits`, `getStockStatement` to `packages/services/src/units.ts`,
+  with real Postgres tests in `test/units.test.ts` (27 tests total, package
+  coverage 87%+ on this file, well above the repo's 80% gate)
+- [x] Live board -- kept at its existing path
+  (`apps/web/app/board/[projectId]`), not moved. **Route naming fix**: the
+  hub and its three sub-screens were first built at `/inventory`, which
+  collides with the PWA's own `/inventory` route (route groups don't
+  affect the URL) -- Next.js refused to build ("You cannot have two
+  parallel pages that resolve to the same path"). Renamed to `/stock`
+  (`/stock`, `/stock/holds`, `/stock/blocked`, `/stock/statement`) and
+  updated `lib/nav.ts`'s Inventory entry to match
+- [x] **Real bug caught during live testing, fixed before commit**:
+  `getStockStatement` first grouped by the unit's raw `status` column, but
+  every other inventory screen in this codebase (board, the deltas
+  endpoint, the new Active holds screen) treats a hold past its
+  `expiresAt` as AVAILABLE even before the nightly sweep runs
+  (`effectiveUnitStatus`) -- the statement would have disagreed with the
+  board for as long as an expired hold sat unswept. Fixed to fetch-then-
+  reduce with the same effective-status computation, with a test asserting
+  the exact scenario
+- [x] Verified live against a running dev server: Active holds listed 5
+  real holds (unit, project, holder name+code, expiry) accumulated from
+  earlier slices' own testing; Blocked units showed the correct honest
+  empty state; Stock statement's project picker and grouped table both
+  rendered correctly, matching the board's own live counts
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely

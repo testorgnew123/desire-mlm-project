@@ -8,7 +8,10 @@ import { InvalidTransitionError } from "../src/unit-transitions";
 import {
   UnitBlockError,
   blockUnit,
+  getStockStatement,
   getUnitDeltas,
+  listActiveHolds,
+  listBlockedUnits,
   transitionUnitStatus,
   unblockUnit,
 } from "../src/units";
@@ -362,5 +365,130 @@ describe("getUnitDeltas", () => {
 
     const own = await getUnitDeltas(db, { projectId: project.id });
     expect(own.units.map((u) => u.id)).toEqual([unit.id]);
+  });
+});
+
+describe("listActiveHolds", () => {
+  it("returns a live hold with the unit and associate it belongs to", async () => {
+    const { project, unit, associate } = await seedFixture();
+    const held = await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+
+    const rows = await listActiveHolds(db, { orgId: ORG });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      holdId: held.holdId,
+      unitId: unit.id,
+      projectId: project.id,
+      associateId: associate.id,
+      associateCode: associate.code,
+    });
+  });
+
+  it("excludes a released hold", async () => {
+    const { unit, associate } = await seedFixture();
+    const held = await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+    await db.unitHold.update({ where: { id: held.holdId }, data: { releasedAt: new Date() } });
+
+    const rows = await listActiveHolds(db, { orgId: ORG });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("excludes an expired hold even though releasedAt is still null (lazy expiry)", async () => {
+    const { unit, associate } = await seedFixture();
+    const held = await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+
+    const rows = await listActiveHolds(db, { orgId: ORG, now: new Date(held.expiresAt.getTime() + 1) });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("scopes to the given project only", async () => {
+    const { unit, associate } = await seedFixture();
+    await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+    const otherProject = await db.project.create({
+      data: { orgId: ORG, code: "OTHERPROJ", name: "Other Project", city: "Pune", state: "Maharashtra" },
+    });
+
+    const rows = await listActiveHolds(db, { orgId: ORG, projectId: otherProject.id });
+    expect(rows).toHaveLength(0);
+  });
+});
+
+describe("listBlockedUnits", () => {
+  it("returns a blocked unit with its reason and who blocked it", async () => {
+    const { unit } = await seedFixture();
+    const blocker = await db.user.create({
+      data: { orgId: ORG, email: "blocker@test.local", name: "Blocker Admin", passwordHash: "unused" },
+    });
+    await blockUnit(db, {
+      unitId: unit.id,
+      reason: "compliance freeze",
+      audit: { ...audit, actorId: blocker.id, actorLabel: blocker.name },
+    });
+
+    const rows = await listBlockedUnits(db, { orgId: ORG });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      unitId: unit.id,
+      blockReason: "compliance freeze",
+      blockedByLabel: "Blocker Admin",
+    });
+  });
+
+  it("excludes units that are not BLOCKED", async () => {
+    await seedFixture();
+    const rows = await listBlockedUnits(db, { orgId: ORG });
+    expect(rows).toHaveLength(0);
+  });
+});
+
+describe("getStockStatement", () => {
+  it("groups units by tower, unit type and status", async () => {
+    const { project, unitType } = await seedFixture();
+    const tower = await db.tower.create({
+      data: { orgId: ORG, projectId: project.id, code: "A", name: "Tower A", totalFloors: 10 },
+    });
+    await db.unit.createMany({
+      data: [
+        { orgId: ORG, projectId: project.id, towerId: tower.id, unitTypeId: unitType.id, unitNumber: "A-2", floor: 2 },
+        { orgId: ORG, projectId: project.id, towerId: tower.id, unitTypeId: unitType.id, unitNumber: "A-3", floor: 3 },
+      ],
+    });
+
+    const rows = await getStockStatement(db, { orgId: ORG, projectId: project.id });
+
+    // The fixture's own unit has no tower (towerId null); the two new ones do.
+    const towered = rows.find((row) => row.towerName === "Tower A");
+    expect(towered).toMatchObject({ unitTypeName: "2BHK", status: "AVAILABLE", count: 2 });
+
+    const untowered = rows.find((row) => row.towerName === null);
+    expect(untowered).toMatchObject({ unitTypeName: "2BHK", status: "AVAILABLE", count: 1 });
+  });
+
+  it("scopes to the given project only", async () => {
+    const { project, unitType } = await seedFixture();
+    const otherProject = await db.project.create({
+      data: { orgId: ORG, code: "OTHERPROJ", name: "Other Project", city: "Pune", state: "Maharashtra" },
+    });
+    await db.unit.create({
+      data: { orgId: ORG, projectId: otherProject.id, unitTypeId: unitType.id, unitNumber: "B-1", floor: 1 },
+    });
+
+    const rows = await getStockStatement(db, { orgId: ORG, projectId: project.id });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("groups by EFFECTIVE status, not the raw column -- a hold past its expiresAt counts as AVAILABLE even before the sweep runs", async () => {
+    const { project, unit, associate } = await seedFixture();
+    const held = await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+
+    const rows = await getStockStatement(db, {
+      orgId: ORG,
+      projectId: project.id,
+      now: new Date(held.expiresAt.getTime() + 1),
+    });
+
+    expect(rows).toEqual([{ towerName: null, unitTypeName: "2BHK", status: "AVAILABLE", count: 1 }]);
   });
 });
