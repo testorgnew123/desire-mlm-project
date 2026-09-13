@@ -189,39 +189,56 @@ Superseding [12-NFR](12-NFR.md) for as long as the free tier is in use:
 | RPO / RTO | 1 h / 4 h | **6 h / best-effort** |
 | Storage | 200 GB/yr | **0.5 GB total** |
 
-## 8. Upgrade triggers
+## 8. Upgrade triggers — superseded, kept for the record
 
-Upgrade when **any one** of these is true. Do not wait for several.
+**2026-09-13: the client cannot fund any paid service, ever — not just for now.
+There is no upgrade path.** The triggers below were written when upgrading was
+assumed to happen before Phase 4; they are kept here to show exactly what
+"staying on free permanently" means, not as a plan to act on them.
 
-| # | Trigger | Why it is the line |
+| # | Trigger | Why it would have been the line |
 |---|---|---|
-| **T1** | Real customer or associate PII enters the database | 6-hour PITR is not an acceptable DR posture for KYC |
-| **T2** | Storage passes **350 MB** (70%) | The ceiling is hard and there is no warning above it |
-| **T3** | Invocations pass **90,000/month** (72%) | Hitting the cap stops the site, mid-month |
-| **T4** | More than **10 concurrent associates** | Polling budget exhausted |
-| **T5** | Legacy data import begins | Storage and DR, together |
-| **T6** | First real payout batch | Chained runs against real money want the background-function guarantee |
-| **T7** | Compute passes **80 CU-hours/month** | Compute exhaustion suspends the database |
+| T1 | Real customer or associate PII enters the database | 6-hour PITR is not an acceptable DR posture for KYC |
+| T2 | Storage passes **350 MB** (70%) | The ceiling is hard and there is no warning above it |
+| T3 | Invocations pass **90,000/month** (72%) | Hitting the cap stops the site, mid-month |
+| T4 | More than **10 concurrent associates** | Polling budget exhausted |
+| T5 | Legacy data import begins | Storage and DR, together |
+| T6 | First real payout batch | Chained runs against real money want the background-function guarantee |
+| T7 | Compute passes **80 CU-hours/month** | Compute exhaustion suspends the database |
 
-Realistically **T1 and T5 arrive together**, at the start of the pilot. Plan for
-the free tier to cover Phases 0–3 and the internal demo, and to upgrade before
-Phase 4.
+Since none of these can be resolved by upgrading, they instead mark the point
+where the free-tier posture must be defended by other means, or the client
+must be told a specific thing is not viable at that scale:
 
-### Cost of upgrading
+- **T1/T5** (real PII / legacy import): the nightly `pg_dump`-to-Blobs backup
+  in §6 stops being optional the moment this happens — see the Decision log
+  entry below. Build it before, not after, real data lands.
+- **T2/T7** (storage/compute ceiling): the only free lever is deleting or
+  archiving data (e.g. pruning very old audit rows per a retention policy, if
+  the client ever asks for one) — there is no paid tier to fall back to.
+- **T3/T4** (invocation/concurrency ceiling): the only free lever is a slower
+  poll interval or a hard cap on concurrent associate seats. If the pilot
+  genuinely needs more than ~10 concurrent associates, that is a real
+  capability gap to raise with the client, not something engineering can
+  route around for free.
+- **T6** (first real payout): stays on the chained, cursor-persisted design
+  in §4 permanently — it was already built to not need the background-function
+  guarantee, on the theory the upgrade might not happen. It didn't.
+
+### Cost of the upgrade that will not happen
 
 | | Monthly |
 |---|---|
 | Netlify Pro | ~$19 / member |
 | Neon Launch | ~$19 |
-| **Total** | **~$40 (₹3,500)** |
+| **Total** | **~$40 (₹3,500)** — not available |
 
-That unlocks region `sin`, background functions, a 26 s sync timeout, 10 GB
-storage, 7-day PITR, and disabled autosuspend — every constraint in this
-document.
-
-> Against a project carrying 5 FTE for 20 weeks, ₹3,500/month is not a real
-> saving. Free is a sensible choice **for the build**, and a poor one the day
-> real money moves through the system.
+That would have unlocked region `sin`, background functions, a 26 s sync
+timeout, 10 GB storage, 7-day PITR, and disabled autosuspend. None of it is
+coming; every constraint in this document is the permanent operating
+envelope. Any future task that seems to need a paid service (a third-party
+API with no free tier, managed object storage, a paid monitoring/alerting
+product, etc.) is a stop-and-ask moment for the client, not a default.
 
 ## 9. Monitoring while on free
 

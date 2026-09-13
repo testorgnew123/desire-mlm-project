@@ -34,17 +34,27 @@ means commission flows through payroll under Sec. 192, and no GST arises. Many
 Indian developers nonetheless run mixed models. The field exists so this is data,
 not an assumption baked into the code.
 
-> **Open item.** Confirm the actual engagement basis with the client's CA before
-> Phase 4. It changes the TDS section, GST treatment, and whether payouts route
-> through payroll or the bank file. Getting it wrong is a compliance exposure,
-> not a bug.
+> **RESOLVED 2026-09-13, not the way this section originally hoped.** The
+> client will not engage a CA to confirm the engagement basis, TDS section, or
+> GST treatment — see `plan.md` open item 11. `TaxRate` therefore stays on the
+> PLACEHOLDER rates seeded in `packages/db/prisma/seed.ts` (SEC_192 10%,
+> SEC_194J 10%/20% no-PAN, SEC_194H 5%/20% no-PAN) indefinitely, with no
+> professionally-confirmed figure coming to replace them. **This is a real,
+> accepted compliance risk carried forward, not a resolved open item**:
+> running a real payout batch against these rates could misapply TDS or GST.
+> If a real payout must run before this changes, get an explicit client
+> sign-off on that specific risk at that moment — do not let this note's age
+> stand in for one.
 
 ### Rates are rows, not constants
 
 `TaxRate` is effective-dated with `validFrom` / `validTo`. Rates change at every
 Finance Act — Sec. 194H moved from 5% to 2% with effect from 1 October 2024.
-Seed the current values only after CA confirmation, and keep history so a
-payout run crossing a rate change resolves correctly per period.
+The current seeded values are PLACEHOLDER and will stay that way (see above) —
+the effective-dating mechanism itself is still real and correct, so if a
+confirmed rate ever does arrive, it can be seeded as a new dated row without
+any code change, and a payout run crossing that change resolves correctly per
+period.
 
 `noPanRatePct` covers Sec. 206AA — a higher rate where the payee has no PAN on
 file.
