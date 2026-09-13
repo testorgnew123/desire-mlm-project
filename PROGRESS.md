@@ -863,6 +863,77 @@ against a backend gap — fold missing backend into the same slice.*
   `db.$transaction` against this dev shell's hosted-Neon `DATABASE_URL`,
   same as every other mutation this phase has hit the limitation on.
 
+### Slice 16 -- Accessibility pass (cross-cutting, final)
+
+- [x] **Color contrast**: computed contrast ratios by hand for every text/
+  background and interactive-state token pair in `apps/web/app/globals.css`
+  actually used across this phase's screens -- `--foreground` on
+  `--background` (~16:1), `--muted-foreground` on `--background` (~4.76:1),
+  `--primary-foreground` on `--primary` (~5.17:1), `--danger`/
+  `--destructive` text on `--background` (~4.83:1), the focus `--ring`
+  against `--background` (~5.17:1). **All pass WCAG AA's 4.5:1 (normal
+  text) / 3:1 (UI/focus) thresholds** -- no token needed adjusting.
+  `--border`/`--input` (~1.2:1 against white) do not reach the stricter
+  3:1 non-text-contrast threshold (1.4.11), but every input/button in this
+  phase carries a visible label and a high-contrast focus ring as the real
+  interactive-state indicator, not the hairline border alone -- left
+  as-is rather than darkening every card/table divider in the app on a
+  borderline, debatable reading of a criterion aimed at boundary-as-sole-
+  affordance cases, which none of these are.
+- [x] **Keyboard navigation audit, one real bug found and fixed**: the
+  live board's unit detail drawer (`board/[projectId]/UnitDrawer.tsx`,
+  pre-existing since Phase 0, explicitly named in the plan) moved focus in
+  on open, returned it to the trigger tile on close, and closed on
+  Escape -- but had **no focus trap**: Tab/Shift+Tab could walk straight
+  past the dialog into the unit grid behind it, since nothing marked that
+  grid inert while the drawer was open. Fixed with a standard Tab-cycle
+  trap scoped to the panel's own focusable elements. Verified live: opened
+  a HELD unit's drawer, confirmed Tab moved through to the Close button
+  and then correctly wrapped back to it (not into a board tile) on the
+  next Tab, Escape still closed it, and focus returned to the triggering
+  tile -- all with zero server errors. Every other back-office screen
+  built this phase uses only plain native `<form>`/`<input>`/`<select>`/
+  `<button>` elements with no custom `tabIndex` or keydown interception
+  (confirmed by grep across the whole `(back-office)` tree) -- no other
+  traps found. The Collections console never grew bulk-select checkboxes
+  (each row ended up as its own inline form instead, Slice 11's own
+  scope note) -- the plan's specific worry about unlabelled checkboxes
+  there doesn't apply; there are none.
+- [x] **No colour-only status**: the board's own `status.ts` already
+  pairs every status color with a glyph and text (`short`/`long`) and
+  builds each unit tile's `aria-label` from the text form -- confirmed by
+  reading it directly, not just skimming. Every back-office screen built
+  in Slices 6-15 renders status as plain text (`{booking.status}`,
+  `{demand.status}`, `{dispute.status}`, ...) with no colored badge/dot
+  component anywhere in that tree (confirmed by grep) -- there was never
+  a color-only exception to find.
+- [x] **Screen-reader labelling on icon-only controls**: `sidebar.tsx`'s
+  `SidebarTrigger` and `sheet.tsx`'s close button both already carry an
+  `sr-only` label; the board's own drawer close button carries
+  `aria-label="Close unit details"`. Confirmed there are **no icon-only
+  buttons anywhere in the back-office screens built this phase** -- every
+  action button in every slice has a visible text label, so there was
+  nothing new to label.
+- [x] **PII masking spot-check, correctly moot**: `encryption.ts`'s
+  `last4` masking helper exists (from Phase 2) and `panLast4`/
+  `aadhaarLast4` schema fields exist, but **no screen built in this
+  entire phase displays a KYC/PAN/Aadhaar field at all** -- the Associate
+  detail page (Slice 12) shows name/code/grade/status/earnings/downline
+  only. Confirmed by grep (zero references to `panLast4`/`aadhaarLast4`
+  anywhere under `apps/web`). Nothing to fix; also confirmed no
+  `VIEW_SENSITIVE` audit action is emitted anywhere yet, consistent with
+  no reveal action existing -- both are real, tracked gaps for whichever
+  future slice actually builds a KYC-displaying screen, not silently
+  glossed over here.
+- [x] Delegated the investigation phase to a research agent (four-part
+  brief: keyboard/focus, color-only status, icon-button labelling, PII
+  masking) to keep this pass's own context small, then personally verified
+  its one actionable finding (the drawer focus trap) by reading the file,
+  fixing it, and re-testing live in the browser rather than trusting the
+  report at face value.
+- [x] **Phase 3.5 -- Frontend is now complete.** All 16 slices shipped,
+  committed, CI-green, and confirmed against prod health after each one.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
