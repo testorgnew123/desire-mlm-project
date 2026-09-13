@@ -19,6 +19,19 @@ const nextConfig: NextConfig = {
   // request-path code to import packages/services/src/password.ts.
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg"],
 
+  // pdfkit (a dependency of @react-pdf/renderer, used by the commission
+  // statement route) resolves its built-in fonts via a dynamic require
+  // keyed by font name (js/standard-fonts/Helvetica.cjs etc.) -- Next's
+  // output file tracing only follows static imports, so those font files
+  // were silently missing from the deployed Lambda. That crashed the
+  // shared server-handler function outright (MODULE_NOT_FOUND, unhandled
+  // promise rejection) on every route, not just the statement one, since
+  // Netlify bundles the whole app into one function. Confirmed via
+  // `netlify logs --source functions` against the live deploy.
+  outputFileTracingIncludes: {
+    "/api/**/*": ["../../node_modules/.pnpm/pdfkit@*/node_modules/pdfkit/js/standard-fonts/**/*"],
+  },
+
   // serverExternalPackages alone does not stop webpack from opening
   // @node-rs/argon2/index.js and its platform-specific sibling package
   // (confirmed by testing both a Server Action and a plain Route Handler
