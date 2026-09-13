@@ -18,6 +18,8 @@ import {
   confirmBooking,
   createDraftBooking,
   getBooking,
+  getBookingForActor,
+  listBookings,
 } from "../src/bookings";
 import type { AuditContext } from "../src/audit";
 
@@ -189,6 +191,65 @@ async function seedFixture(orgId: string = ORG) {
 
 function ctx(orgId: string, userId: string | null, label: string): AuditContext {
   return { orgId, actorId: userId, actorLabel: label };
+}
+
+async function renameRole(orgId: string, fromCode: string, toCode: string) {
+  const role = await db.role.findFirstOrThrow({ where: { orgId, code: fromCode } });
+  await db.role.update({ where: { id: role.id }, data: { code: toCode } });
+}
+
+/** A dedicated fixture for listBookings/getBookingForActor's scope tests --
+ *  bookings created directly (not via createDraftBooking/confirmBooking,
+ *  which this file's other tests already cover) since only the row-level
+ *  scope check on a finished Booking matters here. */
+async function seedScopeFixture(orgId: string = ORG) {
+  await db.organization.create({
+    data: { id: orgId, name: "Bookings Scope Test Org", legalName: "Bookings Scope Test Org Pvt Ltd" },
+  });
+  const project = await db.project.create({
+    data: {
+      orgId, code: "SKY", name: "Skyline", city: "Pune", state: "Maharashtra",
+      reraRegNo: "P-TEST-0001", reraValidTill: new Date("2030-01-01"),
+      holdTtlMinutes: 60, holdExtensionMinutes: 30, maxHoldExtensions: 1,
+    },
+  });
+  const unitType = await db.unitType.create({
+    data: { orgId, projectId: project.id, code: "2BHK", name: "2BHK", carpetArea: "650.00", builtUpArea: "780.00", saleableArea: "975.00" },
+  });
+  const priceList = await db.priceList.create({
+    data: { orgId, projectId: project.id, version: 1, name: "v1", status: "ACTIVE", validFrom: new Date("2020-01-01"), preparedById: "u_test" },
+  });
+  const customer = await db.customer.create({ data: { orgId, name: "Test Buyer", phone: "9999999999" } });
+
+  const admin = await makeUser(orgId, "scopeadmin", ["booking.read"]);
+  await renameRole(orgId, "ROLE_scopeadmin", "SUPER_ADMIN");
+  const mine = await makeUser(orgId, "scopemine", ["booking.read"], { associate: true });
+  await renameRole(orgId, "ROLE_scopemine", "ASSOCIATE");
+  // stranger's own role code doesn't matter -- only ever used as the OTHER
+  // party in these tests, never as the scoped actor -- so it keeps its
+  // distinct ROLE_scopestranger code rather than colliding with ASSOCIATE's
+  // @@unique([orgId, code]).
+  const stranger = await makeUser(orgId, "scopestranger", ["booking.read"], { associate: true });
+
+  async function makeBooking(sellingAssociateId: string, suffix: string) {
+    const unit = await db.unit.create({
+      data: { orgId, projectId: project.id, unitTypeId: unitType.id, unitNumber: `A-${suffix}`, floor: 1 },
+    });
+    return db.booking.create({
+      data: {
+        orgId, projectId: project.id, unitId: unit.id, customerId: customer.id, priceListId: priceList.id,
+        bookingNumber: `BK-${suffix}`, bookingDate: new Date(), status: "CONFIRMED", sellingAssociateId,
+        baseAmount: "100.00", plcAmount: "0", otherChargesAmount: "0", discountAmount: "0", gstAmount: "0",
+        stampDutyAmount: "0", registrationAmount: "0", agreementValue: "100.00", commissionableValue: "100.00",
+        saleableAreaAtBooking: "975.00", carpetAreaAtBooking: "650.00",
+      },
+    });
+  }
+
+  const mineBooking = await makeBooking(mine.associate!.id, "MINE");
+  const strangerBooking = await makeBooking(stranger.associate!.id, "STRANGER");
+
+  return { project, admin, mine, stranger, mineBooking, strangerBooking };
 }
 
 /** Independently re-derives the expected cost sheet for A-1, the way a test
@@ -645,5 +706,45 @@ describe("getBooking", () => {
 
     const wrongOrg = await getBooking(db, { orgId: OTHER_ORG, bookingId: draft.id });
     expect(wrongOrg).toBeNull();
+  });
+});
+
+describe("listBookings: scope (Phase 3.5 Slice 10 -- confirmed gap, no list existed)", () => {
+  it("an admin-shaped role sees every booking in the org", async () => {
+    const f = await seedScopeFixture();
+    const rows = await listBookings(db, { orgId: ORG, actorId: f.admin.user.id });
+    expect(rows.map((r) => r.id).sort()).toEqual([f.mineBooking.id, f.strangerBooking.id].sort());
+  });
+
+  it("an ASSOCIATE sees only their own booking, not a stranger's", async () => {
+    const f = await seedScopeFixture();
+    const rows = await listBookings(db, { orgId: ORG, actorId: f.mine.user.id });
+    expect(rows.map((r) => r.id)).toEqual([f.mineBooking.id]);
+  });
+
+  it("refuses without booking.read", async () => {
+    await seedScopeFixture();
+    const nobody = await makeUser(ORG, "scopenobody", []);
+    await expect(listBookings(db, { orgId: ORG, actorId: nobody.user.id })).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("getBookingForActor: scope", () => {
+  it("returns null (not a thrown error) for a booking outside an ASSOCIATE's scope", async () => {
+    const f = await seedScopeFixture();
+    const result = await getBookingForActor(db, { orgId: ORG, actorId: f.mine.user.id, bookingId: f.strangerBooking.id });
+    expect(result).toBeNull();
+  });
+
+  it("returns the booking when it is within the ASSOCIATE's own scope", async () => {
+    const f = await seedScopeFixture();
+    const result = await getBookingForActor(db, { orgId: ORG, actorId: f.mine.user.id, bookingId: f.mineBooking.id });
+    expect(result?.id).toBe(f.mineBooking.id);
+  });
+
+  it("an admin-shaped role can view any booking", async () => {
+    const f = await seedScopeFixture();
+    const result = await getBookingForActor(db, { orgId: ORG, actorId: f.admin.user.id, bookingId: f.strangerBooking.id });
+    expect(result?.id).toBe(f.strangerBooking.id);
   });
 });

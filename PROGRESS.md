@@ -540,6 +540,56 @@ against a backend gap — fold missing backend into the same slice.*
   the correct live row (WALK_IN: 1 lead, 0 booked, 0%) matching the
   Test Buyer lead having no booking yet.
 
+### Slice 10 -- Back-office: Bookings section
+
+- [x] **Backend gap closed**: bookings.ts had only a single-row `getBooking`
+  (org-scoped only, no row-level scope), no list existed at all. Added
+  `listBookings` (List screen) and `getBookingForActor` (Detail screen),
+  scoped exactly as the existing `GET /bookings/:id` route already
+  hand-rolled this check inline (`booking.read`: ASSOCIATE sees own,
+  TEAM_LEAD sees own + downline, everyone else with the permission sees the
+  whole org) -- same split as `leads.ts`'s `listLeads`, resolved through the
+  one scope resolver (`getAccessibleAssociateIds`), never a second hand-
+  rolled copy in the UI layer. `getBookingForActor` returns `null` (not a
+  thrown error) both for a missing booking and one outside scope, matching
+  the existing route's "don't reveal existence" reasoning.
+- [x] **Backend gap closed**: `discounts.ts`'s `decideDiscount` could only
+  act on a request id you already had -- no queue view existed. Added
+  `listPendingDiscountRequests`, filtered to exactly what this actor could
+  act on (PENDING, not their own request, within `resolveApproverRoles`'
+  band for their role) -- the same three checks `decideDiscount` itself
+  enforces, applied here as a filter instead of a thrown error.
+- [x] Real Postgres tests added: 6 for `listBookings`/`getBookingForActor`
+  scope (`bookings.test.ts`, 26 tests total in the file), 4 for
+  `listPendingDiscountRequests` (`discounts.test.ts`, 18 tests total) --
+  all passing.
+- [x] Screens: `/bookings` (list, status filter chips, link to Discount
+  approvals gated on `discount.approve`), `/bookings/[bookingId]` (cost
+  sheet, discount requests + a request form when DRAFT, a cancellation
+  panel with a live clawback preview + cancel form when CONFIRMED),
+  `/bookings/discount-approvals` (the approval queue, approve/reject forms).
+  Reused the `runAction` try/catch-and-redirect-with-message pattern from
+  Slices 7/9 for all three mutations (request discount, cancel booking,
+  decide discount).
+- [x] Verified live against a running dev server: `/bookings` listed the
+  real seeded `TEST-SEED-0001` booking (project, unit, customer, status,
+  agreement value, date) with the Discount approvals link visible for
+  SUPER_ADMIN; the detail page rendered its cost sheet, empty discount-
+  requests state, and a real clawback preview line (₹39,000 recovery) for
+  its CONFIRMED status; `/bookings/discount-approvals` showed the correct
+  honest empty state. No console errors from the running server.
+- [x] **Known environment limitation, not exercised live**: `requestDiscount`,
+  `decideDiscount` and `cancelBooking` each wrap their write in
+  `db.$transaction`, and this dev shell's `DATABASE_URL` points at hosted
+  Neon -- the same Neon round-trip latency already documented in Slice 5
+  reliably exceeds Prisma's 5s interactive-transaction timeout from this
+  environment for `createDraftBooking`/`confirmBooking`. Not attempted live
+  for the same reason it wasn't there: an infra limitation of this dev
+  shell, not a product bug. Coverage for the actual mutation logic is the
+  real-Postgres test suite (above), and the UI wiring is the same
+  `runAction`-plus-Server-Action pattern already proven live in Slice 9's
+  Reassign flow.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely

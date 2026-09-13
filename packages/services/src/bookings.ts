@@ -15,7 +15,7 @@ import type { PrismaClient, Prisma as PrismaNS, Booking, CostSheetLine, HoldRele
 // response serializers without a separate @desire/db import.
 export type { Booking, CostSheetLine };
 import { writeAuditLog, type AuditContext } from "./audit";
-import { assertPermission, ForbiddenError, getAccessibleAssociateIds } from "./rbac";
+import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
 import { effectiveUnitStatus, isHoldLive } from "./holds";
 import { assertValidTransition } from "./unit-transitions";
 import { resolveUnitAreas, type UnitTypeAreas } from "./projects";
@@ -33,6 +33,8 @@ import { accrueCommission } from "./commission";
 const CREATE_PERMISSION = "booking.create";
 const CONFIRM_PERMISSION = "booking.confirm";
 const CANCEL_PERMISSION = "booking.cancel";
+const READ_PERMISSION = "booking.read";
+const SCOPED_ROLE_CODES: ReadonlySet<string> = new Set(["ASSOCIATE", "TEAM_LEAD"]);
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -787,4 +789,74 @@ export async function getBooking(
     where: { id: params.bookingId, orgId: params.orgId },
     include: { costSheetLines: { orderBy: { displayOrder: "asc" } } },
   });
+}
+
+async function resolveActorRoleCodes(
+  db: PrismaClient | PrismaNS.TransactionClient,
+  actorId: string,
+): Promise<Set<string>> {
+  const roles = await db.userRole.findMany({
+    where: { userId: actorId },
+    select: { role: { select: { code: true } } },
+  });
+  return new Set(roles.map((r) => r.role.code));
+}
+
+export interface ListBookingsParams {
+  orgId: string;
+  actorId: string;
+  status?: Booking["status"];
+  projectId?: string;
+}
+
+/** Phase 3.5 Slice 10 -- confirmed gap, no list existed (only a single-row
+ *  getBooking). Scoped exactly as the existing GET /bookings/:id route
+ *  hand-rolls it (booking.read: ASSOCIATE sees own, TEAM_LEAD sees own +
+ *  downline, everyone else with the permission sees the whole org) -- same
+ *  split as leads.ts's listLeads, resolved through the one scope resolver. */
+export async function listBookings(db: PrismaClient, params: ListBookingsParams): Promise<Booking[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION, { projectId: params.projectId });
+
+  const where: PrismaNS.BookingWhereInput = { orgId: params.orgId };
+  if (params.status) where.status = params.status;
+  if (params.projectId) where.projectId = params.projectId;
+
+  const roleCodes = await resolveActorRoleCodes(db, params.actorId);
+  const isScoped = roleCodes.size > 0 && [...roleCodes].every((code) => SCOPED_ROLE_CODES.has(code));
+
+  if (isScoped) {
+    const caller = await db.associate.findUnique({ where: { userId: params.actorId }, select: { id: true } });
+    if (!caller) return [];
+    const mode: ScopeMode = roleCodes.has("TEAM_LEAD") ? "OWN_AND_DOWNLINE" : "OWN";
+    const accessible = await getAccessibleAssociateIds(db, caller.id, mode);
+    where.sellingAssociateId = { in: accessible };
+  }
+
+  return db.booking.findMany({ where, orderBy: { bookingDate: "desc" } });
+}
+
+/** Same row-level scope as listBookings, for a single booking -- the
+ *  back-office detail screen must not let a scoped ASSOCIATE/TEAM_LEAD view
+ *  a booking outside their own/downline by guessing its id. Returns null
+ *  (not a thrown error) both when the booking doesn't exist and when it
+ *  exists but is out of scope, same "don't reveal existence" reasoning the
+ *  GET /bookings/:id route already uses. */
+export async function getBookingForActor(
+  db: PrismaClient,
+  params: { orgId: string; actorId: string; bookingId: string },
+): Promise<(Booking & { costSheetLines: CostSheetLine[] }) | null> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+
+  const booking = await getBooking(db, { orgId: params.orgId, bookingId: params.bookingId });
+  if (!booking) return null;
+
+  const roleCodes = await resolveActorRoleCodes(db, params.actorId);
+  const isScoped = roleCodes.size > 0 && [...roleCodes].every((code) => SCOPED_ROLE_CODES.has(code));
+  if (!isScoped) return booking;
+
+  const caller = await db.associate.findUnique({ where: { userId: params.actorId }, select: { id: true } });
+  if (!caller) return null;
+  const mode: ScopeMode = roleCodes.has("TEAM_LEAD") ? "OWN_AND_DOWNLINE" : "OWN";
+  const accessible = await getAccessibleAssociateIds(db, caller.id, mode);
+  return accessible.includes(booking.sellingAssociateId) ? booking : null;
 }

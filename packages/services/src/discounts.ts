@@ -262,3 +262,42 @@ export async function decideDiscount(
     return decided;
   });
 }
+
+// ── Read ───────────────────────────────────────────────────────────────
+
+export interface PendingDiscountRequestRow extends DiscountRequest {
+  booking: { id: string; bookingNumber: string; projectId: string };
+}
+
+export interface ListPendingDiscountRequestsParams {
+  orgId: string;
+  actorId: string;
+}
+
+/** Phase 3.5 Slice 10 -- confirmed gap, no queue view existed (decideDiscount
+ *  only acts on a request whose id you already have). Returns exactly the
+ *  requests this actor could act on: PENDING, not their own request
+ *  (decideDiscount throws SelfApprovalError otherwise), and within the band
+ *  resolveApproverRoles resolves for that request's pctOfBase -- the same
+ *  three checks decideDiscount itself enforces, applied here as a filter
+ *  instead of a thrown error. */
+export async function listPendingDiscountRequests(
+  db: PrismaClient,
+  params: ListPendingDiscountRequestsParams,
+): Promise<PendingDiscountRequestRow[]> {
+  await assertPermission(db, params.actorId, APPROVE_PERMISSION);
+
+  const roles = await db.userRole.findMany({
+    where: { userId: params.actorId },
+    select: { role: { select: { code: true } } },
+  });
+  const actorRoleCodes = new Set(roles.map((r) => r.role.code));
+
+  const requests = await db.discountRequest.findMany({
+    where: { status: "PENDING", requestedById: { not: params.actorId }, booking: { orgId: params.orgId } },
+    include: { booking: { select: { id: true, bookingNumber: true, projectId: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return requests.filter((request) => resolveApproverRoles(request.pctOfBase).some((role) => actorRoleCodes.has(role)));
+}

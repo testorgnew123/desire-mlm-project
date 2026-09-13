@@ -14,6 +14,7 @@ import {
   InvalidDiscountBandError,
   SelfApprovalError,
   decideDiscount,
+  listPendingDiscountRequests,
   requestDiscount,
   resolveApproverRoles,
 } from "../src/discounts";
@@ -306,6 +307,69 @@ describe("decideDiscount: maker-checker and band membership", () => {
         discountRequestId: request.id, approve: true,
         audit: ctx(OTHER_ORG, otherOrgFixture.teamLead.user.id, "teamlead"),
       }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("listPendingDiscountRequests (Phase 3.5 Slice 10 -- confirmed gap, no queue view existed)", () => {
+  it("shows a request only to an approver within its band, not one outside it", async () => {
+    const { unit, priceList, customer, seller, teamLead, salesHead } = await seedFixture();
+    const draft = await draftBooking(ORG, unit, priceList.id, customer.id, seller);
+    const request = await requestDiscount(db, {
+      bookingId: draft.id, amount: "50000", pctOfBase: "4.00", justification: "test",
+      audit: ctx(ORG, seller.user.id, "seller"),
+    });
+
+    // teamLead's band is <=1%, ineligible for a 4% request.
+    const teamLeadQueue = await listPendingDiscountRequests(db, { orgId: ORG, actorId: teamLead.user.id });
+    expect(teamLeadQueue.find((r) => r.id === request.id)).toBeUndefined();
+
+    // salesHead is one of the two roles eligible for 3-5%.
+    const salesHeadQueue = await listPendingDiscountRequests(db, { orgId: ORG, actorId: salesHead.user.id });
+    expect(salesHeadQueue.find((r) => r.id === request.id)?.booking.bookingNumber).toBeDefined();
+  });
+
+  it("excludes the requester's own request even when they also hold an eligible role", async () => {
+    const fixture = await seedFixture();
+    // Same pattern as decideDiscount's self-approval test: grant
+    // discount.request onto the fixture's TEAM_LEAD directly.
+    const requestPerm = await db.permission.upsert({
+      where: { code: "discount.request" },
+      update: {},
+      create: { code: "discount.request", resource: "discount", action: "request" },
+    });
+    const teamLeadRole = await db.role.findFirstOrThrow({ where: { code: "TEAM_LEAD", orgId: ORG } });
+    await db.rolePermission.create({ data: { roleId: teamLeadRole.id, permissionId: requestPerm.id } });
+
+    const draft = await draftBooking(ORG, fixture.unit, fixture.priceList.id, fixture.customer.id, fixture.seller);
+    const request = await requestDiscount(db, {
+      bookingId: draft.id, amount: "1000", pctOfBase: "1.00", justification: "x",
+      audit: ctx(ORG, fixture.teamLead.user.id, "teamlead"),
+    });
+
+    const queue = await listPendingDiscountRequests(db, { orgId: ORG, actorId: fixture.teamLead.user.id });
+    expect(queue.find((r) => r.id === request.id)).toBeUndefined();
+  });
+
+  it("excludes an already-decided request", async () => {
+    const { unit, priceList, customer, seller, teamLead } = await seedFixture();
+    const draft = await draftBooking(ORG, unit, priceList.id, customer.id, seller);
+    const request = await requestDiscount(db, {
+      bookingId: draft.id, amount: "1000", pctOfBase: "1.00", justification: "x",
+      audit: ctx(ORG, seller.user.id, "seller"),
+    });
+    await decideDiscount(db, { discountRequestId: request.id, approve: true, audit: ctx(ORG, teamLead.user.id, "teamlead") });
+
+    const queue = await listPendingDiscountRequests(db, { orgId: ORG, actorId: teamLead.user.id });
+    expect(queue.find((r) => r.id === request.id)).toBeUndefined();
+  });
+
+  it("refuses without discount.approve", async () => {
+    const { unit, priceList, customer, seller } = await seedFixture();
+    await draftBooking(ORG, unit, priceList.id, customer.id, seller);
+    const nobody = await makeUser(ORG, "nobody", []);
+    await expect(
+      listPendingDiscountRequests(db, { orgId: ORG, actorId: nobody.user.id }),
     ).rejects.toThrow(ForbiddenError);
   });
 });
