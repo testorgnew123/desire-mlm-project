@@ -6,18 +6,24 @@ import "dotenv/config";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Prisma, getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
+import { encryptField } from "../src/encryption";
 import {
   DuplicatePayoutPeriodError,
   NoTaxRateConfiguredError,
   PayoutBatchNotApprovableError,
+  PayoutLineNotFoundError,
   PayoutMakerCheckerViolationError,
+  RecoveryAlreadyResolvedError,
+  RecoveryNotFoundError,
   approveBatch,
   exportBatch,
   getPayoutBatch,
+  getPayoutLineStatement,
   listAdjustments,
   listPayoutBatches,
   listRecoveries,
   prepareBatch,
+  writeOffRecovery,
 } from "../src/payouts";
 import type { AuditContext } from "../src/audit";
 
@@ -45,6 +51,7 @@ async function reset() {
     await db.priceListItem.deleteMany({ where: { priceList: { orgId } } });
     await db.priceList.deleteMany({ where: { orgId } });
     await db.unitType.deleteMany({ where: { orgId } });
+    await db.associateHierarchy.deleteMany({ where: { associate: { orgId } } });
     await db.associate.deleteMany({ where: { orgId } });
     await db.userRole.deleteMany({ where: { role: { orgId } } });
     await db.rolePermission.deleteMany({ where: { role: { orgId } } });
@@ -67,12 +74,21 @@ async function makeUser(orgId: string, label: string, codes: string[]) {
   return user;
 }
 
-async function makeAssociate(orgId: string, label: string, engagementType: "EMPLOYEE" | "CONSULTANT", opts: { isGstRegistered?: boolean } = {}) {
+async function makeAssociate(
+  orgId: string,
+  label: string,
+  engagementType: "EMPLOYEE" | "CONSULTANT" | "CHANNEL_PARTNER",
+  opts: { isGstRegistered?: boolean; hasPan?: boolean; bankAccountNumber?: string; bankIfsc?: string; bankName?: string } = {},
+) {
   const user = await makeUser(orgId, label, []);
   return db.associate.create({
     data: {
       orgId, userId: user.id, code: `A-${label}`, engagementType, joinDate: new Date("2020-01-01"),
       status: "ACTIVE", isGstRegistered: opts.isGstRegistered ?? false,
+      panEncrypted: opts.hasPan ? encryptField("ABCDE1234F") : undefined,
+      bankAccountEncrypted: opts.bankAccountNumber ? encryptField(opts.bankAccountNumber) : undefined,
+      bankIfsc: opts.bankIfsc,
+      bankName: opts.bankName,
     },
   });
 }
@@ -124,6 +140,11 @@ function ctx(orgId: string, userId: string, label: string): AuditContext {
   return { orgId, actorId: userId, actorLabel: label };
 }
 
+async function renameRole(orgId: string, fromCode: string, toCode: string) {
+  const role = await db.role.findFirstOrThrow({ where: { orgId, code: fromCode } });
+  await db.role.update({ where: { id: role.id }, data: { code: toCode } });
+}
+
 beforeEach(reset);
 afterAll(async () => {
   await reset();
@@ -165,6 +186,32 @@ describe("prepareBatch: tax resolved per engagementType, PayoutLineEntry provena
     expect(line.gstRatePct?.toString()).toBe("18");
     expect(line.gstAmount.toString()).toBe("18000");
     expect(line.netPayable.toString()).toBe("108000"); // 100000 + 18000 gst - 10000 tds
+  });
+
+  it("applies the higher Sec. 206AA rate when the beneficiary has no PAN on file", async () => {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const noPan = await makeAssociate(ORG, "nopan", "EMPLOYEE", { hasPan: false });
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", noPanRatePct: "20.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, noPan.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
+
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+    const line = await db.payoutLine.findFirstOrThrow({ where: { batchId: result.batchId, associateId: noPan.id } });
+    expect(line.tdsRatePct.toString()).toBe("20");
+    expect(line.tdsAmount.toString()).toBe("10000"); // 20% of 50000, not 10%
+  });
+
+  it("uses the base rate when the beneficiary HAS a PAN on file, even if a no-PAN rate is configured", async () => {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const hasPan = await makeAssociate(ORG, "haspan", "EMPLOYEE", { hasPan: true });
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", noPanRatePct: "20.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, hasPan.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
+
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+    const line = await db.payoutLine.findFirstOrThrow({ where: { batchId: result.batchId, associateId: hasPan.id } });
+    expect(line.tdsRatePct.toString()).toBe("10");
+    expect(line.tdsAmount.toString()).toBe("5000");
   });
 
   it("throws when no TaxRate is configured for the section", async () => {
@@ -311,8 +358,8 @@ describe("approveBatch: maker-checker", () => {
   });
 });
 
-describe("exportBatch: structural stub", () => {
-  it("sets a stub bankFileStorageKey and moves the batch to EXPORTED", async () => {
+describe("exportBatch: real CSVs, split by destination (Phase 4 -- confirmed gap)", () => {
+  it("routes an EMPLOYEE line to the payroll handoff CSV, not the bank file", async () => {
     const { booking, scheme } = await seedBookingAndScheme(ORG);
     const employee = await makeAssociate(ORG, "emp", "EMPLOYEE");
     await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
@@ -325,7 +372,58 @@ describe("exportBatch: structural stub", () => {
     const exported = await exportBatch(db, { batchId: result.batchId, audit: ctx(ORG, approver.id, "approver") });
 
     expect(exported.status).toBe("EXPORTED");
-    expect(exported.bankFileStorageKey).toBe(`stub/payout-batches/${result.batchId}.bank-file`);
+    expect(exported.bankFileLineCount).toBe(0);
+    expect(exported.payrollLineCount).toBe(1);
+    expect(exported.payrollHandoffCsv).toContain("emp");
+    expect(exported.bankFileCsv).not.toContain("emp");
+    // Real, not a fake stub -- still a queryable reference, not blob storage.
+    expect(exported.bankFileStorageKey).toContain(result.batchId);
+  });
+
+  it("routes a CONSULTANT line to the bank file with the decrypted account number, and audits the reveal", async () => {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const consultant = await makeAssociate(ORG, "cons", "CONSULTANT", { bankAccountNumber: "000111222333", bankIfsc: "HDFC0001234", bankName: "HDFC Bank" });
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_194J", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, consultant.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
+    const approver = await makeUser(ORG, "approver", ["payout.approve", "payout.export"]);
+
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+    await approveBatch(db, { batchId: result.batchId, audit: ctx(ORG, approver.id, "approver") });
+    const exported = await exportBatch(db, { batchId: result.batchId, audit: ctx(ORG, approver.id, "approver") });
+
+    expect(exported.bankFileLineCount).toBe(1);
+    expect(exported.payrollLineCount).toBe(0);
+    expect(exported.bankFileCsv).toContain("000111222333");
+    expect(exported.bankFileCsv).toContain("HDFC0001234");
+    expect(exported.bankFileCsv).toContain("HDFC Bank");
+
+    const revealRow = await db.auditLog.findFirstOrThrow({
+      where: { entity: "Associate", entityId: consultant.id, action: "VIEW_SENSITIVE" },
+    });
+    expect(revealRow.reason).toContain(result.batchNumber);
+  });
+
+  it("refuses without payout.export", async () => {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "emp", "EMPLOYEE");
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, employee.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
+
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+    await expect(exportBatch(db, { batchId: result.batchId, audit: ctx(ORG, preparer.id, "preparer") })).rejects.toThrow(ForbiddenError);
+  });
+
+  it("refuses a batch that is not yet APPROVED", async () => {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "emp", "EMPLOYEE");
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, employee.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare", "payout.export"]);
+
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+    await expect(exportBatch(db, { batchId: result.batchId, audit: ctx(ORG, preparer.id, "preparer") })).rejects.toThrow("cannot be exported from status DRAFT");
   });
 });
 
@@ -432,5 +530,138 @@ describe("listRecoveries / listAdjustments (Phase 3.5 Slice 14 -- confirmed gap)
     const noPerms = await makeUser(ORG, "noperms3", []);
     await expect(listRecoveries(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
     await expect(listAdjustments(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("writeOffRecovery (Phase 4 -- confirmed gap: recovery.write_off + RecoveryStatus.WRITTEN_OFF existed, nothing implemented it)", () => {
+  it("writes off an outstanding recovery, zeroing the outstanding amount", async () => {
+    await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "woemp", "EMPLOYEE");
+    const recovery = await db.recovery.create({
+      data: { orgId: ORG, associateId: employee.id, amount: "5000", outstandingAmount: "5000", reason: "test clawback" },
+    });
+    const finance = await makeUser(ORG, "wofinance", ["recovery.write_off"]);
+
+    const written = await writeOffRecovery(db, { recoveryId: recovery.id, reason: "Uncollectible, associate exited", audit: ctx(ORG, finance.id, "wofinance") });
+    expect(written.status).toBe("WRITTEN_OFF");
+    expect(written.outstandingAmount.toString()).toBe("0");
+    expect(written.writtenOffById).toBe(finance.id);
+    expect(written.writtenOffAt).not.toBeNull();
+
+    const auditRow = await db.auditLog.findFirstOrThrow({ where: { entity: "Recovery", entityId: recovery.id, action: "UPDATE" } });
+    expect(auditRow.reason).toBe("Uncollectible, associate exited");
+  });
+
+  it("refuses a recovery that is already RECOVERED or WRITTEN_OFF", async () => {
+    await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "woemp2", "EMPLOYEE");
+    const recovery = await db.recovery.create({
+      data: { orgId: ORG, associateId: employee.id, amount: "5000", outstandingAmount: "0", status: "RECOVERED", reason: "test clawback" },
+    });
+    const finance = await makeUser(ORG, "wofinance2", ["recovery.write_off"]);
+
+    await expect(
+      writeOffRecovery(db, { recoveryId: recovery.id, reason: "x", audit: ctx(ORG, finance.id, "wofinance2") }),
+    ).rejects.toThrow(RecoveryAlreadyResolvedError);
+  });
+
+  it("throws for a recovery that does not exist", async () => {
+    await seedBookingAndScheme(ORG);
+    const finance = await makeUser(ORG, "wofinance3", ["recovery.write_off"]);
+    await expect(
+      writeOffRecovery(db, { recoveryId: "nope", reason: "x", audit: ctx(ORG, finance.id, "wofinance3") }),
+    ).rejects.toThrow(RecoveryNotFoundError);
+  });
+
+  it("refuses a recovery belonging to another organisation", async () => {
+    await seedBookingAndScheme(ORG);
+    await seedBookingAndScheme(OTHER_ORG);
+    const otherEmployee = await makeAssociate(OTHER_ORG, "woother", "EMPLOYEE");
+    const otherRecovery = await db.recovery.create({
+      data: { orgId: OTHER_ORG, associateId: otherEmployee.id, amount: "5000", outstandingAmount: "5000", reason: "test clawback" },
+    });
+    const finance = await makeUser(ORG, "wofinance4", ["recovery.write_off"]);
+
+    await expect(
+      writeOffRecovery(db, { recoveryId: otherRecovery.id, reason: "x", audit: ctx(ORG, finance.id, "wofinance4") }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("refuses without recovery.write_off", async () => {
+    await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "woemp5", "EMPLOYEE");
+    const recovery = await db.recovery.create({
+      data: { orgId: ORG, associateId: employee.id, amount: "5000", outstandingAmount: "5000", reason: "test clawback" },
+    });
+    const noPerms = await makeUser(ORG, "wonoperms", []);
+
+    await expect(
+      writeOffRecovery(db, { recoveryId: recovery.id, reason: "x", audit: ctx(ORG, noPerms.id, "wonoperms") }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("getPayoutLineStatement (Phase 4 -- data behind the commission statement PDF)", () => {
+  async function grantPermission(roleCode: string, permissionCode: string) {
+    const role = await db.role.findFirstOrThrow({ where: { orgId: ORG, code: roleCode } });
+    const [resource, action] = permissionCode.split(".");
+    const perm = await db.permission.upsert({
+      where: { code: permissionCode },
+      update: {},
+      create: { code: permissionCode, resource: resource!, action: action! },
+    });
+    await db.rolePermission.create({ data: { roleId: role.id, permissionId: perm.id } });
+  }
+
+  async function seedStatementFixture() {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "stmt", "EMPLOYEE");
+    await renameRole(ORG, "ROLE_stmt", "ASSOCIATE");
+    await grantPermission("ASSOCIATE", "commission.read");
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, employee.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "stmtpreparer", ["payout.prepare"]);
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+    const line = await db.payoutLine.findFirstOrThrow({ where: { batchId: result.batchId, associateId: employee.id } });
+    return { employee, line, batchNumber: result.batchNumber };
+  }
+
+  it("returns the line, its batch, and the commission entries backing it, for the beneficiary's own user", async () => {
+    const f = await seedStatementFixture();
+    const employeeUser = await db.user.findFirstOrThrow({ where: { orgId: ORG, email: `stmt-${ORG}@test.local` } });
+
+    const statement = await getPayoutLineStatement(db, { orgId: ORG, actorId: employeeUser.id, payoutLineId: f.line.id });
+    expect(statement.line.id).toBe(f.line.id);
+    expect(statement.batch.batchNumber).toBe(f.batchNumber);
+    expect(statement.entries).toHaveLength(1);
+    expect(statement.entries[0]!.entry.grossAmount.toString()).toBe("50000");
+  });
+
+  it("an admin-shaped role may view any line in the org", async () => {
+    const f = await seedStatementFixture();
+    const admin = await makeUser(ORG, "stmtadmin", ["commission.read"]);
+    await renameRole(ORG, "ROLE_stmtadmin", "SUPER_ADMIN");
+
+    const statement = await getPayoutLineStatement(db, { orgId: ORG, actorId: admin.id, payoutLineId: f.line.id });
+    expect(statement.line.id).toBe(f.line.id);
+  });
+
+  it("refuses a stranger with no relation to the beneficiary", async () => {
+    const f = await seedStatementFixture();
+    const stranger = await makeUser(ORG, "stmtstranger", ["commission.read"]);
+
+    await expect(
+      getPayoutLineStatement(db, { orgId: ORG, actorId: stranger.id, payoutLineId: f.line.id }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("throws for a payout line that does not exist", async () => {
+    await seedBookingAndScheme(ORG);
+    const admin = await makeUser(ORG, "stmtadmin2", ["commission.read"]);
+    await renameRole(ORG, "ROLE_stmtadmin2", "SUPER_ADMIN");
+
+    await expect(
+      getPayoutLineStatement(db, { orgId: ORG, actorId: admin.id, payoutLineId: "nope" }),
+    ).rejects.toThrow(PayoutLineNotFoundError);
   });
 });

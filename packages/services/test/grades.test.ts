@@ -5,6 +5,7 @@ import "dotenv/config";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
+import { PayoutPeriodOpenError } from "../src/payouts";
 import {
   AssociateNotFoundError,
   DuplicateGradeCodeError,
@@ -22,6 +23,7 @@ const OTHER_ORG = "org_test_grades_other";
 
 async function reset() {
   for (const orgId of [ORG, OTHER_ORG]) {
+    await db.payoutBatch.deleteMany({ where: { orgId } });
     await db.auditLog.deleteMany({ where: { orgId } });
     await db.associateGrade.deleteMany({ where: { associate: { orgId } } });
     await db.associateHierarchy.deleteMany({ where: { associate: { orgId } } });
@@ -193,6 +195,27 @@ describe("assignGrade: close-and-insert, never update", () => {
     await expect(
       assignGrade(db, { associateId: f.associate.associate!.id, gradeId: "nope", audit: ctx(ORG, f.admin.user.id, "admin") }),
     ).rejects.toThrow(GradeNotFoundError);
+  });
+
+  it("Phase 4: refuses while a payout batch for the org is open", async () => {
+    const f = await seedFixture();
+    const grade = await createGrade(db, { code: "G4", name: "x", rank: 4, audit: ctx(ORG, f.admin.user.id, "admin") });
+    await db.payoutBatch.create({
+      data: { orgId: ORG, batchNumber: "PB-0001", periodStart: new Date("2026-01-01"), periodEnd: new Date("2026-01-31"), status: "DRAFT", preparedById: f.admin.user.id },
+    });
+    await expect(
+      assignGrade(db, { associateId: f.associate.associate!.id, gradeId: grade.id, audit: ctx(ORG, f.admin.user.id, "admin") }),
+    ).rejects.toThrow(PayoutPeriodOpenError);
+  });
+
+  it("Phase 4: allows assignment once the payout batch is PAID (no longer open)", async () => {
+    const f = await seedFixture();
+    const grade = await createGrade(db, { code: "G4", name: "x", rank: 4, audit: ctx(ORG, f.admin.user.id, "admin") });
+    await db.payoutBatch.create({
+      data: { orgId: ORG, batchNumber: "PB-0002", periodStart: new Date("2026-01-01"), periodEnd: new Date("2026-01-31"), status: "PAID", preparedById: f.admin.user.id },
+    });
+    const assignment = await assignGrade(db, { associateId: f.associate.associate!.id, gradeId: grade.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+    expect(assignment.gradeId).toBe(grade.id);
   });
 });
 

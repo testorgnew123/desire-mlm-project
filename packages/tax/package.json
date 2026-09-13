@@ -1,5 +1,5 @@
 {
-  "name": "@desire/services",
+  "name": "@desire/tax",
   "private": true,
   "version": "0.0.0",
   "main": "./src/index.ts",
@@ -12,22 +12,11 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@desire/commission": "workspace:*",
-    "@desire/db": "workspace:*",
-    "@desire/tax": "workspace:*",
-    "@node-rs/argon2": "^2.0.2",
-    "decimal.js": "^10.4.3",
-    "otplib": "^12.0.1",
-    "dotenv": "^16.4.7"
+    "decimal.js": "^10.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
-  },
-  "exports": {
-    ".": "./src/index.ts",
-    "./*": "./src/*.ts"
   }
 }

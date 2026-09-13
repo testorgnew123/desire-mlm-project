@@ -5,7 +5,10 @@ import { listRecoveries } from "@desire/services/payouts";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { writeOffRecoveryAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +16,16 @@ export const metadata: Metadata = {
   title: "Recoveries — Desire",
 };
 
-export default async function RecoveriesPage() {
+/** Write-off form added Phase 4 -- recovery.write_off and RecoveryStatus.
+ *  WRITTEN_OFF both existed with no way to actually invoke the capability
+ *  until writeOffRecovery shipped; leaving it unreachable from any screen
+ *  would be an odd half-shipped state given it now works end to end. */
+export default async function RecoveriesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
   const session = await requireSession();
   const db = getPrismaClient();
 
@@ -27,6 +39,12 @@ export default async function RecoveriesPage() {
           Payouts
         </Link>
       </div>
+
+      {error ? (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
 
       <Card>
         <CardContent className="overflow-x-auto">
@@ -42,6 +60,7 @@ export default async function RecoveriesPage() {
                   <th className="py-1.5 pr-4">Status</th>
                   <th className="py-1.5 pr-4">Reason</th>
                   <th className="py-1.5 pr-4">Raised</th>
+                  <th className="py-1.5 pr-4">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -57,6 +76,17 @@ export default async function RecoveriesPage() {
                     <td className="py-1.5 pr-4">{recovery.status}</td>
                     <td className="py-1.5 pr-4">{recovery.reason}</td>
                     <td className="py-1.5 pr-4 tabular-nums">{formatDate(recovery.createdAt)}</td>
+                    <td className="py-1.5 pr-4">
+                      {recovery.status === "OUTSTANDING" || recovery.status === "PARTIALLY_RECOVERED" ? (
+                        <form action={writeOffRecoveryAction} className="flex items-center gap-1.5">
+                          <input type="hidden" name="recoveryId" value={recovery.id} />
+                          <Input name="reason" placeholder="Write-off reason" className="h-7 w-40 text-xs" required />
+                          <Button type="submit" size="xs" variant="destructive">
+                            Write off
+                          </Button>
+                        </form>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

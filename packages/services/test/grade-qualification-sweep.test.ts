@@ -10,6 +10,7 @@ const ORG = "org_test_grade_sweep";
 const NOW = new Date("2026-06-15");
 
 async function reset() {
+  await db.payoutBatch.deleteMany({ where: { orgId: ORG } });
   await db.commissionEntry.deleteMany({ where: { orgId: ORG } });
   await db.commissionScheme.deleteMany({ where: { orgId: ORG } });
   await db.booking.deleteMany({ where: { orgId: ORG } });
@@ -142,5 +143,23 @@ describe("runGradeQualificationSweep", () => {
 
     const current = await db.associateGrade.findFirstOrThrow({ where: { associateId: associate.id, validTo: null } });
     expect(current.gradeId).toBe(salesGrade.id);
+  });
+
+  it("Phase 4: skips promoting an otherwise-qualifying associate while their org has an open payout batch", async () => {
+    const { g1 } = await seedOrgAndGrades();
+    // Identical to the "promotes an associate who meets a grade's tenure
+    // threshold" case above -- the only difference is the open batch.
+    const associate = await makeAssociate("tenured-frozen", new Date("2025-01-01"));
+    await db.associateGrade.create({ data: { associateId: associate.id, gradeId: g1.id, validFrom: new Date("2025-01-01") } });
+    await db.payoutBatch.create({
+      data: { orgId: ORG, batchNumber: "PB-SWEEP-001", periodStart: new Date("2026-01-01"), periodEnd: new Date("2026-02-01"), status: "DRAFT", preparedById: "u_test" },
+    });
+
+    const result = await runGradeQualificationSweep(db, { now: NOW });
+    expect(result.evaluated).toBeGreaterThanOrEqual(1);
+    expect(result.promoted).toBe(0);
+
+    const current = await db.associateGrade.findFirstOrThrow({ where: { associateId: associate.id, validTo: null } });
+    expect(current.gradeId).toBe(g1.id);
   });
 });

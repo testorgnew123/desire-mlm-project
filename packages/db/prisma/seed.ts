@@ -247,6 +247,113 @@ async function seedPricing() {
   console.log(`  ${chargeHeads.length} charge heads, price list v1 ACTIVE (prepared ${preparer.email}, approved ${approver.email})`);
 }
 
+// PLACEHOLDER TDS rates -- BLOCKED#11 (CA confirmation of engagement type /
+// TDS section / GST treatment) is still open, tracked in PROGRESS.md. Without
+// a row here prepareBatch cannot run at all (NoTaxRateConfiguredError), so a
+// placeholder is seeded rather than leaving the feature undemoable.
+async function seedTaxRates() {
+  const rates = [
+    // Sec 192 (salary, EMPLOYEE engagement) -- flat placeholder; real salary
+    // TDS is slab-based and PAN is a pre-employment requirement, so no
+    // no-PAN branch is modeled here.
+    { section: "SEC_192" as const, ratePct: "10.00", noPanRatePct: null },
+    // Sec 194J (professional fees, CONSULTANT) -- Sec 206AA no-PAN rate.
+    { section: "SEC_194J" as const, ratePct: "10.00", noPanRatePct: "20.00" },
+    // Sec 194H (commission/brokerage, CHANNEL_PARTNER) -- Sec 206AA no-PAN rate.
+    { section: "SEC_194H" as const, ratePct: "5.00", noPanRatePct: "20.00" },
+  ];
+
+  let created = 0;
+  for (const rate of rates) {
+    const existing = await prisma.taxRate.findFirst({
+      where: { orgId: ORG_ID, section: rate.section, validTo: null },
+    });
+    if (existing) continue;
+    await prisma.taxRate.create({
+      data: {
+        orgId: ORG_ID,
+        section: rate.section,
+        ratePct: rate.ratePct,
+        noPanRatePct: rate.noPanRatePct,
+        validFrom: new Date("2024-01-01"),
+        note: "PLACEHOLDER -- pending CA confirmation (BLOCKED#11)",
+      },
+    });
+    created++;
+  }
+
+  console.log(`  ${created} PLACEHOLDER tax rates created (${rates.length - created} already present)`);
+}
+
+// A demo PAID batch so the read-only payout screens (list/detail, statement
+// PDF) have something real to render against -- otherwise every one of them
+// shows an empty state and can't actually be exercised. No underlying
+// CommissionEntry is seeded (Phase 0 doesn't seed bookings/commissions), so
+// the line's statement legitimately shows zero entries -- an honest empty
+// state, not a fabricated one.
+async function seedDemoPayoutBatch() {
+  const existing = await prisma.payoutBatch.findFirst({
+    where: { orgId: ORG_ID, batchNumber: "PB-DEMO-0001" },
+  });
+  if (existing) {
+    console.log(`  demo payout batch ${existing.batchNumber} already present`);
+    return;
+  }
+
+  const associate = await prisma.associate.findUniqueOrThrow({
+    where: { orgId_code: { orgId: ORG_ID, code: "A-DEMO-ASSOCIATE" } },
+  });
+  const preparer = await prisma.user.findUniqueOrThrow({
+    where: { orgId_email: { orgId: ORG_ID, email: "finance_admin@demo.test" } },
+  });
+  const approver = await prisma.user.findUniqueOrThrow({
+    where: { orgId_email: { orgId: ORG_ID, email: "super_admin@demo.test" } },
+  });
+
+  const preparedAt = new Date("2024-02-01");
+  const approvedAt = new Date("2024-02-02");
+  const paidAt = new Date("2024-02-05");
+
+  await prisma.payoutBatch.create({
+    data: {
+      orgId: ORG_ID,
+      batchNumber: "PB-DEMO-0001",
+      periodStart: new Date("2024-01-01"),
+      periodEnd: new Date("2024-01-31"),
+      status: "PAID",
+      totalGross: "50000.00",
+      totalTds: "5000.00",
+      totalGst: "0.00",
+      totalRecovery: "0.00",
+      totalAdjustment: "0.00",
+      totalNetPayable: "45000.00",
+      preparedById: preparer.id,
+      preparedAt,
+      approvedById: approver.id,
+      approvedAt,
+      exportedAt: paidAt,
+      paidAt,
+      lines: {
+        create: [
+          {
+            associateId: associate.id,
+            grossAmount: "50000.00",
+            tdsSection: "SEC_192",
+            tdsRatePct: "10.00",
+            tdsAmount: "5000.00",
+            gstAmount: "0.00",
+            recoveryAdjustment: "0.00",
+            otherAdjustment: "0.00",
+            netPayable: "45000.00",
+          },
+        ],
+      },
+    },
+  });
+
+  console.log("  demo payout batch PB-DEMO-0001 (PAID, 1 line)");
+}
+
 async function seedTestUsers() {
   const passwordHash = await argon2Hash(DEMO_PASSWORD);
   let created = 0;
@@ -338,6 +445,13 @@ async function main() {
   // After the users: the price list records who prepared and who approved it.
   console.log("Seeding charge heads + price list...");
   await seedPricing();
+
+  console.log("Seeding PLACEHOLDER tax rates...");
+  await seedTaxRates();
+
+  // After users + tax rates: the batch references both.
+  console.log("Seeding demo payout batch...");
+  await seedDemoPayoutBatch();
 
   console.log("Seed complete.");
 }

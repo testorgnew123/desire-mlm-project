@@ -11,6 +11,7 @@ import type { PrismaClient, Grade, AssociateGrade } from "@desire/db";
 export type { Grade, AssociateGrade };
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
+import { assertPayoutPeriodNotOpen } from "./payouts";
 
 const GRADE_WRITE_PERMISSION = "project.write";
 const ASSIGN_PERMISSION = "grade.change";
@@ -218,6 +219,12 @@ export async function assignGrade(db: PrismaClient, params: AssignGradeParams): 
 
     await assertPermission(tx, actorId, ASSIGN_PERMISSION);
 
+    // Phase 4: a grade change underneath an open payout batch would let a
+    // batch be computed against a population that shifted mid-period, same
+    // reasoning associates.ts's moveAssociate already applies to hierarchy
+    // moves -- see payouts.ts's own comment on this check.
+    await assertPayoutPeriodNotOpen(tx, params.audit.orgId);
+
     const current = await tx.associateGrade.findFirst({ where: { associateId: associate.id, validTo: null } });
     if (current) {
       await tx.associateGrade.update({ where: { id: current.id }, data: { validTo: now } });
@@ -307,9 +314,19 @@ export async function runGradeQualificationSweep(db: PrismaClient, params: { now
 
   const associates = await db.associate.findMany({ where: { status: "ACTIVE" }, select: { id: true, orgId: true, joinDate: true } });
 
+  // Phase 4: resolved once, not per associate -- a grade auto-promotion
+  // underneath an open payout batch has the same "population shifted
+  // mid-period" problem assignGrade's own check exists for.
+  const frozenOrgIds = new Set(
+    (await db.payoutBatch.findMany({ where: { status: { in: ["DRAFT", "PENDING_APPROVAL", "APPROVED"] } }, select: { orgId: true } })).map(
+      (b) => b.orgId,
+    ),
+  );
+
   for (const associate of associates) {
     await db.$transaction(async (tx) => {
       evaluated++;
+      if (frozenOrgIds.has(associate.orgId)) return;
 
       const current = await tx.associateGrade.findFirst({
         where: { associateId: associate.id, validTo: null },

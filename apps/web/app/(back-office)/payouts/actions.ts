@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
-import { approveBatch, exportBatch, prepareBatch } from "@desire/services/payouts";
+import { approveBatch, exportBatch, prepareBatch, writeOffRecovery } from "@desire/services/payouts";
 import { requireSession } from "@/lib/session";
 
 function auditFor(session: { user: { orgId: string; id: string; name: string } }) {
@@ -53,5 +53,16 @@ export async function exportBatchAction(formData: FormData): Promise<void> {
 
   await runAction(`/payouts/batches/${batchId}`, () =>
     exportBatch(db, { batchId, audit: auditFor(session) }).then(() => undefined),
+  );
+}
+
+export async function writeOffRecoveryAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const recoveryId = String(formData.get("recoveryId") ?? "");
+  const reason = String(formData.get("reason") ?? "");
+  const db = getPrismaClient();
+
+  await runAction("/payouts/recoveries", () =>
+    writeOffRecovery(db, { recoveryId, reason, audit: auditFor(session) }).then(() => undefined),
   );
 }

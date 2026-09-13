@@ -6,11 +6,11 @@ import { getPrismaClient } from "@desire/db";
 import { SessionInvalidError, validateSession } from "@desire/services/auth";
 import { ForbiddenError } from "@desire/services/rbac";
 import { AssociateNotFoundError } from "@desire/services/grades";
+import { PayoutPeriodOpenError } from "@desire/services/payouts";
 import {
   CycleDetectedError,
   MoveReasonRequiredError,
   ParentNotPlacedError,
-  PayoutPeriodOpenError,
   SelfReferralError,
   moveAssociate,
   type AssociateHierarchy,

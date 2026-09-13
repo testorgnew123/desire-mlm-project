@@ -2,19 +2,15 @@
 // (PROGRESS.md, docs/03-DATA-MODEL.md's AssociateHierarchy comment,
 // docs/07-API.md's Network & grades table).
 import { Prisma } from "@desire/db";
-import type { PrismaClient, Prisma as PrismaNS, AssociateHierarchy, PayoutBatchStatus } from "@desire/db";
+import type { PrismaClient, Prisma as PrismaNS, AssociateHierarchy } from "@desire/db";
 export type { AssociateHierarchy };
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
 import { AssociateNotFoundError } from "./grades";
+import { assertPayoutPeriodNotOpen } from "./payouts";
 
 const MOVE_PERMISSION = "associate.move";
 const READ_PERMISSION = "associate.read";
-
-// Batches in these statuses are "open" -- a hierarchy move underneath one
-// would let a batch be computed against a tree that shifted mid-period
-// (schema's own comment on PayoutBatch).
-const OPEN_PAYOUT_BATCH_STATUSES: PayoutBatchStatus[] = ["DRAFT", "PENDING_APPROVAL", "APPROVED"];
 
 const ADMIN_ROLE_CODES: ReadonlySet<string> = new Set(["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD", "SALES_ADMIN", "AUDITOR"]);
 
@@ -35,13 +31,6 @@ export class CycleDetectedError extends Error {
   ) {
     super(`Moving associate ${associateId} under ${newParentId} would make ${associateId} its own ancestor.`);
     this.name = "CycleDetectedError";
-  }
-}
-
-export class PayoutPeriodOpenError extends Error {
-  constructor(public readonly batchId: string) {
-    super(`A payout batch (${batchId}) is currently open; hierarchy moves are rejected until it closes.`);
-    this.name = "PayoutPeriodOpenError";
   }
 }
 
@@ -125,11 +114,7 @@ export async function moveAssociate(db: PrismaClient, params: MoveAssociateParam
 
     await assertPermission(tx, actorId, MOVE_PERMISSION);
 
-    const openBatch = await tx.payoutBatch.findFirst({
-      where: { orgId: params.audit.orgId, status: { in: OPEN_PAYOUT_BATCH_STATUSES } },
-      select: { id: true },
-    });
-    if (openBatch) throw new PayoutPeriodOpenError(openBatch.id);
+    await assertPayoutPeriodNotOpen(tx, params.audit.orgId);
 
     const currentPlacement = await tx.associateHierarchy.findFirst({ where: { associateId: associate.id, validTo: null } });
 

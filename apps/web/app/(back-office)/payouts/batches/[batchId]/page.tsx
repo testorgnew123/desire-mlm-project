@@ -18,9 +18,7 @@ export const metadata: Metadata = {
 
 /** Approve/export folded onto the detail page -- same "detail page owns its
  *  own actions" pattern as every other maker-checker screen this phase
- *  (CRM Slice 9, Bookings Slice 10, Network Slice 12). Statements (PDF) are
- *  explicitly out of scope this slice -- see the Payouts list page's own
- *  comment. */
+ *  (CRM Slice 9, Bookings Slice 10, Network Slice 12). */
 export default async function PayoutBatchDetailPage({
   params,
   searchParams,
@@ -101,7 +99,20 @@ export default async function PayoutBatchDetailPage({
             </form>
           ) : null}
           {batch.status === "EXPORTED" ? (
-            <p className="text-sm text-muted-foreground">Exported. Statement PDFs are a tracked follow-up (see PROGRESS.md).</p>
+            <>
+              <a
+                href={`/api/v1/payouts/batches/${batch.id}/export?file=bank`}
+                className="text-sm text-primary hover:underline"
+              >
+                Download bank file
+              </a>
+              <a
+                href={`/api/v1/payouts/batches/${batch.id}/export?file=payroll`}
+                className="text-sm text-primary hover:underline"
+              >
+                Download payroll handoff
+              </a>
+            </>
           ) : null}
         </CardContent>
       </Card>
@@ -122,6 +133,7 @@ export default async function PayoutBatchDetailPage({
                   <th className="py-1.5 pr-4 text-right">TDS</th>
                   <th className="py-1.5 pr-4 text-right">GST</th>
                   <th className="py-1.5 pr-4 text-right">Net payable</th>
+                  <th className="py-1.5 pr-4">Statement</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -136,6 +148,14 @@ export default async function PayoutBatchDetailPage({
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.tdsAmount)}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.gstAmount)}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.netPayable)}</td>
+                    <td className="py-1.5 pr-4">
+                      <a
+                        href={`/api/v1/payouts/lines/${line.id}/statement`}
+                        className="text-primary hover:underline"
+                      >
+                        Download
+                      </a>
+                    </td>
                   </tr>
                 ))}
               </tbody>

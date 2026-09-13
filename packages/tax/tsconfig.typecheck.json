@@ -1,0 +1,10 @@
+// See packages/services/tsconfig.typecheck.json for why this exists: the build
+// config excludes test/, so without this the suite goes untypechecked.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src", "test"]
+}

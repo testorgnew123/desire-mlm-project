@@ -6,10 +6,10 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import { AssociateNotFoundError } from "../src/grades";
+import { PayoutPeriodOpenError } from "../src/payouts";
 import {
   CycleDetectedError,
   MoveReasonRequiredError,
-  PayoutPeriodOpenError,
   SelfReferralError,
   getAssociateTree,
   listAssociates,
