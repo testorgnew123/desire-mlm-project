@@ -793,6 +793,76 @@ against a backend gap — fold missing backend into the same slice.*
   `db.$transaction` against this dev shell's hosted-Neon `DATABASE_URL`,
   same as every other mutation this phase has hit the limitation on.
 
+### Slice 15 -- Back-office: Reports and Admin sections (scoped honestly)
+
+- [x] **Reports: deferred, exactly as the plan directed.** Read
+  `docs/20-REPORTS.md` as the first step, as instructed -- it names roughly
+  20 distinct reports (Inventory/Sales & CRM/Collections/Network/
+  Commission categories) with a shared CSV/XLSX export mechanism, async
+  processing over 5,000 rows, and its own `AuditAction.EXPORT` convention.
+  This is a real, separate slice's worth of work, not a gap to fold in
+  here. Nothing built against it. `/reports` continues to 404 via nav's
+  own documented "not yet built" convention (nav.ts's header comment) --
+  not a fabricated screen.
+- [x] **Backend gap closed**: no service ever exposed User/Role management
+  (seeded and read since Phase 0, never written to). Added
+  `packages/services/src/admin.ts` -- `listUsers`, `createUser` (assigns
+  one EXISTING role, generates a real random temporary password via
+  `hashPassword`; this codebase has no invite-email flow, so the plaintext
+  is returned once, shown once in the UI via a query param, never logged
+  or persisted beyond its argon2id hash), `updateUserRoles` (close-and-
+  replace, matching every seeded user's real one-role-each shape rather
+  than building a multi-role UI nothing else assumes). All three gated by
+  `rbac.manage`. Screen: `/admin/users`.
+- [x] **Backend gap closed**: `writeAuditLog` has been used everywhere
+  since Phase 0, but nothing ever read the log back. Added `listAuditLog`
+  to `audit.ts` (org-wide, `entity`/`action` filters, capped at 500 rows --
+  a browsing screen, not the bulk CSV/XLSX export docs/20-REPORTS.md
+  describes and this phase defers), gated by `audit.read`. Screen:
+  `/admin/audit-log`.
+- [x] **Verified against the actual code before building, per this plan's
+  own instruction**: `createNotificationRule` already existed (Phase 2,
+  built as a service only -- its own doc comment says exactly this: "No
+  route exists for this yet"). Added `listNotificationRules` and
+  `updateNotificationRule` (enable/disable, gated by the same `rbac.manage`
+  `createNotificationRule` already uses) rather than a second CRUD
+  mechanism. Screen: `/admin/notification-rules` (list + enable/disable +
+  a create form -- channels/audience stay free-text, matching how
+  `evaluateNotificationRules` already treats them as data, not a fixed
+  enum-driven builder).
+- [x] **Admin > Config: explicitly descoped**, exactly as the plan
+  directed -- no org-config data model exists; the Admin landing page
+  states this plainly rather than silently omitting the section.
+- [x] Real Postgres tests added: `admin.test.ts` (new, 11 tests),
+  4 for `listAuditLog` (`audit.test.ts`, 6 tests total in the file),
+  3 for `listNotificationRules`/`updateNotificationRule`
+  (`notifications.test.ts`, 19 tests total) -- all passing. **Real bug
+  caught and fixed during this work**: `audit.test.ts`'s original
+  `afterAll` (which deletes the test org and disconnects the client) was
+  scoped *inside* the file's one `describe` block -- harmless while that
+  was the only block, but it fired prematurely between describe blocks
+  the moment a second, sibling `describe` was added, deleting the org and
+  disconnecting before the new tests ran. Fixed by hoisting `beforeAll`/
+  `afterAll` to the file's top level, the pattern every other test file in
+  this codebase already uses.
+- [x] **Live verification limited to the permission boundary, honestly
+  noted, same situation as Slice 14**: the dev-server session authenticated
+  earlier in this phase's testing holds none of `rbac.manage`, `audit.read`,
+  or `payout.prepare` (confirmed by nav correctly hiding both Admin and
+  Payouts). All three new Admin screens correctly threw their respective
+  `ForbiddenError` end-to-end through the real page -> service -> rbac
+  stack against real Neon data when accessed directly -- the same valid
+  security-boundary verification as Slice 14, not a full data-rendering
+  check. Data-rendering correctness for these same patterns is covered by
+  the real-Postgres test suite above and has been proven live five times
+  this phase already (Bookings, Collections, Network, Commission, and the
+  Admin landing page itself, which has no permission gate of its own and
+  rendered correctly with real links).
+- [x] **Known environment limitation, not exercised live**: `createUser`,
+  `updateUserRoles`, and `updateNotificationRule` all wrap their write in
+  `db.$transaction` against this dev shell's hosted-Neon `DATABASE_URL`,
+  same as every other mutation this phase has hit the limitation on.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely

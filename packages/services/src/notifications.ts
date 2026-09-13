@@ -24,6 +24,13 @@ export class DuplicateNotificationRuleCodeError extends Error {
   }
 }
 
+export class NotificationRuleNotFoundError extends Error {
+  constructor(public readonly ruleId: string) {
+    super(`Notification rule ${ruleId} not found.`);
+    this.name = "NotificationRuleNotFoundError";
+  }
+}
+
 // ── Shared helpers (duplicated per file -- this codebase's own convention)
 
 function requireActor(audit: AuditContext): string {
@@ -204,5 +211,45 @@ export async function listNotifications(db: PrismaClient, params: { userId: stri
     where: { userId: params.userId },
     orderBy: { createdAt: "desc" },
     take: 200,
+  });
+}
+
+// ── Rule config: read + enable/disable ──────────────────────────────────
+
+/** Phase 3.5 Slice 15 -- Admin > Notification rules. createNotificationRule
+ *  already existed (built in Phase 2 as a service only, with no route or
+ *  screen); this adds exactly what the plan calls for reading the config
+ *  and toggling it, not a redesign of the rule shape itself. */
+export async function listNotificationRules(db: PrismaClient, params: { orgId: string; actorId: string }): Promise<NotificationRule[]> {
+  await assertPermission(db, params.actorId, RULE_PERMISSION);
+  return db.notificationRule.findMany({ where: { orgId: params.orgId }, orderBy: { code: "asc" } });
+}
+
+export async function updateNotificationRule(
+  db: PrismaClient,
+  params: { ruleId: string; enabled: boolean; audit: AuditContext },
+): Promise<NotificationRule> {
+  const actorId = requireActor(params.audit);
+
+  return db.$transaction(async (tx) => {
+    await assertPermission(tx, actorId, RULE_PERMISSION);
+
+    const existing = await tx.notificationRule.findUnique({ where: { id: params.ruleId } });
+    if (!existing) throw new NotificationRuleNotFoundError(params.ruleId);
+    if (existing.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`Notification rule ${params.ruleId} belongs to another organisation.`);
+    }
+
+    const updated = await tx.notificationRule.update({ where: { id: existing.id }, data: { enabled: params.enabled } });
+
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "NotificationRule",
+      entityId: updated.id,
+      before: { enabled: existing.enabled },
+      after: { enabled: updated.enabled },
+    });
+
+    return updated;
   });
 }

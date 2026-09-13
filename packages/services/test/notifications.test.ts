@@ -9,9 +9,12 @@ import { getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import {
   DuplicateNotificationRuleCodeError,
+  NotificationRuleNotFoundError,
   createNotificationRule,
   evaluateNotificationRules,
+  listNotificationRules,
   listNotifications,
+  updateNotificationRule,
 } from "../src/notifications";
 import { runCollectionsSweep } from "../src/collections-sweep";
 import { acquireHold } from "../src/holds";
@@ -369,5 +372,39 @@ describe("wiring: the collections sweep queues real notifications when a rule is
     expect(overdueNotification).toBeDefined();
     expect(overdueNotification!.entity).toBe("Demand");
     expect(overdueNotification!.entityId).toBe(demand!.id);
+  });
+});
+
+describe("listNotificationRules / updateNotificationRule (Phase 3.5 Slice 15 -- Admin > Notification rules)", () => {
+  it("lists rules for the org and toggles enabled, with an audit row", async () => {
+    const f = await seedFixture();
+    const rule = await createNotificationRule(db, {
+      code: "TOGGLE_TEST", name: "Toggle test", channels: ["IN_APP"], audience: ["ASSOCIATE"], templateKey: "toggle_test",
+      audit: ctx(ORG, f.superAdmin.user.id, "superadmin"),
+    });
+    expect(rule.enabled).toBe(true);
+
+    const rules = await listNotificationRules(db, { orgId: ORG, actorId: f.superAdmin.user.id });
+    expect(rules.map((r) => r.id)).toContain(rule.id);
+
+    const disabled = await updateNotificationRule(db, { ruleId: rule.id, enabled: false, audit: ctx(ORG, f.superAdmin.user.id, "superadmin") });
+    expect(disabled.enabled).toBe(false);
+
+    const auditRow = await db.auditLog.findFirstOrThrow({ where: { entity: "NotificationRule", entityId: rule.id, action: "UPDATE" } });
+    expect((auditRow.before as { enabled: boolean }).enabled).toBe(true);
+    expect((auditRow.after as { enabled: boolean }).enabled).toBe(false);
+  });
+
+  it("throws for a rule that does not exist", async () => {
+    const f = await seedFixture();
+    await expect(
+      updateNotificationRule(db, { ruleId: "nope", enabled: false, audit: ctx(ORG, f.superAdmin.user.id, "superadmin") }),
+    ).rejects.toThrow(NotificationRuleNotFoundError);
+  });
+
+  it("refuses without rbac.manage", async () => {
+    await seedFixture();
+    const noPerms = await makeUser(ORG, "rulenoperms", []);
+    await expect(listNotificationRules(db, { orgId: ORG, actorId: noPerms.user.id })).rejects.toThrow(ForbiddenError);
   });
 });

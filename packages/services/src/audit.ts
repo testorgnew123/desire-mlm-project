@@ -1,7 +1,10 @@
 // Append-only audit logging -- see docs/10-SECURITY.md. Never update or
 // delete an AuditLog row; there is deliberately no updateAuditLog export.
 import { Prisma } from "@desire/db";
-import type { PrismaClient, AuditAction } from "@desire/db";
+import type { PrismaClient, AuditAction, AuditLog } from "@desire/db";
+import { assertPermission } from "./rbac";
+
+const READ_PERMISSION = "audit.read";
 
 export interface AuditContext {
   orgId: string;
@@ -58,4 +61,31 @@ export async function writeAuditLog(
 function toJsonInput(value: unknown): Prisma.InputJsonValue | typeof Prisma.DbNull {
   if (value === undefined) return Prisma.DbNull;
   return value as Prisma.InputJsonValue;
+}
+
+export interface ListAuditLogParams {
+  orgId: string;
+  actorId: string;
+  entity?: string;
+  action?: AuditAction;
+  /** Capped at 500 -- a browsing screen, not a bulk export (docs/20-REPORTS.md
+   *  covers CSV/XLSX export properly and is explicitly out of this phase). */
+  take?: number;
+}
+
+/** Phase 3.5 Slice 15 -- confirmed gap, `writeAuditLog` is used everywhere
+ *  but nothing ever read the log back. Org-wide by design: this is the
+ *  compliance/audit view (audit.read, held by SUPER_ADMIN/AUDITOR/
+ *  FINANCE_ADMIN per docs/09-RBAC-MATRIX.md), not a per-associate one. */
+export async function listAuditLog(db: PrismaClient, params: ListAuditLogParams): Promise<AuditLog[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+  return db.auditLog.findMany({
+    where: {
+      orgId: params.orgId,
+      ...(params.entity ? { entity: params.entity } : {}),
+      ...(params.action ? { action: params.action } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(params.take ?? 100, 500),
+  });
 }
