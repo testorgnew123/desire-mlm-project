@@ -680,6 +680,61 @@ against a backend gap — fold missing backend into the same slice.*
   (existing tests plus this slice's additions); the UI wiring reuses the
   already-proven `runAction` pattern.
 
+### Slice 13 -- Back-office: Commission section
+
+- [x] **Backend gap closed**: `commission.ts` had no ledger read at all
+  (`explainEntry`/`getEarnings` each resolve one entry or one associate's
+  aggregate). Added `listCommissionEntries`, scoped identically to
+  `explainEntry`/`getEarnings`'s own `assertAssociateInScope` (own /
+  own+downline / org-wide), as a set filter rather than a per-row
+  assertion since a ledger returns many associates' rows at once. Powers
+  `/commission`, with an inline "Explain" link into the Slice 5 PWA page
+  (`/earnings/:id/explain`) reused directly, and an inline "Dispute" form
+  since `raiseDispute` needs nothing the row doesn't already have.
+- [x] **Backend gap closed**: `schemes.ts` had no cross-project browse
+  (`getSchemeById`/`getActiveScheme` each resolve exactly one). Added
+  `listSchemes`, gated by `commission.read` (the same permission the
+  ledger it produces is gated by). Powers `/commission/schemes`; creating/
+  publishing a scheme stays on the Projects detail page (Slice 7) since
+  that is where a scheme belongs to one project's configuration.
+- [x] Scheme simulator: `/commission/schemes/[schemeId]/simulate` calls the
+  already-routed `simulateScheme` directly. Built as a native GET form
+  into the page's own `searchParams` rather than a Server Action, since
+  the endpoint's own contract is "no writes" (docs/07-API.md) -- there is
+  nothing to mutate or redirect away from. Verified live: a hypothetical
+  ₹50,00,000 booking against the real "Skyline Phase 3" v2 scheme (1.5%
+  grade rate) correctly returned ₹75,000 with zero breakage, with zero
+  rows written to `commission_entries`.
+- [x] **Backend gap closed**: `raiseDispute`/`resolveDispute` had zero HTTP
+  routes. Added `POST /api/v1/commission/entries/[entryId]/dispute`
+  (matching docs/07-API.md's already-documented path exactly, rather than
+  the plan's own guessed `/commission/disputes` path for raising) and
+  `POST /api/v1/commission/disputes/[disputeId]/resolve` (undocumented,
+  following the plan since no existing path names it). Built
+  `/commission/disputes` as a read-only PENDING queue queried directly
+  (same precedent as the Projects detail page's own direct queries, Slice
+  7) rather than a new list service function -- an org-wide queue has no
+  O/T/admin scope to resolve, unlike the ledger. Resolve actions render
+  only for a `commission.dispute_resolve` holder; `resolveDispute` itself
+  re-checks regardless.
+- [x] Real Postgres tests added: 5 for `listCommissionEntries`
+  (`commission-reads.test.ts`, 13 tests total in the file), 4 for
+  `listSchemes` (`schemes.test.ts`, 12 tests total) -- all passing.
+- [x] Verified live against a running dev server: `/commission` listed the
+  real seeded PAYABLE entry (₹97,500, Demo Associate) with working status
+  filter chips; "Explain" correctly opened the existing PWA drill-down
+  page showing the real derivation (1.5% of ₹65,00,000 commissionable
+  value); `/commission/schemes` listed both the ACTIVE v2 and ARCHIVED v1
+  Skyline schemes with real grade rates; the simulator produced a correct
+  live result (see above); `/commission/disputes` showed the correct
+  honest empty state. No server errors.
+- [x] **Known environment limitation, not exercised live**: `raiseDispute`
+  and `resolveDispute` both wrap their write in `db.$transaction` against
+  this dev shell's hosted-Neon `DATABASE_URL`, same as every other
+  mutation this phase has hit the limitation on. Coverage is the real-
+  Postgres test suite (Phase 3's own existing dispute tests); the UI
+  wiring reuses the already-proven `runAction` pattern.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely

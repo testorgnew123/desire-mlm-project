@@ -24,6 +24,9 @@ import { assertPermission, ForbiddenError } from "./rbac";
 
 const PREPARE_PERMISSION = "scheme.prepare";
 const APPROVE_PERMISSION = "scheme.approve";
+// Browsing schemes is gated the same as the ledger they produce -- anyone
+// who can view commission.read can see what scheme generated it.
+const READ_PERMISSION = "commission.read";
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -420,5 +423,28 @@ export async function getActiveScheme(
       schedules: { include: { slabs: true } },
     },
     orderBy: { version: "desc" },
+  });
+}
+
+export interface ListSchemesParams {
+  orgId: string;
+  actorId: string;
+  projectId?: string;
+}
+
+/** Phase 3.5 Slice 13 -- confirmed gap, no cross-project browse existed
+ *  (getSchemeById/getActiveScheme each resolve exactly one). Org-wide by
+ *  default (schemes aren't associate-scoped data, so no O/T split like
+ *  the ledger needs), narrowable to one project. */
+export async function listSchemes(db: PrismaClient, params: ListSchemesParams): Promise<ActiveScheme[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+  return db.commissionScheme.findMany({
+    where: { orgId: params.orgId, ...(params.projectId ? { projectId: params.projectId } : {}) },
+    include: {
+      gradeRates: { include: { grade: { select: { code: true } } } },
+      levelRates: true,
+      schedules: { include: { slabs: true } },
+    },
+    orderBy: [{ projectId: "asc" }, { version: "desc" }],
   });
 }

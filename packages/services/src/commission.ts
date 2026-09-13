@@ -600,3 +600,40 @@ export async function resolveDispute(db: PrismaClient, params: ResolveDisputePar
     return { disputeId: updatedDispute.id, adjustmentId };
   });
 }
+
+// ── Ledger (read) ─────────────────────────────────────────────────────────
+
+export interface ListCommissionEntriesParams {
+  orgId: string;
+  actorId: string;
+  associateId?: string;
+  status?: CommissionEntry["status"];
+}
+
+/** Phase 3.5 Slice 13 -- confirmed gap, no list existed (explainEntry and
+ *  getEarnings both act on one entry or one associate's aggregate; a ledger
+ *  needs the raw rows). Scoped identically to getEarnings/explainEntry's
+ *  own assertAssociateInScope check, but as a set filter instead of a
+ *  per-row assertion since this returns many associates' rows at once. */
+export async function listCommissionEntries(db: PrismaClient, params: ListCommissionEntriesParams): Promise<CommissionEntry[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+
+  const where: PrismaNS.CommissionEntryWhereInput = { orgId: params.orgId };
+  if (params.status) where.status = params.status;
+
+  const roleCodes = await resolveActorRoleCodes(db, params.actorId);
+  const isUnrestricted = [...roleCodes].some((r) => UNRESTRICTED_ROLE_CODES.has(r));
+
+  if (params.associateId) {
+    if (!isUnrestricted) await assertAssociateInScope(db, params.actorId, params.associateId);
+    where.beneficiaryAssociateId = params.associateId;
+  } else if (!isUnrestricted) {
+    const caller = await db.associate.findUnique({ where: { userId: params.actorId }, select: { id: true } });
+    if (!caller) return [];
+    const mode: ScopeMode = roleCodes.has("TEAM_LEAD") ? "OWN_AND_DOWNLINE" : "OWN";
+    const accessible = await getAccessibleAssociateIds(db, caller.id, mode);
+    where.beneficiaryAssociateId = { in: accessible };
+  }
+
+  return db.commissionEntry.findMany({ where, orderBy: { accruedAt: "desc" } });
+}

@@ -10,6 +10,7 @@ import {
   CommissionEntryNotFoundError,
   explainEntry,
   getEarnings,
+  listCommissionEntries,
   simulateScheme,
 } from "../src/commission";
 import type { AuditContext } from "../src/audit";
@@ -245,5 +246,70 @@ describe("getEarnings: real numbers, not a hardcoded string", () => {
     await expect(
       getEarnings(db, { associateId: f.seller.id, audit: ctx(f.strangerUser.id, "stranger") }),
     ).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("listCommissionEntries (Phase 3.5 Slice 13 -- the Ledger, confirmed gap)", () => {
+  async function seedTwoAssociatesWithEntries(f: Awaited<ReturnType<typeof seedFixture>>) {
+    const sellerEntry = await db.commissionEntry.create({
+      data: {
+        orgId: ORG, bookingId: f.booking.id, schemeId: f.schemeId, beneficiaryAssociateId: f.seller.id, role: "SELF", level: 0,
+        baseAmount: D("1000000"), grossAmount: D("15000"), status: "ACCRUED", snapshot: {},
+        idempotencyKey: `${f.booking.id}:${f.seller.id}:0:ledger1`,
+      },
+    });
+
+    const otherUser = await db.user.create({ data: { orgId: ORG, email: "ledger-other@test.local", name: "other", passwordHash: "unused" } });
+    const other = await db.associate.create({
+      data: { orgId: ORG, userId: otherUser.id, code: "A-ledger-other", engagementType: "EMPLOYEE", joinDate: new Date("2020-01-01"), status: "ACTIVE" },
+    });
+    const otherEntry = await db.commissionEntry.create({
+      data: {
+        orgId: ORG, bookingId: f.booking.id, schemeId: f.schemeId, beneficiaryAssociateId: other.id, role: "SELF", level: 0,
+        baseAmount: D("1000000"), grossAmount: D("20000"), status: "PAYABLE", snapshot: {},
+        idempotencyKey: `${f.booking.id}:${other.id}:0:ledger2`,
+      },
+    });
+
+    return { sellerEntry, otherEntry, other };
+  }
+
+  it("an admin-shaped role sees every associate's entries", async () => {
+    const f = await seedFixture();
+    const { sellerEntry, otherEntry } = await seedTwoAssociatesWithEntries(f);
+
+    const rows = await listCommissionEntries(db, { orgId: ORG, actorId: f.admin.id });
+    expect(rows.map((r) => r.id).sort()).toEqual([sellerEntry.id, otherEntry.id].sort());
+  });
+
+  it("a scoped (non-admin) associate sees only their own entries", async () => {
+    const f = await seedFixture();
+    const { sellerEntry } = await seedTwoAssociatesWithEntries(f);
+
+    const rows = await listCommissionEntries(db, { orgId: ORG, actorId: f.sellerUser.id });
+    expect(rows.map((r) => r.id)).toEqual([sellerEntry.id]);
+  });
+
+  it("filters by status", async () => {
+    const f = await seedFixture();
+    const { otherEntry } = await seedTwoAssociatesWithEntries(f);
+
+    const rows = await listCommissionEntries(db, { orgId: ORG, actorId: f.admin.id, status: "PAYABLE" });
+    expect(rows.map((r) => r.id)).toEqual([otherEntry.id]);
+  });
+
+  it("an explicit associateId filter outside the caller's scope refuses, same as explainEntry", async () => {
+    const f = await seedFixture();
+    const { other } = await seedTwoAssociatesWithEntries(f);
+
+    await expect(
+      listCommissionEntries(db, { orgId: ORG, actorId: f.sellerUser.id, associateId: other.id }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("refuses without commission.read", async () => {
+    await seedFixture();
+    const noPerms = await makeUser("ledger-noperms", []);
+    await expect(listCommissionEntries(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
   });
 });

@@ -12,6 +12,7 @@ import {
   SchemeMakerCheckerViolationError,
   createScheme,
   getActiveScheme,
+  listSchemes,
   publishScheme,
 } from "../src/schemes";
 import type { AuditContext } from "../src/audit";
@@ -214,5 +215,68 @@ describe("never two ACTIVE schemes at once", () => {
 
     const before = await getActiveScheme(db, { projectId: project.id, asOf: new Date("2023-01-01") });
     expect(before).toBeNull();
+  });
+});
+
+describe("listSchemes (Phase 3.5 Slice 13 -- Schemes browsing, confirmed gap)", () => {
+  it("returns every scheme across every project in the org, newest version first per project", async () => {
+    const { project, grade, preparer } = await seed();
+    const v1 = await createScheme(db, {
+      projectId: project.id, name: "v1", validFrom: new Date("2024-01-01"),
+      baseDefinition: BASE_DEFINITION, maxTotalPct: "3.0", gradeRates: gradeRates(grade.id),
+      audit: ctx(ORG, preparer.id, "preparer"),
+    });
+    const v2 = await createScheme(db, {
+      projectId: project.id, name: "v2", validFrom: new Date("2024-06-01"),
+      baseDefinition: BASE_DEFINITION, maxTotalPct: "3.0", gradeRates: gradeRates(grade.id),
+      audit: ctx(ORG, preparer.id, "preparer"),
+    });
+
+    const viewer = await makeUser(ORG, "viewer", ["commission.read"]);
+    const rows = await listSchemes(db, { orgId: ORG, actorId: viewer.id });
+    expect(rows.map((r) => r.id)).toEqual([v2.schemeId, v1.schemeId]);
+  });
+
+  it("filters by projectId", async () => {
+    const { project, grade, preparer } = await seed(ORG);
+    // Same org, a second project.
+    const project2 = await db.project.create({
+      data: { orgId: ORG, code: "SCHPROJ2", name: "Second Project", city: "Pune", state: "Maharashtra", reraRegNo: "P-SCH-2", reraValidTill: new Date("2030-01-01") },
+    });
+
+    const v1 = await createScheme(db, {
+      projectId: project.id, name: "v1", validFrom: new Date("2024-01-01"),
+      baseDefinition: BASE_DEFINITION, maxTotalPct: "3.0", gradeRates: gradeRates(grade.id),
+      audit: ctx(ORG, preparer.id, "preparer"),
+    });
+    await createScheme(db, {
+      projectId: project2.id, name: "v1", validFrom: new Date("2024-01-01"),
+      baseDefinition: BASE_DEFINITION, maxTotalPct: "3.0", gradeRates: gradeRates(grade.id),
+      audit: ctx(ORG, preparer.id, "preparer"),
+    });
+
+    const viewer = await makeUser(ORG, "viewer2", ["commission.read"]);
+    const rows = await listSchemes(db, { orgId: ORG, actorId: viewer.id, projectId: project.id });
+    expect(rows.map((r) => r.id)).toEqual([v1.schemeId]);
+  });
+
+  it("does not leak another org's schemes", async () => {
+    const { project, grade, preparer } = await seed(OTHER_ORG);
+    await seed(ORG);
+    await createScheme(db, {
+      projectId: project.id, name: "v1", validFrom: new Date("2024-01-01"),
+      baseDefinition: BASE_DEFINITION, maxTotalPct: "3.0", gradeRates: gradeRates(grade.id),
+      audit: ctx(OTHER_ORG, preparer.id, "preparer"),
+    });
+
+    const viewer = await makeUser(ORG, "viewer3", ["commission.read"]);
+    const rows = await listSchemes(db, { orgId: ORG, actorId: viewer.id });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("refuses without commission.read", async () => {
+    await seed();
+    const noPerms = await makeUser(ORG, "noperms", []);
+    await expect(listSchemes(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
   });
 });
