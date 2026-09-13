@@ -13,6 +13,10 @@ import {
   PayoutMakerCheckerViolationError,
   approveBatch,
   exportBatch,
+  getPayoutBatch,
+  listAdjustments,
+  listPayoutBatches,
+  listRecoveries,
   prepareBatch,
 } from "../src/payouts";
 import type { AuditContext } from "../src/audit";
@@ -30,6 +34,7 @@ async function reset() {
     await db.payoutLine.deleteMany({ where: { batch: { orgId } } });
     await db.payoutBatch.deleteMany({ where: { orgId } });
     await db.recovery.deleteMany({ where: { orgId } });
+    await db.adjustment.deleteMany({ where: { orgId } });
     await db.commissionEntry.deleteMany({ where: { orgId } });
     await db.commissionScheme.deleteMany({ where: { orgId } });
     await db.taxRate.deleteMany({ where: { orgId } });
@@ -338,5 +343,94 @@ describe("audit: prepare and approve each write a row", () => {
 
     expect(await db.auditLog.count({ where: { entity: "PayoutBatch", entityId: result.batchId, action: "CREATE" } })).toBe(1);
     expect(await db.auditLog.count({ where: { entity: "PayoutBatch", entityId: result.batchId, action: "APPROVE" } })).toBe(1);
+  });
+});
+
+describe("listPayoutBatches / getPayoutBatch (Phase 3.5 Slice 14 -- confirmed gap, no read existed at all)", () => {
+  it("lists batches for the org and returns one batch's lines with associate info", async () => {
+    const { booking, scheme } = await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "emp", "EMPLOYEE");
+    await db.taxRate.create({ data: { orgId: ORG, section: "SEC_192", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(ORG, booking.id, scheme.id, employee.id, "50000", new Date("2026-01-15"));
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
+
+    const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
+
+    const batches = await listPayoutBatches(db, { orgId: ORG, actorId: preparer.id });
+    expect(batches.map((b) => b.id)).toEqual([result.batchId]);
+
+    const detail = await getPayoutBatch(db, { orgId: ORG, actorId: preparer.id, batchId: result.batchId });
+    expect(detail?.lines).toHaveLength(1);
+    expect(detail?.lines[0]!.associate.code).toBe(employee.code);
+  });
+
+  it("getPayoutBatch returns null for a batch in another org", async () => {
+    const other = await seedBookingAndScheme(OTHER_ORG);
+    const otherEmployee = await makeAssociate(OTHER_ORG, "otheremp", "EMPLOYEE");
+    await db.taxRate.create({ data: { orgId: OTHER_ORG, section: "SEC_192", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
+    await seedEntry(OTHER_ORG, other.booking.id, other.scheme.id, otherEmployee.id, "50000", new Date("2026-01-15"));
+    const otherPreparer = await makeUser(OTHER_ORG, "otherpreparer", ["payout.prepare"]);
+    const otherResult = await prepareBatch(db, { orgId: OTHER_ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(OTHER_ORG, otherPreparer.id, "preparer") });
+
+    await seedBookingAndScheme(ORG);
+    const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
+    const detail = await getPayoutBatch(db, { orgId: ORG, actorId: preparer.id, batchId: otherResult.batchId });
+    expect(detail).toBeNull();
+  });
+
+  it("refuses without payout.prepare", async () => {
+    await seedBookingAndScheme(ORG);
+    const noPerms = await makeUser(ORG, "noperms2", []);
+    await expect(listPayoutBatches(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("listRecoveries / listAdjustments (Phase 3.5 Slice 14 -- confirmed gap)", () => {
+  it("lists recoveries for the org with associate info", async () => {
+    await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "recemp", "EMPLOYEE");
+    const recovery = await db.recovery.create({
+      data: { orgId: ORG, associateId: employee.id, amount: "1000", outstandingAmount: "1000", reason: "Booking cancelled" },
+    });
+    const preparer = await makeUser(ORG, "recpreparer", ["payout.prepare"]);
+
+    const rows = await listRecoveries(db, { orgId: ORG, actorId: preparer.id });
+    expect(rows.map((r) => r.id)).toEqual([recovery.id]);
+    expect(rows[0]!.associate.code).toBe(employee.code);
+  });
+
+  it("filters recoveries by status", async () => {
+    await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "recemp2", "EMPLOYEE");
+    const outstanding = await db.recovery.create({
+      data: { orgId: ORG, associateId: employee.id, amount: "1000", outstandingAmount: "1000", reason: "x", status: "OUTSTANDING" },
+    });
+    await db.recovery.create({
+      data: { orgId: ORG, associateId: employee.id, amount: "500", outstandingAmount: "0", reason: "y", status: "RECOVERED" },
+    });
+    const preparer = await makeUser(ORG, "recpreparer2", ["payout.prepare"]);
+
+    const rows = await listRecoveries(db, { orgId: ORG, actorId: preparer.id, status: "OUTSTANDING" });
+    expect(rows.map((r) => r.id)).toEqual([outstanding.id]);
+  });
+
+  it("lists adjustments for the org with associate info", async () => {
+    await seedBookingAndScheme(ORG);
+    const employee = await makeAssociate(ORG, "adjemp", "EMPLOYEE");
+    const adjustment = await db.adjustment.create({
+      data: { orgId: ORG, associateId: employee.id, type: "CREDIT", amount: "2000", reason: "Migrated opening balance", requestedById: "u_test" },
+    });
+    const preparer = await makeUser(ORG, "adjpreparer", ["payout.prepare"]);
+
+    const rows = await listAdjustments(db, { orgId: ORG, actorId: preparer.id });
+    expect(rows.map((r) => r.id)).toEqual([adjustment.id]);
+    expect(rows[0]!.associate.code).toBe(employee.code);
+  });
+
+  it("refuses without payout.prepare", async () => {
+    await seedBookingAndScheme(ORG);
+    const noPerms = await makeUser(ORG, "noperms3", []);
+    await expect(listRecoveries(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
+    await expect(listAdjustments(db, { orgId: ORG, actorId: noPerms.id })).rejects.toThrow(ForbiddenError);
   });
 });

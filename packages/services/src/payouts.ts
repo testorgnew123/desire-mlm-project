@@ -7,8 +7,8 @@
 // cap, "so nobody's take-home drops to zero without a conversation first"
 // (spec's own words).
 import { Prisma } from "@desire/db";
-import type { PrismaClient, PayoutBatch, PayoutBatchStatus, TdsSection, EngagementType } from "@desire/db";
-export type { PayoutBatch };
+import type { PrismaClient, PayoutBatch, PayoutBatchStatus, TdsSection, EngagementType, PayoutLine, Recovery, RecoveryStatus, Adjustment } from "@desire/db";
+export type { PayoutBatch, PayoutLine, Recovery, Adjustment };
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError } from "./rbac";
 
@@ -381,5 +381,73 @@ export async function exportBatch(
     });
 
     return updated;
+  });
+}
+
+// ── Read ───────────────────────────────────────────────────────────────
+//
+// Phase 3.5 Slice 14 -- this whole section had no backend at all beyond
+// the three mutations above (prepareBatch/approveBatch/exportBatch had zero
+// HTTP routes and no read ever listed a batch). Gated the same way
+// prepareBatch itself is: payout.prepare and payout.approve are always
+// granted together (permission-matrix.ts), so one code suffices for every
+// read here rather than an OR-of-two-permissions check.
+
+export async function listPayoutBatches(db: PrismaClient, params: { orgId: string; actorId: string }): Promise<PayoutBatch[]> {
+  await assertPermission(db, params.actorId, PREPARE_PERMISSION);
+  return db.payoutBatch.findMany({ where: { orgId: params.orgId }, orderBy: { periodStart: "desc" } });
+}
+
+export interface PayoutBatchDetail extends PayoutBatch {
+  lines: Array<PayoutLine & { associate: { code: string; user: { name: string } } }>;
+}
+
+export async function getPayoutBatch(
+  db: PrismaClient,
+  params: { orgId: string; actorId: string; batchId: string },
+): Promise<PayoutBatchDetail | null> {
+  await assertPermission(db, params.actorId, PREPARE_PERMISSION);
+  return db.payoutBatch.findFirst({
+    where: { id: params.batchId, orgId: params.orgId },
+    include: {
+      lines: {
+        include: { associate: { select: { code: true, user: { select: { name: true } } } } },
+        orderBy: { netPayable: "desc" },
+      },
+    },
+  });
+}
+
+export interface RecoveryRow extends Recovery {
+  associate: { code: string; user: { name: string } };
+}
+
+export async function listRecoveries(
+  db: PrismaClient,
+  params: { orgId: string; actorId: string; status?: RecoveryStatus },
+): Promise<RecoveryRow[]> {
+  await assertPermission(db, params.actorId, PREPARE_PERMISSION);
+  return db.recovery.findMany({
+    where: { orgId: params.orgId, ...(params.status ? { status: params.status } : {}) },
+    include: { associate: { select: { code: true, user: { select: { name: true } } } } },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export interface AdjustmentRow extends Adjustment {
+  associate: { code: string; user: { name: string } };
+}
+
+/** Read-only: this slice's route list creates no Adjustment-authoring
+ *  endpoint (the only place one is created today is commission.ts's
+ *  resolveDispute, an approved dispute). This screen shows what exists,
+ *  the same "audit-style view, not a mutation screen" scope Slice 12's
+ *  Promotions screen used for the same reason. */
+export async function listAdjustments(db: PrismaClient, params: { orgId: string; actorId: string }): Promise<AdjustmentRow[]> {
+  await assertPermission(db, params.actorId, PREPARE_PERMISSION);
+  return db.adjustment.findMany({
+    where: { orgId: params.orgId },
+    include: { associate: { select: { code: true, user: { select: { name: true } } } } },
+    orderBy: { createdAt: "desc" },
   });
 }
