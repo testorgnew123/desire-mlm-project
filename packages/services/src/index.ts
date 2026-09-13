@@ -24,3 +24,4 @@ export * from "./schemes";
 export * from "./commission";
 export * from "./payouts";
 export * from "./invariant-monitor";
+export * from "./backup";

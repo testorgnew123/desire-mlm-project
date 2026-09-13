@@ -2,9 +2,12 @@
 #
 # WHY THIS EXISTS INSTEAD OF NETLIFY SCHEDULED FUNCTIONS:
 #   Netlify Scheduled Functions have been reported to silently stop firing and
-#   to drift off their configured cadence. Two of these jobs (the collections
-#   escalation ladder and the nightly invariant monitor) are the kind of thing
-#   that must not quietly stop. See docs/21-TIER-LIMITS.md section 11.
+#   to drift off their configured cadence. Three of these jobs (the collections
+#   escalation ladder, the nightly invariant monitor, and the nightly backup)
+#   are the kind of thing that must not quietly stop. See
+#   docs/21-TIER-LIMITS.md section 11 -- the backup is the only disaster
+#   recovery this project has, since the paid tier that would give real PITR
+#   is not coming (PROGRESS.md decision log, 2026-09-13).
 #
 # The endpoints themselves are ordinary HTTP handlers guarded by
 # JOB_TRIGGER_SECRET, so this workflow is a trigger, not a dependency. Swap it
@@ -27,19 +30,7 @@ on:
   schedule:
     - cron: '*/5 * * * *'   # hold expiry sweep
     - cron: '30 2 * * *'    # collections escalation sweep + grade qualification -- both 08:00 IST
-    - cron: '30 18 * * *'   # invariant monitor -- 00:00 IST
-    # The backup/dump route does not exist yet -- it would 404, retry three
-    # times and exit 1, a guaranteed-red run every night, forever.
-    #
-    # That is not a cosmetic problem. There is no heartbeat table yet, so
-    # /api/health still reports jobs as "not yet implemented": the GitHub
-    # Actions run status is currently the ONLY signal that a sweep is alive.
-    # A known-bogus failure trains everyone to ignore exactly the channel a
-    # real sweep failure arrives on.
-    #
-    # Re-add each cron in the same commit that adds its route. The intended
-    # cadence is recorded in docs/21-TIER-LIMITS.md section 11, so nothing is
-    # lost by leaving it out of here until then.
+    - cron: '30 18 * * *'   # invariant monitor + nightly backup -- both 00:00 IST
   workflow_dispatch:
     inputs:
       job:
@@ -51,6 +42,7 @@ on:
           - collections/sweep
           - grades/qualify
           - monitor/invariants
+          - backup/dump
 
 concurrency:
   group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
@@ -66,7 +58,7 @@ jobs:
           case "${{ github.event.schedule }}" in
             '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
             '30 2 * * *')   echo 'jobs=collections/sweep grades/qualify' >> "$GITHUB_OUTPUT" ;;
-            '30 18 * * *')  echo 'jobs=monitor/invariants' >> "$GITHUB_OUTPUT" ;;
+            '30 18 * * *')  echo 'jobs=monitor/invariants backup/dump' >> "$GITHUB_OUTPUT" ;;
             *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
           esac
 

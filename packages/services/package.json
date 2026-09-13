@@ -15,10 +15,11 @@
     "@desire/commission": "workspace:*",
     "@desire/db": "workspace:*",
     "@desire/tax": "workspace:*",
+    "@netlify/blobs": "^11.0.3",
     "@node-rs/argon2": "^2.0.2",
     "decimal.js": "^10.4.3",
-    "otplib": "^12.0.1",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "otplib": "^12.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

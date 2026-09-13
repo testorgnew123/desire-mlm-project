@@ -166,11 +166,24 @@ is already past the window.
 The RPO 1 h / RTO 4 h targets in [12-NFR](12-NFR.md) are **not met on the free
 tier**, and no amount of engineering changes that.
 
-Interim mitigation, mandatory once any real data exists:
+Mitigation, mandatory now that the free tier is permanent (not interim — see
+§8): **built**, `POST /api/jobs/backup/dump` (`packages/services/src/backup.ts`,
+`.github/workflows/scheduled-jobs.yml`, nightly 00:00 IST).
 
-- Nightly `pg_dump` to Netlify Blobs, retained 30 days. No India-region control (same gap as documents) and a 5 GB per-object ceiling worth watching as the database grows.
-- The dump runs as a scheduled function — small, well within 30 s against a
-  free-tier dataset.
+- Not a real `pg_dump` — that binary isn't available in a Netlify Function.
+  Logical dump instead: every base table in `public`, read via
+  `information_schema.tables` (so a table added by a later migration is never
+  silently missed) and `SELECT *`, written as one JSON object to Netlify
+  Blobs. Same durable, cross-deploy store already committed to for documents
+  ([ADR-0001](adr/0001-nextjs-netlify-neon.md)'s amendment) — same caveats:
+  no India-region control, 5 GB per-object ceiling worth watching as the
+  database grows.
+- One object per calendar day, retained 30 days, pruned by the job itself on
+  each run.
+- A plain HTTP handler triggered by GitHub Actions cron, same as every other
+  job in this project (§11) — not a Netlify Scheduled Function.
+- No heartbeat/dead-man's switch yet (same gap as every other job — see §11);
+  the GitHub Actions run status is the only signal it's alive until one exists.
 - Restore drills run against the dump, not against PITR.
 
 ## 7. Revised targets while on free
@@ -210,9 +223,7 @@ Since none of these can be resolved by upgrading, they instead mark the point
 where the free-tier posture must be defended by other means, or the client
 must be told a specific thing is not viable at that scale:
 
-- **T1/T5** (real PII / legacy import): the nightly `pg_dump`-to-Blobs backup
-  in §6 stops being optional the moment this happens — see the Decision log
-  entry below. Build it before, not after, real data lands.
+- **T1/T5** (real PII / legacy import): the nightly backup in §6 (`/api/jobs/backup/dump`) is the thing that makes this survivable at all — confirm it has actually run at least once before either trigger fires.
 - **T2/T7** (storage/compute ceiling): the only free lever is deleting or
   archiving data (e.g. pruning very old audit rows per a retention policy, if
   the client ever asks for one) — there is no paid tier to fall back to.
