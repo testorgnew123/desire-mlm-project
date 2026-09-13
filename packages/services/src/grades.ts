@@ -10,10 +10,14 @@ import { Prisma } from "@desire/db";
 import type { PrismaClient, Grade, AssociateGrade } from "@desire/db";
 export type { Grade, AssociateGrade };
 import { writeAuditLog, type AuditContext } from "./audit";
-import { assertPermission, ForbiddenError, getAccessibleAssociateIds } from "./rbac";
+import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
 
 const GRADE_WRITE_PERMISSION = "project.write";
 const ASSIGN_PERMISSION = "grade.change";
+// Reading grade history is a view of associate data, gated the same as
+// associates.ts's own listAssociates/getAssociateTree, not a new capability.
+const READ_PERMISSION = "associate.read";
+const ADMIN_ROLE_CODES: ReadonlySet<string> = new Set(["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD", "SALES_ADMIN", "AUDITOR"]);
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -367,4 +371,81 @@ export async function runGradeQualificationSweep(db: PrismaClient, params: { now
   }
 
   return { evaluated, promoted };
+}
+
+// ── Read ───────────────────────────────────────────────────────────────
+
+async function resolveActorRoleCodes(db: PrismaClient, actorId: string): Promise<Set<string>> {
+  const roles = await db.userRole.findMany({ where: { userId: actorId }, select: { role: { select: { code: true } } } });
+  return new Set(roles.map((r) => r.role.code));
+}
+
+export interface GradeHistoryRow {
+  id: string;
+  associateId: string;
+  associateCode: string;
+  associateName: string;
+  gradeCode: string;
+  gradeName: string;
+  validFrom: string;
+  validTo: string | null;
+  reason: string | null;
+  approvedById: string | null;
+}
+
+export interface ListGradeHistoryParams {
+  orgId: string;
+  actorId: string;
+  associateId?: string;
+}
+
+/** Phase 3.5 Slice 12 -- "Promotions" (docs/08-SCREENS.md). The plan's own
+ *  first guess was HierarchyChangeLog, but that table records ORG-TREE
+ *  moves (moveAssociate: who reports to whom) -- a different concept from a
+ *  grade change. A promotion is an AssociateGrade row: runGradeQualification
+ *  Sweep and assignGrade both close the current row (`validTo`) and insert a
+ *  new one, exactly the history this screen needs, with `approvedById: null`
+ *  already distinguishing an auto-qualification from a human decision.
+ *  Scoped identically to listAssociates (ASSOCIATE own, TEAM_LEAD own +
+ *  downline, admin-shaped roles and AUDITOR see the whole org) since this is
+ *  the same underlying associate set, viewed through the same permission. */
+export async function listGradeHistory(db: PrismaClient, params: ListGradeHistoryParams): Promise<GradeHistoryRow[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+
+  const roleCodes = await resolveActorRoleCodes(db, params.actorId);
+  const isUnrestricted = [...roleCodes].some((r) => ADMIN_ROLE_CODES.has(r));
+
+  let associateIds: string[] | undefined;
+  if (!isUnrestricted) {
+    const caller = await db.associate.findUnique({ where: { userId: params.actorId }, select: { id: true } });
+    if (!caller) return [];
+    const mode: ScopeMode = roleCodes.has("TEAM_LEAD") ? "OWN_AND_DOWNLINE" : "OWN";
+    const accessible = await getAccessibleAssociateIds(db, caller.id, mode);
+    if (params.associateId && !accessible.includes(params.associateId)) return [];
+    associateIds = params.associateId ? [params.associateId] : accessible;
+  } else if (params.associateId) {
+    associateIds = [params.associateId];
+  }
+
+  const rows = await db.associateGrade.findMany({
+    where: {
+      associate: { orgId: params.orgId },
+      ...(associateIds ? { associateId: { in: associateIds } } : {}),
+    },
+    include: { associate: { select: { code: true, user: { select: { name: true } } } }, grade: { select: { code: true, name: true } } },
+    orderBy: { validFrom: "desc" },
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    associateId: row.associateId,
+    associateCode: row.associate.code,
+    associateName: row.associate.user.name,
+    gradeCode: row.grade.code,
+    gradeName: row.grade.name,
+    validFrom: row.validFrom.toISOString(),
+    validTo: row.validTo?.toISOString() ?? null,
+    reason: row.reason,
+    approvedById: row.approvedById,
+  }));
 }

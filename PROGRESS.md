@@ -638,6 +638,48 @@ against a backend gap — fold missing backend into the same slice.*
   `confirmBooking`. Coverage is the real-Postgres test suite; the UI wiring
   reuses the already-proven `runAction` pattern.
 
+### Slice 12 -- Back-office: Network section
+
+- [x] Org tree, Associates list, Associate detail (move + assign grade +
+  earnings): backend ready, no gap -- `listAssociates`/`getAssociateTree`
+  already carry `depth`/`parentId`, so the tree screen (`/network`) and the
+  flat list (`/network/associates`) render the exact same read two ways
+  rather than duplicating it. The detail page reuses `getEarnings` (already
+  proven live in the PWA Earnings tab, Slice 5) and folds the Move/Assign-
+  grade forms onto the same page, the "detail page owns its own actions"
+  pattern from CRM (Slice 9) and Bookings (Slice 10).
+- [x] **Backend gap closed**: `grades.ts`'s `createGrade`/`updateGrade` had
+  zero HTTP routes. Added `POST /api/v1/grades` and
+  `PATCH /api/v1/grades/[gradeId]` (thin handlers, same error-mapping style
+  as Slice 7's scheme routes), plus the `/network/grades` CRUD screen
+  (create + activate/deactivate) calling the service functions directly per
+  this phase's own back-office data pattern.
+- [x] **Plan correction, verified against the actual code before building**:
+  the plan's own first guess for "Promotions" was `HierarchyChangeLog` --
+  checked `moveAssociate` directly and confirmed that table records ORG-
+  TREE moves (who reports to whom), a different concept from a grade
+  change. `runGradeQualificationSweep` and `assignGrade` both close-and-
+  insert `AssociateGrade` rows instead, which is the actual promotion
+  history (a `null` `approvedById` distinguishes an auto-qualification from
+  a human decision) -- added `listGradeHistory` to `grades.ts` against that
+  table instead, scoped identically to `listAssociates` (O/T/admin split),
+  and built `/network/promotions` as a read-only table against it.
+- [x] Real Postgres tests added: 4 for `listGradeHistory`
+  (`grades.test.ts`, 16 tests total in the file) -- all passing.
+- [x] Verified live against a running dev server: `/network` rendered the
+  real two-level seeded tree (Demo Team Lead > Demo Associate) with correct
+  indentation; the associate detail page showed real earnings figures
+  (₹97,500 payable, ₹58,500 blocked) and populated Move/Assign-grade
+  dropdowns; `/network/grades` listed all 6 seeded grades with real hold
+  quotas; `/network/promotions` showed both associates' real auto-qualified
+  initial grade assignments. No server errors.
+- [x] **Known environment limitation, not exercised live**: same as Slices
+  10-11 -- `moveAssociate`, `assignGrade`, `createGrade` and `updateGrade`
+  all wrap their write in `db.$transaction` against this dev shell's
+  hosted-Neon `DATABASE_URL`. Coverage is the real-Postgres test suite
+  (existing tests plus this slice's additions); the UI wiring reuses the
+  already-proven `runAction` pattern.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely

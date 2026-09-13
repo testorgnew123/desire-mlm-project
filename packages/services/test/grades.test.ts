@@ -11,6 +11,7 @@ import {
   GradeNotFoundError,
   assignGrade,
   createGrade,
+  listGradeHistory,
   updateGrade,
 } from "../src/grades";
 import type { AuditContext } from "../src/audit";
@@ -71,6 +72,11 @@ async function seedFixture(orgId: string = ORG) {
 
 function ctx(orgId: string, userId: string | null, label: string): AuditContext {
   return { orgId, actorId: userId, actorLabel: label };
+}
+
+async function renameRole(orgId: string, fromCode: string, toCode: string) {
+  const role = await db.role.findFirstOrThrow({ where: { orgId, code: fromCode } });
+  await db.role.update({ where: { id: role.id }, data: { code: toCode } });
 }
 
 beforeEach(reset);
@@ -187,5 +193,53 @@ describe("assignGrade: close-and-insert, never update", () => {
     await expect(
       assignGrade(db, { associateId: f.associate.associate!.id, gradeId: "nope", audit: ctx(ORG, f.admin.user.id, "admin") }),
     ).rejects.toThrow(GradeNotFoundError);
+  });
+});
+
+describe("listGradeHistory (Phase 3.5 Slice 12 -- 'Promotions', backed by AssociateGrade not HierarchyChangeLog)", () => {
+  async function seedHistoryFixture(orgId: string = ORG) {
+    await db.organization.create({ data: { id: orgId, name: "Grade History Test Org", legalName: "Grade History Test Org Pvt Ltd" } });
+    const admin = await makeUser(orgId, "histadmin", ["project.write", "grade.change", "associate.read"]);
+    await renameRole(orgId, "ROLE_histadmin", "SUPER_ADMIN");
+    const mine = await makeUser(orgId, "histmine", ["associate.read"], { associate: true });
+    await renameRole(orgId, "ROLE_histmine", "ASSOCIATE");
+    const stranger = await makeUser(orgId, "histstranger", ["associate.read"], { associate: true });
+
+    const gradeLow = await createGrade(db, { code: "HG1", name: "Low", rank: 1, audit: ctx(orgId, admin.user.id, "admin") });
+    const gradeHigh = await createGrade(db, { code: "HG2", name: "High", rank: 2, audit: ctx(orgId, admin.user.id, "admin") });
+
+    const mineFirst = await assignGrade(db, { associateId: mine.associate!.id, gradeId: gradeLow.id, reason: "Initial", audit: ctx(orgId, admin.user.id, "admin") });
+    const minePromo = await assignGrade(db, { associateId: mine.associate!.id, gradeId: gradeHigh.id, reason: "Promotion", audit: ctx(orgId, admin.user.id, "admin") });
+    const strangerGrade = await assignGrade(db, { associateId: stranger.associate!.id, gradeId: gradeLow.id, reason: "Initial", audit: ctx(orgId, admin.user.id, "admin") });
+
+    return { admin, mine, stranger, gradeLow, gradeHigh, mineFirst, minePromo, strangerGrade };
+  }
+
+  it("an admin-shaped role sees every associate's grade history, newest first", async () => {
+    const f = await seedHistoryFixture();
+    const rows = await listGradeHistory(db, { orgId: ORG, actorId: f.admin.user.id });
+    expect(rows.map((r) => r.id).sort()).toEqual([f.mineFirst.id, f.minePromo.id, f.strangerGrade.id].sort());
+    // Within "mine"'s own two rows, the later promotion sorts before the
+    // earlier initial assignment.
+    const mineRows = rows.filter((r) => r.associateId === f.mine.associate!.id);
+    expect(mineRows.map((r) => r.id)).toEqual([f.minePromo.id, f.mineFirst.id]);
+  });
+
+  it("an ASSOCIATE sees only their own grade history, not a stranger's", async () => {
+    const f = await seedHistoryFixture();
+    const rows = await listGradeHistory(db, { orgId: ORG, actorId: f.mine.user.id });
+    expect(rows.map((r) => r.id).sort()).toEqual([f.mineFirst.id, f.minePromo.id].sort());
+  });
+
+  it("an explicit associateId filter outside the caller's scope returns nothing", async () => {
+    const f = await seedHistoryFixture();
+    const rows = await listGradeHistory(db, { orgId: ORG, actorId: f.mine.user.id, associateId: f.stranger.associate!.id });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("refuses without associate.read", async () => {
+    await seedHistoryFixture();
+    const nobody = await makeUser(ORG, "histnobody", []);
+    await expect(listGradeHistory(db, { orgId: ORG, actorId: nobody.user.id })).rejects.toThrow(ForbiddenError);
   });
 });
