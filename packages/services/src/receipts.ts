@@ -5,7 +5,7 @@
 // collection, so whoever can mark money as received can unlock their own or
 // their team's pay.
 import { Prisma } from "@desire/db";
-import type { PrismaClient, Prisma as PrismaNS, Receipt, ReceiptAllocation, ReceiptMode } from "@desire/db";
+import type { PrismaClient, Prisma as PrismaNS, Receipt, ReceiptAllocation, ReceiptMode, ReceiptStatus } from "@desire/db";
 export type { Receipt, ReceiptAllocation };
 import { computeRelease, resolveMilestoneCumulativePct } from "@desire/commission";
 import type { ReleaseScheduleSlab } from "@desire/commission";
@@ -20,6 +20,10 @@ const ENTER_PERMISSION = "receipt.enter";
 // the same trusted finance workflow the maker-checker gate already put a
 // wall around (SUPER_ADMIN/FINANCE_ADMIN only), not a new capability.
 const VERIFY_PERMISSION = "receipt.verify";
+// Same read gate collections-sweep.ts's getCollectionsConsole already uses
+// for viewing collections data -- a list of receipts is that same kind of
+// view, not a new capability.
+const READ_PERMISSION = "report.read";
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -668,5 +672,31 @@ export async function bounceReceipt(db: PrismaClient, params: { receiptId: strin
     });
 
     return bounced;
+  });
+}
+
+// ── Read ───────────────────────────────────────────────────────────────
+
+export interface ReceiptListRow extends Receipt {
+  booking: { id: string; bookingNumber: string; customer: { name: string } };
+}
+
+export interface ListReceiptsParams {
+  orgId: string;
+  actorId: string;
+  status?: ReceiptStatus;
+}
+
+/** Phase 3.5 Slice 11 -- confirmed gap, no list existed (every function above
+ *  acts on a receiptId you already have). Org-wide, gated the same way the
+ *  console already is -- a receipts list and the verification queue are the
+ *  same view of the same data at two different status filters, not two
+ *  separate reads. */
+export async function listReceipts(db: PrismaClient, params: ListReceiptsParams): Promise<ReceiptListRow[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+  return db.receipt.findMany({
+    where: { orgId: params.orgId, ...(params.status ? { status: params.status } : {}) },
+    include: { booking: { select: { id: true, bookingNumber: true, customer: { select: { name: true } } } } },
+    orderBy: { receivedOn: "desc" },
   });
 }

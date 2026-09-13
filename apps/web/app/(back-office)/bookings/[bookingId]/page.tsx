@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { getBookingForActor, previewCancellation } from "@desire/services/bookings";
+import { getDemandsForBooking } from "@desire/services/payment-plans";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { formatArea, formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { requestDiscountAction, cancelBookingAction } from "./actions";
+import { requestDiscountAction, cancelBookingAction, raiseDemandAction, waiveDemandAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -39,12 +40,13 @@ export default async function BookingDetailPage({
   const booking = await getBookingForActor(db, { orgId: session.user.orgId, actorId: session.user.id, bookingId });
   if (!booking) notFound();
 
-  const [project, unit, customer, discountRequests, clawbackPreview] = await Promise.all([
+  const [project, unit, customer, discountRequests, clawbackPreview, demands] = await Promise.all([
     db.project.findUnique({ where: { id: booking.projectId }, select: { name: true, code: true } }),
     db.unit.findUnique({ where: { id: booking.unitId }, select: { unitNumber: true } }),
     db.customer.findUnique({ where: { id: booking.customerId }, select: { name: true, phone: true } }),
     db.discountRequest.findMany({ where: { bookingId }, orderBy: { createdAt: "desc" } }),
     booking.status === "CONFIRMED" ? previewCancellation(db, { orgId: session.user.orgId, bookingId }) : Promise.resolve(null),
+    getDemandsForBooking(db, { bookingId, orgId: session.user.orgId, actorId: session.user.id }),
   ]);
 
   return (
@@ -92,6 +94,64 @@ export default async function BookingDetailPage({
             </p>
             <p className="font-medium">Agreement value: {formatMoney(booking.agreementValue)}</p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Payment schedule</CardTitle>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {demands.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No payment plan attached to this booking.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="py-1.5 pr-4">#</th>
+                  <th className="py-1.5 pr-4">Description</th>
+                  <th className="py-1.5 pr-4 text-right">Amount</th>
+                  <th className="py-1.5 pr-4">Due date</th>
+                  <th className="py-1.5 pr-4">Status</th>
+                  <th className="py-1.5 pr-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {demands.map((demand) => (
+                  <tr key={demand.id}>
+                    <td className="py-1.5 pr-4">{demand.sequence}</td>
+                    <td className="py-1.5 pr-4">{demand.description}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(demand.amount)}</td>
+                    <td className="py-1.5 pr-4 tabular-nums">{formatDate(demand.dueDate)}</td>
+                    <td className="py-1.5 pr-4">{demand.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {demand.status === "SCHEDULED" ? (
+                          <form action={raiseDemandAction}>
+                            <input type="hidden" name="bookingId" value={booking.id} />
+                            <input type="hidden" name="demandId" value={demand.id} />
+                            <Button type="submit" size="xs">
+                              Raise
+                            </Button>
+                          </form>
+                        ) : null}
+                        {demand.status !== "WAIVED" ? (
+                          <form action={waiveDemandAction} className="flex items-center gap-1">
+                            <input type="hidden" name="bookingId" value={booking.id} />
+                            <input type="hidden" name="demandId" value={demand.id} />
+                            <Input name="reason" placeholder="Waive reason" className="h-7 w-28 text-xs" required />
+                            <Button type="submit" size="xs" variant="destructive">
+                              Waive
+                            </Button>
+                          </form>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </CardContent>
       </Card>
 

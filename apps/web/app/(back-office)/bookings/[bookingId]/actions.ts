@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { requestDiscount } from "@desire/services/discounts";
 import { cancelBooking } from "@desire/services/bookings";
+import { raiseDemand, waiveDemand } from "@desire/services/payment-plans";
 import { requireSession } from "@/lib/session";
 
 /** Same try/catch-and-redirect-with-message pattern as projects/[projectId]'s
@@ -48,6 +49,35 @@ export async function cancelBookingAction(formData: FormData): Promise<void> {
   await runAction(bookingId, () =>
     cancelBooking(db, {
       bookingId,
+      reason: String(formData.get("reason") ?? ""),
+      audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
+    }).then(() => undefined),
+  );
+}
+
+export async function raiseDemandAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const bookingId = String(formData.get("bookingId") ?? "");
+  const demandId = String(formData.get("demandId") ?? "");
+  const db = getPrismaClient();
+
+  await runAction(bookingId, () =>
+    raiseDemand(db, {
+      demandId,
+      audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
+    }).then(() => undefined),
+  );
+}
+
+export async function waiveDemandAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const bookingId = String(formData.get("bookingId") ?? "");
+  const demandId = String(formData.get("demandId") ?? "");
+  const db = getPrismaClient();
+
+  await runAction(bookingId, () =>
+    waiveDemand(db, {
+      demandId,
       reason: String(formData.get("reason") ?? ""),
       audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
     }).then(() => undefined),

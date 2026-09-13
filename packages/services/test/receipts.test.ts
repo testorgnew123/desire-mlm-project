@@ -26,6 +26,7 @@ import {
   bounceReceipt,
   clearReceipt,
   enterReceipt,
+  listReceipts,
   verifyReceipt,
 } from "../src/receipts";
 import type { AuditContext } from "../src/audit";
@@ -106,7 +107,7 @@ async function makeUser(orgId: string, label: string, codes: string[], opts: { a
   return { user, associate };
 }
 
-const FINANCE_PERMS = ["receipt.enter", "receipt.verify", "booking.create", "booking.confirm", "hold.create", "project.write", "demand.raise"];
+const FINANCE_PERMS = ["receipt.enter", "receipt.verify", "booking.create", "booking.confirm", "hold.create", "project.write", "demand.raise", "report.read"];
 
 async function seedFixture(orgId: string = ORG) {
   await db.organization.create({ data: { id: orgId, name: "Receipts Test Org", legalName: "Receipts Test Org Pvt Ltd" } });
@@ -647,5 +648,48 @@ describe("audit: entry, verify, clear and bounce each write a row", () => {
 
     await bounceReceipt(db, { receiptId: receipt.id, bounceReason: "test", audit: ctx(ORG, f.stranger.user.id, "stranger") });
     expect(await db.auditLog.count({ where: { entity: "Receipt", entityId: receipt.id, action: "UPDATE" } })).toBe(3);
+  });
+});
+
+describe("listReceipts (Phase 3.5 Slice 11 -- confirmed gap, no list existed)", () => {
+  it("returns every receipt in the org, newest received first", async () => {
+    const f = await seedFixture();
+    const plan = await seedPlan(f, ORG);
+    const confirmed = await confirmedBookingWithPlan(f, ORG, plan.id);
+    const first = await enterReceipt(db, { bookingId: confirmed.id, amount: "100", mode: "CASH", receivedOn: new Date("2026-01-01"), audit: ctx(ORG, f.admin.user.id, "admin") });
+    const second = await enterReceipt(db, { bookingId: confirmed.id, amount: "200", mode: "UPI", receivedOn: new Date("2026-02-01"), audit: ctx(ORG, f.admin.user.id, "admin") });
+
+    const rows = await listReceipts(db, { orgId: ORG, actorId: f.admin.user.id });
+    expect(rows.map((r) => r.id)).toEqual([second.id, first.id]);
+    expect(rows[0]!.booking.bookingNumber).toBe(confirmed.bookingNumber);
+  });
+
+  it("filters by status -- the verification queue is this same list, ENTERED only", async () => {
+    const f = await seedFixture();
+    const plan = await seedPlan(f, ORG);
+    const confirmed = await confirmedBookingWithPlan(f, ORG, plan.id);
+    const entered = await enterReceipt(db, { bookingId: confirmed.id, amount: "100", mode: "CASH", receivedOn: new Date(), audit: ctx(ORG, f.admin.user.id, "admin") });
+    const verified = await enterReceipt(db, { bookingId: confirmed.id, amount: "200", mode: "UPI", receivedOn: new Date(), audit: ctx(ORG, f.admin.user.id, "admin") });
+    await verifyReceipt(db, { receiptId: verified.id, audit: ctx(ORG, f.stranger.user.id, "stranger") });
+
+    const queue = await listReceipts(db, { orgId: ORG, actorId: f.admin.user.id, status: "ENTERED" });
+    expect(queue.map((r) => r.id)).toEqual([entered.id]);
+  });
+
+  it("does not leak another org's receipts", async () => {
+    const f = await seedFixture(ORG);
+    const other = await seedFixture(OTHER_ORG);
+    const otherPlan = await seedPlan(other, OTHER_ORG);
+    const otherBooking = await confirmedBookingWithPlan(other, OTHER_ORG, otherPlan.id);
+    await enterReceipt(db, { bookingId: otherBooking.id, amount: "100", mode: "CASH", receivedOn: new Date(), audit: ctx(OTHER_ORG, other.admin.user.id, "admin") });
+
+    const rows = await listReceipts(db, { orgId: ORG, actorId: f.admin.user.id });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("refuses without report.read", async () => {
+    await seedFixture();
+    const nobody = await makeUser(ORG, "nobody", []);
+    await expect(listReceipts(db, { orgId: ORG, actorId: nobody.user.id })).rejects.toThrow(ForbiddenError);
   });
 });

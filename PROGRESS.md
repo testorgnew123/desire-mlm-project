@@ -590,6 +590,54 @@ against a backend gap — fold missing backend into the same slice.*
   `runAction`-plus-Server-Action pattern already proven live in Slice 9's
   Reassign flow.
 
+### Slice 11 -- Back-office: Collections section
+
+- [x] Console + Aging: `/collections` uses the existing `getCollectionsConsole`
+  (one row per open demand, already carrying `daysOverdue`). The separately-
+  named "Aging report" screen is the same rows regrouped into buckets
+  (Current/1-30/31-60/61-90/90+) computed on the page rather than a second
+  aggregation query added to `collections-sweep.ts` -- it is the same data
+  at a different grouping, not a second read.
+- [x] Demands: folded into the Booking detail page (Slice 10) as a "Payment
+  schedule" card using the existing `getDemandsForBooking` (gated by
+  `booking.read`, not a separate permission -- "a demand schedule is a view
+  of its booking's payment plan, not an independent resource" per its own
+  doc comment) plus Raise/Waive actions -- a demand is inherently booking-
+  scoped, so this is the real screen for it, not a workaround for a missing
+  org-wide list.
+- [x] **Backend gap closed**: `receipts.ts` had no way to list receipts at
+  all (every function acts on a `receiptId` you already have). Added
+  `listReceipts` (org-wide, optional status filter), gated by the same
+  `report.read` permission `getCollectionsConsole` already uses for viewing
+  collections data. `/collections/receipts` (all receipts + enter-receipt
+  form + inline verify/clear/bounce actions) and
+  `/collections/verification-queue` (the same list, `status: "ENTERED"`)
+  are two views of this one function, not two reads.
+- [x] **Explicit scope reduction**: `allocateReceipt` (splitting a receipt's
+  amount across specific demand lines) is not exposed as its own UI this
+  slice -- a real, separate many-to-many allocation screen, not required
+  for the enter/verify/clear/bounce maker-checker lifecycle (the "highest-
+  value control in the system" per receipts.ts's own header comment) to
+  work correctly end-to-end. Tracked here as a follow-up, not silently
+  dropped.
+- [x] Real Postgres tests added: 4 for `listReceipts` (`receipts.test.ts`,
+  33 tests total in the file) -- all passing.
+- [x] Verified live against a running dev server: `/collections`,
+  `/collections/receipts`, and `/collections/verification-queue` all
+  rendered correctly with honest empty states (this org's seeded demo data
+  has no raised demands or receipts yet); the Booking detail page's new
+  Payment schedule card rendered its honest "no payment plan attached"
+  state for the seeded `TEST-SEED-0001` booking. No errors from the running
+  server (confirmed via server logs, not just the browser console, which
+  still carried stale entries from earlier in this long testing session).
+- [x] **Known environment limitation, not exercised live**: same as Slice
+  10 -- `enterReceipt`/`verifyReceipt`/`clearReceipt`/`bounceReceipt`/
+  `promiseToPay`/`raiseDemand`/`waiveDemand` all wrap their write in
+  `db.$transaction` against this dev shell's hosted-Neon `DATABASE_URL`,
+  the same round-trip latency already documented for `createDraftBooking`/
+  `confirmBooking`. Coverage is the real-Postgres test suite; the UI wiring
+  reuses the already-proven `runAction` pattern.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
