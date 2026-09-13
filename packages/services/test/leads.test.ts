@@ -13,6 +13,7 @@ import {
   StageChangeRequiresToStageError,
   completeSiteVisit,
   createLead,
+  getSourceRoi,
   hashForDedup,
   listLeads,
   logActivity,
@@ -33,6 +34,13 @@ async function reset() {
     await db.siteVisit.deleteMany({ where: { orgId } });
     await db.leadActivity.deleteMany({ where: { lead: { orgId } } });
     await db.leadClaim.deleteMany({ where: { lead: { orgId } } });
+    // Booking (and what it FKs to) has to go before Lead/Project -- makeBooking
+    // links a Booking to both, for getSourceRoi's tests.
+    await db.booking.deleteMany({ where: { orgId } });
+    await db.unit.deleteMany({ where: { orgId } });
+    await db.unitType.deleteMany({ where: { orgId } });
+    await db.customer.deleteMany({ where: { orgId } });
+    await db.priceList.deleteMany({ where: { orgId } });
     await db.lead.deleteMany({ where: { orgId } });
     await db.auditLog.deleteMany({ where: { orgId } });
     await db.associateHierarchy.deleteMany({ where: { associate: { orgId } } });
@@ -115,6 +123,40 @@ async function seedFixture(orgId: string = ORG) {
 
 function ctx(orgId: string, userId: string | null, label: string): AuditContext {
   return { orgId, actorId: userId, actorLabel: label };
+}
+
+/** A minimal real Booking linked to a lead -- just enough FK chain
+ *  (unit type, unit, customer) for getSourceRoi's `bookings: { some }`
+ *  filter to have something real to match against. */
+async function makeBooking(
+  orgId: string,
+  projectId: string,
+  leadId: string,
+  sellingAssociateId: string,
+  status: "CONFIRMED" | "CANCELLED" = "CONFIRMED",
+) {
+  const unitType = await db.unitType.create({
+    data: { orgId, projectId, code: `UT-${leadId.slice(-6)}`, name: "2BHK", carpetArea: "650.00", builtUpArea: "780.00", saleableArea: "975.00" },
+  });
+  const unit = await db.unit.create({
+    data: { orgId, projectId, unitTypeId: unitType.id, unitNumber: `U-${leadId.slice(-6)}`, floor: 1 },
+  });
+  const customer = await db.customer.create({ data: { orgId, name: "Test Customer", phone: "9000000000" } });
+  const priceList = await db.priceList.create({
+    data: {
+      orgId, projectId, version: Math.floor(Math.random() * 1_000_000),
+      name: `PL-${leadId.slice(-6)}`, status: "ACTIVE", validFrom: new Date("2020-01-01"), preparedById: "u_test",
+    },
+  });
+  return db.booking.create({
+    data: {
+      orgId, projectId, unitId: unit.id, customerId: customer.id, leadId, priceListId: priceList.id,
+      bookingNumber: `BK-${leadId.slice(-6)}`, bookingDate: new Date(), status, sellingAssociateId,
+      baseAmount: "100.00", plcAmount: "0.00", otherChargesAmount: "0.00", discountAmount: "0.00",
+      gstAmount: "0.00", stampDutyAmount: "0.00", registrationAmount: "0.00", agreementValue: "100.00",
+      commissionableValue: "100.00", saleableAreaAtBooking: "975.00", carpetAreaAtBooking: "650.00",
+    },
+  });
 }
 
 beforeEach(reset);
@@ -464,5 +506,53 @@ describe("listLeads: ASSOCIATE sees own, TEAM_LEAD sees own + downline", () => {
   it("refuses a caller without lead.read", async () => {
     const f = await seedFixture();
     await expect(listLeads(db, { orgId: ORG, actorId: f.noPerms.user.id })).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("getSourceRoi", () => {
+  it("counts leads and CONVERTED (non-cancelled-booking) leads per source", async () => {
+    const f = await seedFixture();
+    const walkInBooked = await createLead(db, {
+      name: "Walk-in booked", phone: "9888800001", source: "WALK_IN",
+      audit: ctx(ORG, f.report.user.id, "report"),
+    });
+    await createLead(db, {
+      name: "Walk-in unbooked", phone: "9888800002", source: "WALK_IN",
+      audit: ctx(ORG, f.report.user.id, "report"),
+    });
+    const referral = await createLead(db, {
+      name: "Referral booked", phone: "9888800003", source: "REFERRAL",
+      audit: ctx(ORG, f.report.user.id, "report"),
+    });
+
+    await makeBooking(ORG, f.project.id, walkInBooked.id, f.report.associate!.id);
+    await makeBooking(ORG, f.project.id, referral.id, f.report.associate!.id);
+
+    const rows = await getSourceRoi(db, { orgId: ORG, actorId: f.admin.user.id });
+
+    const walkIn = rows.find((row) => row.source === "WALK_IN");
+    expect(walkIn).toEqual({ source: "WALK_IN", leadCount: 2, bookingCount: 1, conversionPct: 50 });
+
+    const referralRow = rows.find((row) => row.source === "REFERRAL");
+    expect(referralRow).toEqual({ source: "REFERRAL", leadCount: 1, bookingCount: 1, conversionPct: 100 });
+  });
+
+  it("does not count a lead whose only booking was CANCELLED as converted", async () => {
+    const f = await seedFixture();
+    const lead = await createLead(db, {
+      name: "Cancelled booking", phone: "9888800004", source: "COLD_CALL",
+      audit: ctx(ORG, f.report.user.id, "report"),
+    });
+    await makeBooking(ORG, f.project.id, lead.id, f.report.associate!.id, "CANCELLED");
+
+    const rows = await getSourceRoi(db, { orgId: ORG, actorId: f.admin.user.id });
+
+    const coldCall = rows.find((row) => row.source === "COLD_CALL");
+    expect(coldCall).toEqual({ source: "COLD_CALL", leadCount: 1, bookingCount: 0, conversionPct: 0 });
+  });
+
+  it("refuses a caller without lead.read", async () => {
+    const f = await seedFixture();
+    await expect(getSourceRoi(db, { orgId: ORG, actorId: f.noPerms.user.id })).rejects.toThrow(ForbiddenError);
   });
 });

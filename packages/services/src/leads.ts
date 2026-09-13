@@ -616,3 +616,66 @@ export async function listLeads(db: PrismaClient, params: ListLeadsParams): Prom
 
   return db.lead.findMany({ where, orderBy: { createdAt: "desc" } });
 }
+
+export interface SourceRoiRow {
+  source: LeadSource;
+  leadCount: number;
+  bookingCount: number;
+  /** bookingCount / leadCount * 100, 0 when leadCount is 0. */
+  conversionPct: number;
+}
+
+export interface GetSourceRoiParams {
+  orgId: string;
+  actorId: string;
+  from?: Date;
+  to?: Date;
+}
+
+/** Bookings-per-source vs. leads-per-source (Phase 3.5 Slice 9 -- confirmed
+ *  gap, no aggregation existed). "Booked" means the lead has at least one
+ *  non-cancelled booking, via the existing Lead.bookings relation -- not a
+ *  new join, and not the same thing as `stage === "BOOKED"` (a stage can go
+ *  stale if a booking is later cancelled without the stage being walked
+ *  back through logActivity). Org-wide by design -- ROI is a leadership
+ *  view, not a per-associate one, so this does not apply the OWN/OWN_AND_
+ *  DOWNLINE scope listLeads uses. */
+export async function getSourceRoi(db: PrismaClient, params: GetSourceRoiParams): Promise<SourceRoiRow[]> {
+  await assertPermission(db, params.actorId, READ_PERMISSION);
+
+  const createdAt =
+    params.from || params.to
+      ? { ...(params.from ? { gte: params.from } : {}), ...(params.to ? { lte: params.to } : {}) }
+      : undefined;
+
+  const [leadCounts, bookingCounts] = await Promise.all([
+    db.lead.groupBy({
+      by: ["source"],
+      where: { orgId: params.orgId, ...(createdAt ? { createdAt } : {}) },
+      _count: true,
+    }),
+    db.lead.groupBy({
+      by: ["source"],
+      where: {
+        orgId: params.orgId,
+        ...(createdAt ? { createdAt } : {}),
+        bookings: { some: { status: { not: "CANCELLED" } } },
+      },
+      _count: true,
+    }),
+  ]);
+
+  const bookingCountBySource = new Map(bookingCounts.map((row) => [row.source, row._count]));
+
+  return leadCounts
+    .map((row) => {
+      const bookingCount = bookingCountBySource.get(row.source) ?? 0;
+      return {
+        source: row.source,
+        leadCount: row._count,
+        bookingCount,
+        conversionPct: row._count > 0 ? Math.round((bookingCount / row._count) * 1000) / 10 : 0,
+      };
+    })
+    .sort((a, b) => b.leadCount - a.leadCount);
+}

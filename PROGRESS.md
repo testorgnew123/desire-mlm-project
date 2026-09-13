@@ -508,6 +508,38 @@ against a backend gap — fold missing backend into the same slice.*
   empty state; Stock statement's project picker and grouped table both
   rendered correctly, matching the board's own live counts
 
+### Slice 9 -- Back-office: CRM section
+
+- [x] Leads list (`/crm`) and detail (`/crm/[leadId]`) -- desktop re-skin
+  of the PWA Leads screens' data via the existing `listLeads`, with fuller
+  columns (source, assigned associate) and a stage-filter chip row. Backend
+  ready, no gap.
+- [x] **Scope reduction, stated explicitly**: 08-SCREENS.md's "bulk actions
+  (reassign)" was built as a single-lead reassign action on the detail page
+  (`reassignLeadAction` -> `reassignLead`), not a multi-select bulk-reassign
+  UI -- that's a real, separable enhancement, not required for a working
+  reassign flow, and out of scope for this slice's time/context budget.
+- [x] **Backend gap closed**: no aggregation existed for source ROI. Added
+  `getSourceRoi(db, { orgId, actorId, from?, to? })` to
+  `packages/services/src/leads.ts` -- leads-per-source vs. bookings-per-
+  source (a "booked" lead has >=1 non-cancelled `Booking` via the existing
+  `Lead.bookings` relation, not the same as `stage === "BOOKED"`, which can
+  go stale). Org-wide by design (a leadership view, not scoped to
+  own/downline like `listLeads`). Real Postgres tests added to
+  `test/leads.test.ts` (converted vs. unbooked leads, cancelled bookings
+  excluded, permission refusal) -- 37 tests total in the file, all passing.
+  Rendered at `/crm/source-roi`.
+- [x] Reused the `runAction` try/catch-and-redirect-with-message pattern
+  from Slice 7 for `reassignLeadAction`.
+- [x] Verified live against a running dev server: `/crm` listed the real
+  "Test Buyer" lead (WALK_IN, Contacted, assigned to Demo Associate) from
+  earlier slices' seeded/tested data; the detail page rendered the same
+  activity timeline and site visit the PWA Leads screen shows; submitted
+  the Reassign form live (Test Buyer -> Demo Team Lead) and confirmed the
+  "Currently:" line updated after the round trip; `/crm/source-roi` showed
+  the correct live row (WALK_IN: 1 lead, 0 booked, 0%) matching the
+  Test Buyer lead having no booking yet.
+
 **Decision log:**
 - `attemptLogin` lives in `@desire/services/password`, takes `orgId` —
   resolved via `db.organization.findFirst()` since the system is genuinely
