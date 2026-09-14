@@ -466,3 +466,86 @@ export async function listGradeHistory(db: PrismaClient, params: ListGradeHistor
     approvedById: row.approvedById,
   }));
 }
+
+// ── Grade progress (Phase 5, Associate home dashboard tile) ─────────────
+
+export interface GradeProgressThreshold {
+  label: string;
+  current: string;
+  required: string;
+  met: boolean;
+}
+
+export interface GradeProgress {
+  currentGradeName: string | null;
+  nextGradeName: string | null;
+  thresholds: GradeProgressThreshold[];
+}
+
+/** Own-only -- no permission gate beyond having an Associate profile, same
+ *  as getEarnings (commission.ts). Deliberately recomputes the same stats
+ *  runGradeQualificationSweep does rather than sharing its private
+ *  in-transaction helpers -- reusing those would mean exporting sweep-only
+ *  internals for a single dashboard tile, a worse trade than the ~15 lines
+ *  duplicated here. If the two ever drift, the sweep is the one that
+ *  actually promotes and therefore wins. */
+export async function getGradeProgress(db: PrismaClient, params: { associateId: string; now?: Date }): Promise<GradeProgress> {
+  const now = params.now ?? new Date();
+  const associate = await db.associate.findUniqueOrThrow({ where: { id: params.associateId }, select: { orgId: true, joinDate: true } });
+
+  const current = await db.associateGrade.findFirst({
+    where: { associateId: params.associateId, validTo: null },
+    include: { grade: true },
+  });
+
+  const grades = await db.grade.findMany({ where: { orgId: associate.orgId, isActive: true }, orderBy: { rank: "asc" } });
+  const next = grades.find((g) => !current || g.rank > current.grade.rank);
+  if (!next) return { currentGradeName: current?.grade.name ?? null, nextGradeName: null, thresholds: [] };
+
+  const windowStart = new Date(now);
+  windowStart.setMonth(windowStart.getMonth() - QUALIFICATION_BOOKINGS_WINDOW_MONTHS);
+
+  const [salesAgg, bookingsInPeriod, accessibleIds] = await Promise.all([
+    db.commissionEntry.aggregate({
+      where: { beneficiaryAssociateId: params.associateId, role: "SELF", status: { not: "REVERSED" } },
+      _sum: { baseAmount: true },
+    }),
+    db.booking.count({ where: { sellingAssociateId: params.associateId, status: { not: "DRAFT" }, bookingDate: { gte: windowStart, lte: now } } }),
+    getAccessibleAssociateIds(db, params.associateId, "OWN_AND_DOWNLINE"),
+  ]);
+
+  const cumulativeSalesValue = salesAgg._sum.baseAmount ?? new Prisma.Decimal(0);
+  const teamSize = accessibleIds.length - 1;
+  const tenureMonths = monthsBetween(associate.joinDate, now);
+
+  const thresholds: GradeProgressThreshold[] = [];
+  if (next.minCumulativeSalesValue !== null) {
+    thresholds.push({
+      label: "Cumulative sales value",
+      current: cumulativeSalesValue.toFixed(2),
+      required: next.minCumulativeSalesValue.toFixed(2),
+      met: cumulativeSalesValue.greaterThanOrEqualTo(next.minCumulativeSalesValue),
+    });
+  }
+  if (next.minBookingsInPeriod !== null) {
+    thresholds.push({
+      label: `Bookings (last ${QUALIFICATION_BOOKINGS_WINDOW_MONTHS} months)`,
+      current: String(bookingsInPeriod),
+      required: String(next.minBookingsInPeriod),
+      met: bookingsInPeriod >= next.minBookingsInPeriod,
+    });
+  }
+  if (next.minTeamSize !== null) {
+    thresholds.push({ label: "Team size", current: String(teamSize), required: String(next.minTeamSize), met: teamSize >= next.minTeamSize });
+  }
+  if (next.minTenureMonths !== null) {
+    thresholds.push({
+      label: "Tenure (months)",
+      current: String(tenureMonths),
+      required: String(next.minTenureMonths),
+      met: tenureMonths >= next.minTenureMonths,
+    });
+  }
+
+  return { currentGradeName: current?.grade.name ?? null, nextGradeName: next.name, thresholds };
+}

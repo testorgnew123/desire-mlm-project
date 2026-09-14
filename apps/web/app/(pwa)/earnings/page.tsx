@@ -31,9 +31,9 @@ export default async function EarningsPage() {
 
   if (!associate) {
     return (
-      <main className="p-4">
+      <div className="p-4">
         <p className="text-sm text-muted-foreground">No associate record found.</p>
-      </main>
+      </div>
     );
   }
 
@@ -56,7 +56,7 @@ export default async function EarningsPage() {
   ]);
 
   return (
-    <main className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4 p-4">
       <h1 className="text-lg font-semibold">Earnings</h1>
 
       <Card>
@@ -141,6 +141,6 @@ export default async function EarningsPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

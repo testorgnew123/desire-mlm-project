@@ -126,7 +126,7 @@ sensitive-document views, impersonation, every approval decision.
 
 ## Before go-live
 
-- [ ] Penetration test by an external firm — **non-negotiable**
+- [ ] Penetration test by an external firm — **non-negotiable, and currently blocked on budget** (client cannot fund any paid service, ever — `PROGRESS.md` decision log, 2026-09-13, same status as BLOCKED#14). A free-tooling substitute exists — see [23-SECURITY-SELF-SCAN](23-SECURITY-SELF-SCAN.md) — but it is explicitly not equivalent and does not close this line
 - [ ] Secrets rotated off any development values
 - [ ] `AUTH_SECRET` and `PII_ENCRYPTION_KEY` generated fresh for production
 - [ ] MFA enrolled for every privileged user, verified

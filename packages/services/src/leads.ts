@@ -121,7 +121,7 @@ function auditDiff(existing: object, patch: object): { before: Record<string, un
  *  the SAME real number hash identically regardless of how it was typed;
  *  not a general international phone library. Revisit if this platform ever
  *  needs to accept non-Indian numbers. */
-function normalizePhone(phone: string): string {
+export function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   if (digits.length === 10) return `+91${digits}`;
   if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;

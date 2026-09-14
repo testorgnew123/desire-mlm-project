@@ -43,7 +43,7 @@ export default async function CommissionLedgerPage({
   const associateById = new Map(associates.map((a) => [a.id, a]));
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Commission ledger</h1>
         <div className="flex gap-3 text-sm">
@@ -136,6 +136,6 @@ export default async function CommissionLedgerPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

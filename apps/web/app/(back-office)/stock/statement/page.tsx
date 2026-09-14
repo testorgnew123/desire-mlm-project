@@ -40,7 +40,7 @@ export default async function StockStatementPage({
 
   if (!projectId) {
     return (
-      <main className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         <h1 className="text-lg font-semibold">Stock statement</h1>
         <p className="text-sm text-muted-foreground">Pick a project.</p>
         <div className="grid gap-4 sm:grid-cols-3">
@@ -55,7 +55,7 @@ export default async function StockStatementPage({
             </Link>
           ))}
         </div>
-      </main>
+      </div>
     );
   }
 
@@ -65,7 +65,7 @@ export default async function StockStatementPage({
   const rows = await getStockStatement(db, { orgId: session.user.orgId, projectId });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">Stock statement</h1>
         <p className="text-sm text-muted-foreground">{project.name}</p>
@@ -98,6 +98,6 @@ export default async function StockStatementPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

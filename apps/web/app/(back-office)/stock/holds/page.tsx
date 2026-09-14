@@ -29,7 +29,7 @@ export default async function ActiveHoldsPage() {
   const holds = await listActiveHolds(db, { orgId: session.user.orgId });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Active holds</h1>
       <Card>
         <CardHeader>
@@ -65,6 +65,6 @@ export default async function ActiveHoldsPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

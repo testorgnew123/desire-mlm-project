@@ -61,7 +61,7 @@ export default async function CollectionsPage({
   });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Collections</h1>
         <div className="flex gap-3 text-sm">
@@ -162,6 +162,6 @@ export default async function CollectionsPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

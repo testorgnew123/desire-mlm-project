@@ -67,7 +67,7 @@ export default async function SimulateSchemePage({
   }
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Simulate — {scheme.name} (v{scheme.version})</h1>
         <Link href="/commission/schemes" className="text-sm text-primary hover:underline">
@@ -135,6 +135,6 @@ export default async function SimulateSchemePage({
           </CardContent>
         </Card>
       ) : null}
-    </main>
+    </div>
   );
 }

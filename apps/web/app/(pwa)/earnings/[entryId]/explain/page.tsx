@@ -87,7 +87,7 @@ export default async function ExplainEntryPage({
   );
 
   return (
-    <main className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4 p-4">
       <div>
         <p className="text-2xl font-semibold tabular-nums">{formatMoney(entry.grossAmount)}</p>
         <p className="text-sm text-muted-foreground">
@@ -135,7 +135,7 @@ export default async function ExplainEntryPage({
           />
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }
 

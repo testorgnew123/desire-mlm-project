@@ -51,7 +51,7 @@ export default async function CommissionDisputesPage({
   const canResolve = permissions.has("commission.dispute_resolve");
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Commission disputes</h1>
         <Link href="/commission" className="text-sm text-primary hover:underline">
@@ -109,6 +109,6 @@ export default async function CommissionDisputesPage({
           </Card>
         ))
       )}
-    </main>
+    </div>
   );
 }

@@ -19,7 +19,7 @@ export default async function SourceRoiPage() {
   const rows = await getSourceRoi(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Source ROI</h1>
       <Card>
         <CardHeader>
@@ -53,6 +53,6 @@ export default async function SourceRoiPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

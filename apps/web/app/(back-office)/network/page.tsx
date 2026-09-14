@@ -45,7 +45,7 @@ export default async function NetworkPage() {
   }
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Network — Org tree</h1>
         <div className="flex gap-3 text-sm">
@@ -81,6 +81,6 @@ export default async function NetworkPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

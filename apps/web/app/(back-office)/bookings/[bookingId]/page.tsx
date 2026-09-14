@@ -50,7 +50,7 @@ export default async function BookingDetailPage({
   ]);
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{booking.bookingNumber}</h1>
         <p className="text-sm text-muted-foreground">
@@ -252,6 +252,6 @@ export default async function BookingDetailPage({
       </div>
 
       <p className="text-xs text-muted-foreground">Booked on {formatDate(booking.bookingDate)}</p>
-    </main>
+    </div>
   );
 }

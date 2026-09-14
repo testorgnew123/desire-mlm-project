@@ -32,7 +32,7 @@ export default async function NotificationRulesPage({
   const rules = await listNotificationRules(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Notification rules</h1>
         <Link href="/admin" className="text-sm text-primary hover:underline">
@@ -104,6 +104,6 @@ export default async function NotificationRulesPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

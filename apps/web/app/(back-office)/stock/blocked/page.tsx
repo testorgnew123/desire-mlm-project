@@ -28,7 +28,7 @@ export default async function BlockedUnitsPage() {
   const units = await listBlockedUnits(db, { orgId: session.user.orgId });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Blocked units</h1>
       <Card>
         <CardHeader>
@@ -66,6 +66,6 @@ export default async function BlockedUnitsPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

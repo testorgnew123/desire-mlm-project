@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { getPrismaClient, Prisma } from "@desire/db";
+import { isHoldLive } from "@desire/services/holds";
 import { getCollectionsConsole } from "@desire/services/collections-sweep";
+import { listReceipts } from "@desire/services/receipts";
 import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
 import { formatDateTime } from "@/lib/format";
@@ -29,28 +31,36 @@ export default async function DashboardPage() {
   const isSuperAdmin = roleCodes.has("SUPER_ADMIN");
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Dashboard</h1>
 
       {[...roleCodes].some((code) => STOCK_OVERVIEW_ROLES.has(code)) ? (
         <StockAndBookingSummary db={db} orgId={orgId} />
       ) : null}
 
+      {isSuperAdmin || roleCodes.has("SALES_HEAD") ? <ExecutiveMetrics db={db} orgId={orgId} /> : null}
+
       {isSuperAdmin || roleCodes.has("FINANCE_ADMIN") ? (
         <>
           <CollectionsAgingSummary db={db} orgId={orgId} actorId={actorId} />
           <CommissionOverview db={db} orgId={orgId} />
+          <FinanceOpsSummary db={db} orgId={orgId} actorId={actorId} />
         </>
       ) : null}
 
-      {isSuperAdmin || roleCodes.has("PROJECT_MANAGER") ? <PendingPriceLists db={db} orgId={orgId} /> : null}
+      {isSuperAdmin || roleCodes.has("PROJECT_MANAGER") ? (
+        <>
+          <PendingPriceLists db={db} orgId={orgId} />
+          <ActiveHolds db={db} orgId={orgId} />
+        </>
+      ) : null}
 
       {isSuperAdmin || roleCodes.has("SALES_HEAD") ? <PendingDiscountApprovals db={db} orgId={orgId} /> : null}
 
       {roleCodes.has("AUDITOR") ? <RecentAuditLog db={db} orgId={orgId} /> : null}
 
       {roleCodes.has("SALES_ADMIN") || roleCodes.has("AUDITOR") ? <OpenItemsSummary db={db} orgId={orgId} /> : null}
-    </main>
+    </div>
   );
 }
 
@@ -286,6 +296,125 @@ async function RecentAuditLog({ db, orgId }: { db: ReturnType<typeof getPrismaCl
         )}
       </CardContent>
     </Card>
+  );
+}
+
+const SOLD_UNIT_STATUSES = ["BOOKED", "AGREEMENT_SIGNED", "REGISTERED", "POSSESSION"] as const;
+
+/** The two Executive tiles docs/20-REPORTS.md names that the existing
+ *  StockAndBookingSummary/CollectionsAgingSummary/CommissionOverview tiles
+ *  don't cover: absorption (units sold as a share of total stock) and
+ *  commission cost % (commission as a share of revenue). Both all-time
+ *  org-wide figures -- a trailing-period velocity number is the separate
+ *  "Absorption & velocity" report (not built this pass), not a dashboard
+ *  tile's job. */
+async function ExecutiveMetrics({ db, orgId }: { db: ReturnType<typeof getPrismaClient>; orgId: string }) {
+  const [totalUnits, soldUnits, revenueAgg, commissionAgg] = await Promise.all([
+    db.unit.count({ where: { orgId } }),
+    db.unit.count({ where: { orgId, status: { in: [...SOLD_UNIT_STATUSES] } } }),
+    db.booking.aggregate({ where: { orgId, status: { not: "CANCELLED" } }, _sum: { agreementValue: true } }),
+    db.commissionEntry.aggregate({ where: { orgId, status: { not: "REVERSED" } }, _sum: { grossAmount: true } }),
+  ]);
+
+  const absorptionPct = totalUnits > 0 ? ((soldUnits / totalUnits) * 100).toFixed(1) : "0.0";
+  const revenue = revenueAgg._sum.agreementValue ?? new Prisma.Decimal(0);
+  const commission = commissionAgg._sum.grossAmount ?? new Prisma.Decimal(0);
+  const commissionCostPct = revenue.greaterThan(0) ? commission.div(revenue).mul(100).toFixed(1) : "0.0";
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>{absorptionPct}%</CardTitle>
+          <CardDescription>
+            Absorption — {soldUnits} of {totalUnits} units sold
+          </CardDescription>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>{commissionCostPct}%</CardTitle>
+          <CardDescription>Commission cost — of total booked revenue</CardDescription>
+        </CardHeader>
+      </Card>
+    </div>
+  );
+}
+
+async function ActiveHolds({ db, orgId }: { db: ReturnType<typeof getPrismaClient>; orgId: string }) {
+  const holds = await db.unitHold.findMany({
+    where: { orgId, releasedAt: null },
+    select: { expiresAt: true, releasedAt: true, unit: { select: { unitNumber: true } }, associate: { select: { code: true } } },
+    orderBy: { expiresAt: "asc" },
+    take: 10,
+  });
+  const live = holds.filter((hold) => isHoldLive(hold));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Active holds</CardTitle>
+        <CardDescription>{live.length} live hold(s), soonest expiry first</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-sm">
+        {live.length === 0 ? (
+          <p className="text-muted-foreground">No active holds.</p>
+        ) : (
+          live.map((hold, index) => (
+            <div key={index} className="flex justify-between">
+              <span>
+                Unit {hold.unit.unitNumber} — {hold.associate.code}
+              </span>
+              <span className="text-xs tabular-nums text-muted-foreground">{formatDateTime(hold.expiresAt)}</span>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The two Finance tiles docs/20-REPORTS.md names that aren't covered yet:
+ *  the verification queue (reuses receipts.ts's own listReceipts at its
+ *  ENTERED filter -- "a receipts list and the verification queue are the
+ *  same view of the same data at two different status filters", per that
+ *  function's own header) and payout batch status counts. */
+async function FinanceOpsSummary({ db, orgId, actorId }: { db: ReturnType<typeof getPrismaClient>; orgId: string; actorId: string }) {
+  const [pendingVerification, batchesByStatus] = await Promise.all([
+    listReceipts(db, { orgId, actorId, status: "ENTERED" }),
+    db.payoutBatch.groupBy({ by: ["status"], where: { orgId }, _count: true }),
+  ]);
+  const oldestPending = pendingVerification.at(-1);
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>{pendingVerification.length}</CardTitle>
+          <CardDescription>
+            Receipts awaiting verification
+            {oldestPending ? ` — oldest ${formatDateTime(oldestPending.receivedOn)}` : ""}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Payout batches</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-1 text-sm">
+          {batchesByStatus.length === 0 ? (
+            <p className="text-muted-foreground">No batches yet.</p>
+          ) : (
+            batchesByStatus.map((row) => (
+              <div key={row.status} className="flex justify-between tabular-nums">
+                <span className="text-muted-foreground">{row.status}</span>
+                <span>{row._count}</span>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

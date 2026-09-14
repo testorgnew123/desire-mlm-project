@@ -30,7 +30,7 @@ on:
   schedule:
     - cron: '*/5 * * * *'   # hold expiry sweep
     - cron: '30 2 * * *'    # collections escalation sweep + grade qualification -- both 08:00 IST
-    - cron: '30 18 * * *'   # invariant monitor + nightly backup -- both 00:00 IST
+    - cron: '30 18 * * *'   # invariant monitor + nightly backup + scheduled report emails -- all 00:00 IST
   workflow_dispatch:
     inputs:
       job:
@@ -43,6 +43,7 @@ on:
           - grades/qualify
           - monitor/invariants
           - backup/dump
+          - reports/send-scheduled
 
 concurrency:
   group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
@@ -58,7 +59,7 @@ jobs:
           case "${{ github.event.schedule }}" in
             '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
             '30 2 * * *')   echo 'jobs=collections/sweep grades/qualify' >> "$GITHUB_OUTPUT" ;;
-            '30 18 * * *')  echo 'jobs=monitor/invariants backup/dump' >> "$GITHUB_OUTPUT" ;;
+            '30 18 * * *')  echo 'jobs=monitor/invariants backup/dump reports/send-scheduled' >> "$GITHUB_OUTPUT" ;;
             *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
           esac
 

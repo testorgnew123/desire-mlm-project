@@ -18,7 +18,7 @@ export default async function AssociatesListPage() {
   const associates = await listAssociates(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Associates</h1>
         <Link href="/network" className="text-sm text-primary hover:underline">
@@ -60,6 +60,6 @@ export default async function AssociatesListPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

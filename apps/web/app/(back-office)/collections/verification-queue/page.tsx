@@ -30,7 +30,7 @@ export default async function VerificationQueuePage({
   const receipts = await listReceipts(db, { orgId: session.user.orgId, actorId: session.user.id, status: "ENTERED" });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Verification queue</h1>
         <Link href="/collections/receipts" className="text-sm text-primary hover:underline">
@@ -88,6 +88,6 @@ export default async function VerificationQueuePage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

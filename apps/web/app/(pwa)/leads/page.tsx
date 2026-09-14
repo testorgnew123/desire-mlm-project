@@ -30,7 +30,7 @@ export default async function LeadsPage({
   });
 
   return (
-    <main className="flex flex-col gap-3 p-4">
+    <div className="flex flex-col gap-3 p-4">
       <h1 className="text-lg font-semibold">Leads</h1>
 
       <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
@@ -76,6 +76,6 @@ export default async function LeadsPage({
           ))}
         </ul>
       )}
-    </main>
+    </div>
   );
 }

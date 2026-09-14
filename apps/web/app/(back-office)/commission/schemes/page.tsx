@@ -28,7 +28,7 @@ export default async function SchemesPage() {
   const projectById = new Map(projects.map((p) => [p.id, p]));
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Schemes</h1>
         <Link href="/commission" className="text-sm text-primary hover:underline">
@@ -78,6 +78,6 @@ export default async function SchemesPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

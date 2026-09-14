@@ -49,7 +49,7 @@ export default async function LeadDetailPage({
   ]);
 
   return (
-    <main className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4 p-4">
       <div>
         <h1 className="text-lg font-semibold">{lead.name}</h1>
         <p className="text-sm text-muted-foreground">
@@ -176,6 +176,6 @@ export default async function LeadDetailPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

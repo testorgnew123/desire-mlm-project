@@ -31,7 +31,7 @@ export default async function GradesPage({
   const grades = await db.grade.findMany({ where: { orgId: session.user.orgId }, orderBy: { rank: "asc" } });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Grades</h1>
         <Link href="/network" className="text-sm text-primary hover:underline">
@@ -97,6 +97,6 @@ export default async function GradesPage({
           </table>
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

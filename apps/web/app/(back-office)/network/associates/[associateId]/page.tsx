@@ -54,7 +54,7 @@ export default async function AssociateDetailPage({
   ]);
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{tree.associate.name}</h1>
         <p className="text-sm text-muted-foreground">
@@ -177,6 +177,6 @@ export default async function AssociateDetailPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

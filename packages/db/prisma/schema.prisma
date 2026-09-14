@@ -400,6 +400,7 @@ model Organization {
   paymentPlans      PaymentPlan[]
   notificationRules NotificationRule[]
   featureFlags      FeatureFlag[]
+  savedReportViews  SavedReportView[]
 
   @@map("organizations")
 }
@@ -425,10 +426,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  org       Organization @relation(fields: [orgId], references: [id])
-  associate Associate?
-  userRoles UserRole[]
-  sessions  Session[]
+  org              Organization      @relation(fields: [orgId], references: [id])
+  associate        Associate?
+  userRoles        UserRole[]
+  sessions         Session[]
+  savedReportViews SavedReportView[]
 
   @@unique([orgId, email])
   @@index([orgId, status])
@@ -1987,4 +1989,42 @@ model Notification {
   @@index([userId, status, createdAt])
   @@index([orgId, ruleCode, createdAt])
   @@map("notifications")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PHASE 5 — REPORT BUILDER
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A saved filter/column selection over one of the reports in
+/// packages/services/src/reports.ts, optionally emailed on a schedule.
+/// docs/20-REPORTS.md's own line: "Saved views over a curated set of
+/// fields... Not raw SQL access." `filters` only ever holds the same plain
+/// query params the report route already accepts (projectId, entity,
+/// action, date range) -- never a raw query, so the row-scoping and
+/// permission check in reports.ts still runs on every scheduled send.
+model SavedReportView {
+  id     String @id @default(cuid())
+  orgId  String
+  userId String
+
+  reportKey String
+  name      String
+  filters   Json @default("{}")
+
+  /// Null = never scheduled, run on demand only. A plain cron expression,
+  /// interpreted by runScheduledReportEmails against its own last-run check
+  /// -- no separate scheduler process, same as every other job in this
+  /// project (docs/21-TIER-LIMITS.md section 11).
+  scheduleCron String?
+  lastRunAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+
+  @@index([orgId, userId])
+  @@index([scheduleCron])
+  @@map("saved_report_views")
 }

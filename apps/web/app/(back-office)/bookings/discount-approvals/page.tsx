@@ -32,7 +32,7 @@ export default async function DiscountApprovalsPage({
   const requests = await listPendingDiscountRequests(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Discount approvals</h1>
         <Link href="/bookings" className="text-sm text-primary hover:underline">
@@ -89,6 +89,6 @@ export default async function DiscountApprovalsPage({
           </Card>
         ))
       )}
-    </main>
+    </div>
   );
 }

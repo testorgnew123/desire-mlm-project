@@ -35,7 +35,7 @@ export default async function PayoutBatchDetailPage({
   if (!batch) notFound();
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{batch.batchNumber}</h1>
         <p className="text-sm text-muted-foreground">
@@ -163,6 +163,6 @@ export default async function PayoutBatchDetailPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

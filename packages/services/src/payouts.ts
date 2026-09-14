@@ -12,6 +12,7 @@ export type { PayoutBatch, PayoutLine, Recovery, Adjustment };
 import Decimal from "decimal.js";
 import { resolveTdsSection, resolveEffectiveTdsRate, computeTds, gstApplies, computeGst, GST_RATE_PCT_IF_REGISTERED } from "@desire/tax";
 import { writeAuditLog, type AuditContext } from "./audit";
+import { toCsv } from "./export";
 import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
 import { decryptField } from "./encryption";
 
@@ -410,15 +411,6 @@ export async function approveBatch(
 }
 
 // ── Export ─────────────────────────────────────────────────────────────
-
-function csvField(value: string): string {
-  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
-function toCsv(header: string[], rows: string[][]): string {
-  return [header, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
-}
 
 export interface ExportCsvs {
   /** NEFT/RTGS bank-transfer instructions for CONSULTANT/CHANNEL_PARTNER

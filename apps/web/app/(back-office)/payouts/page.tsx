@@ -35,7 +35,7 @@ export default async function PayoutsPage({
   const batches = await listPayoutBatches(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Payouts</h1>
         <div className="flex gap-3 text-sm">
@@ -103,6 +103,6 @@ export default async function PayoutsPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

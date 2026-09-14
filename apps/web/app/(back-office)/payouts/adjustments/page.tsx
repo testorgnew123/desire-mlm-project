@@ -24,7 +24,7 @@ export default async function AdjustmentsPage() {
   const adjustments = await listAdjustments(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Adjustments</h1>
         <Link href="/payouts" className="text-sm text-primary hover:underline">
@@ -68,6 +68,6 @@ export default async function AdjustmentsPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

@@ -38,7 +38,7 @@ export default async function AuditLogPage({
   });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Audit log</h1>
         <Link href="/admin" className="text-sm text-primary hover:underline">
@@ -105,6 +105,6 @@ export default async function AuditLogPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

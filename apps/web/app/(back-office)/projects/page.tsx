@@ -27,7 +27,7 @@ export default async function ProjectsPage() {
   });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Projects</h1>
       {projects.length === 0 ? (
         <p className="text-sm text-muted-foreground">No projects yet.</p>
@@ -51,6 +51,6 @@ export default async function ProjectsPage() {
           ))}
         </div>
       )}
-    </main>
+    </div>
   );
 }

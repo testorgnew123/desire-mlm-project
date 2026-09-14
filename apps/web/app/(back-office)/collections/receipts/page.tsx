@@ -39,7 +39,7 @@ export default async function ReceiptsPage({
   const receipts = await listReceipts(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Receipts</h1>
         <Link href="/collections" className="text-sm text-primary hover:underline">
@@ -144,6 +144,6 @@ export default async function ReceiptsPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

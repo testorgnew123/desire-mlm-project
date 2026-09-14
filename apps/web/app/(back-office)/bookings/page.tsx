@@ -58,7 +58,7 @@ export default async function BookingsPage({
   const customerById = new Map(customers.map((c) => [c.id, c]));
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Bookings</h1>
         {permissions.has("discount.approve") ? (
@@ -130,6 +130,6 @@ export default async function BookingsPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

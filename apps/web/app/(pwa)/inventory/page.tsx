@@ -22,7 +22,7 @@ export default async function PwaInventoryPage() {
   });
 
   return (
-    <main className="flex flex-col gap-3 p-4">
+    <div className="flex flex-col gap-3 p-4">
       <h1 className="text-lg font-semibold">Inventory</h1>
       {projects.length === 0 ? (
         <p className="text-sm text-muted-foreground">No projects yet.</p>
@@ -40,6 +40,6 @@ export default async function PwaInventoryPage() {
           </Link>
         ))
       )}
-    </main>
+    </div>
   );
 }

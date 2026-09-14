@@ -25,7 +25,7 @@ export default async function PromotionsPage() {
   const rows = await listGradeHistory(db, { orgId: session.user.orgId, actorId: session.user.id });
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Promotions</h1>
         <Link href="/network" className="text-sm text-primary hover:underline">
@@ -69,6 +69,6 @@ export default async function PromotionsPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

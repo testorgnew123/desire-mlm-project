@@ -16,7 +16,7 @@ export default async function AdminPage() {
   await requireSession();
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Admin</h1>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -51,6 +51,6 @@ export default async function AdminPage() {
           </CardHeader>
         </Card>
       </div>
-    </main>
+    </div>
   );
 }

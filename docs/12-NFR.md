@@ -69,6 +69,29 @@ WCAG 2.1 AA on back-office screens.
 - Screen-reader labels on all form controls
 - Respect `prefers-reduced-motion`
 
+> **Phase 5 automated pass (axe-core), 2026-09-14.** Found and fixed a real,
+> systemic bug across every back-office screen (34 files): each page
+> rendered its own `<main>` nested inside the sidebar shell's own `<main>`
+> (`SidebarInset`, `components/ui/sidebar.tsx`) — two landmarks of the same
+> role on one page, which every screen reader's landmark navigation treats
+> as ambiguous. Every affected page's own top-level element changed from
+> `<main>` to `<div>`; the shell's `SidebarInset` remains the page's one
+> real `<main>`. Verified zero violations post-fix on the PWA shell
+> (`(pwa)/home`) and the exact duplicate-landmark rules cleared on the
+> back-office shell.
+>
+> **One real finding left open, deliberately not patched under time
+> pressure**: the back-office shell's own `<header>` (holds the sidebar
+> toggle) sits inside `SidebarInset`'s `<main>`, so it can satisfy "has a
+> banner landmark" or "not nested inside another landmark" but not both at
+> once without moving it outside `SidebarInset` in the DOM — which risks
+> breaking `SidebarProvider`'s expected sibling layout for `Sidebar`/
+> `SidebarInset` (a shadcn/ui layout primitive, not something to restructure
+> without deliberately re-verifying its flex/grid behavior). Moderate
+> severity, one small header region, present on every back-office page —
+> real, not fixed this pass, needs a scoped shell-layout fix + full visual
+> re-check across the shell rather than a rushed patch.
+
 ## Browsers
 
 Chrome, Safari, Edge — last 2 versions. Android Chrome 100+. iOS Safari 15+.

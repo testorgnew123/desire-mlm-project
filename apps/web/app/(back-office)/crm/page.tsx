@@ -55,7 +55,7 @@ export default async function CrmLeadsPage({
   const associateById = new Map(associates.map((associate) => [associate.id, associate]));
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">CRM — Leads</h1>
         <Link href="/crm/source-roi" className="text-sm text-primary hover:underline">
@@ -126,6 +126,6 @@ export default async function CrmLeadsPage({
           )}
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

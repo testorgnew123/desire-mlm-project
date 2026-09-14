@@ -70,7 +70,7 @@ export default async function ProjectDetailPage({
   ]);
 
   return (
-    <main className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{project.name}</h1>
         <p className="text-sm text-muted-foreground">
@@ -285,6 +285,6 @@ export default async function ProjectDetailPage({
           </form>
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

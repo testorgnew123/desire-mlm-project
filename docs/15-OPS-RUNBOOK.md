@@ -68,10 +68,30 @@ becomes a breach.
 | Documents | Netlify Blobs. No built-in versioning or cross-region replication -- if either turns out to matter, that is a reason to reconsider the storage provider, not to build them by hand |
 | **Restore drill** | **Quarterly** |
 
-> An untested backup is not a backup. The quarterly drill restores to a scratch
-> Neon branch, runs the invariant suite against it, and records the wall-clock
-> time. That measured time is the real RTO — not the one in
-> [12-NFR](12-NFR.md), which is an aspiration until a drill confirms it.
+> An untested backup is not a backup. The quarterly drill fetches the latest
+> `backups/{date}.json` blob and restores it into a scratch Postgres database
+> (a free Neon branch, or local Docker Postgres) via
+> `packages/db/scripts/restore-drill.ts`, then records the wall-clock time.
+> That measured time is the real RTO — not the one in [12-NFR](12-NFR.md),
+> which is an aspiration until a drill confirms it.
+>
+> **First real drill run: 2026-09-14.** Fetched the actual nightly backup
+> blob from production (59 tables, taken 2026-09-13), restored all 38
+> non-empty tables into a scratch local Postgres database via the script's
+> dependency-order retry loop (no hardcoded table order — repeated passes
+> until nothing more can progress). **Every row restored correctly, verified
+> by row count per table plus a spot-check against known content** (unit
+> count, organization name). Wall clock: **under 5 seconds** for the restore
+> itself (schema migration apply is separate and takes a few seconds more).
+> One real bug was found and fixed *during* the drill — exactly what a drill
+> is for: a JSON-array-valued column (`PriceListItem.otherCharges`) was
+> being bound as a native Postgres array instead of JSON text, which the
+> real Postgres column rejected outright. Fixed by keeping an explicit
+> allowlist of the schema's actual `String[]` columns and treating every
+> other JS array as JSON. This RTO figure is against today's (dev/demo
+> scale) dataset — re-run once real data volume exists, per
+> [22-LOAD-TEST-RESULTS](22-LOAD-TEST-RESULTS.md)'s own caveat about
+> today's numbers being a floor, not a ceiling.
 
 ## Disaster recovery
 
