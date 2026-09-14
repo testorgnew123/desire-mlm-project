@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ClipboardList, Inbox, KeyRound, Percent, Receipt, Wallet } from "lucide-react";
 import { getPrismaClient, Prisma } from "@desire/db";
 import { isHoldLive } from "@desire/services/holds";
 import { getCollectionsConsole } from "@desire/services/collections-sweep";
@@ -7,6 +8,9 @@ import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
 import { formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { bookingStatusTone, commissionEntryStatusTone, payoutBatchStatusTone, unitStatusTone } from "@/lib/status-tone";
 
 export const metadata: Metadata = {
   title: "Dashboard — Desire",
@@ -97,11 +101,11 @@ async function StockAndBookingSummary({
         <CardHeader>
           <CardTitle>Units by status</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-1 text-sm">
+        <CardContent className="flex flex-col gap-2 text-sm">
           {unitsByStatus.map((row) => (
-            <div key={row.status} className="flex justify-between tabular-nums">
-              <span className="text-muted-foreground">{row.status}</span>
-              <span>{row._count}</span>
+            <div key={row.status} className="flex items-center justify-between">
+              <StatusBadge status={row.status} tone={unitStatusTone(row.status)} />
+              <span className="tabular-nums">{row._count}</span>
             </div>
           ))}
         </CardContent>
@@ -110,14 +114,14 @@ async function StockAndBookingSummary({
         <CardHeader>
           <CardTitle>Bookings by status</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-1 text-sm">
+        <CardContent className="flex flex-col gap-2 text-sm">
           {bookingsByStatus.length === 0 ? (
-            <p className="text-muted-foreground">No bookings yet.</p>
+            <EmptyState icon={ClipboardList} message="No bookings yet." />
           ) : (
             bookingsByStatus.map((row) => (
-              <div key={row.status} className="flex justify-between tabular-nums">
-                <span className="text-muted-foreground">{row.status}</span>
-                <span>{row._count}</span>
+              <div key={row.status} className="flex items-center justify-between">
+                <StatusBadge status={row.status} tone={bookingStatusTone(row.status)} />
+                <span className="tabular-nums">{row._count}</span>
               </div>
             ))
           )}
@@ -186,8 +190,8 @@ async function CommissionOverview({ db, orgId }: { db: ReturnType<typeof getPris
       </CardHeader>
       <CardContent className="grid grid-cols-3 gap-3 text-sm">
         {(["ACCRUED", "PAYABLE", "PAID"] as const).map((status) => (
-          <div key={status}>
-            <p className="text-xs text-muted-foreground">{status}</p>
+          <div key={status} className="flex flex-col gap-1">
+            <StatusBadge status={status} tone={commissionEntryStatusTone(status)} />
             <p className="font-medium tabular-nums">{formatMoney(totalByStatus.get(status) ?? "0")}</p>
           </div>
         ))}
@@ -212,7 +216,7 @@ async function PendingPriceLists({ db, orgId }: { db: ReturnType<typeof getPrism
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-sm">
         {priceLists.length === 0 ? (
-          <p className="text-muted-foreground">Nothing pending.</p>
+          <EmptyState icon={Inbox} message="Nothing pending." />
         ) : (
           priceLists.map((priceList) => (
             <div key={priceList.id} className="flex justify-between">
@@ -249,7 +253,7 @@ async function PendingDiscountApprovals({ db, orgId }: { db: ReturnType<typeof g
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-sm">
         {requests.length === 0 ? (
-          <p className="text-muted-foreground">Nothing pending.</p>
+          <EmptyState icon={Percent} message="Nothing pending." />
         ) : (
           requests.map((request) => (
             <div key={request.id} className="flex justify-between">
@@ -283,7 +287,7 @@ async function RecentAuditLog({ db, orgId }: { db: ReturnType<typeof getPrismaCl
       </CardHeader>
       <CardContent className="flex flex-col divide-y divide-border text-sm">
         {entries.length === 0 ? (
-          <p className="text-muted-foreground">No activity yet.</p>
+          <EmptyState icon={ClipboardList} message="No activity yet." />
         ) : (
           entries.map((entry) => (
             <div key={entry.id} className="flex items-center justify-between py-1.5 first:pt-0 last:pb-0">
@@ -358,7 +362,7 @@ async function ActiveHolds({ db, orgId }: { db: ReturnType<typeof getPrismaClien
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-sm">
         {live.length === 0 ? (
-          <p className="text-muted-foreground">No active holds.</p>
+          <EmptyState icon={KeyRound} message="No active holds." />
         ) : (
           live.map((hold, index) => (
             <div key={index} className="flex justify-between">
@@ -390,7 +394,10 @@ async function FinanceOpsSummary({ db, orgId, actorId }: { db: ReturnType<typeof
     <div className="grid gap-4 sm:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle>{pendingVerification.length}</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Receipt className="size-4 text-muted-foreground" />
+            {pendingVerification.length}
+          </CardTitle>
           <CardDescription>
             Receipts awaiting verification
             {oldestPending ? ` — oldest ${formatDateTime(oldestPending.receivedOn)}` : ""}
@@ -401,14 +408,14 @@ async function FinanceOpsSummary({ db, orgId, actorId }: { db: ReturnType<typeof
         <CardHeader>
           <CardTitle>Payout batches</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-1 text-sm">
+        <CardContent className="flex flex-col gap-2 text-sm">
           {batchesByStatus.length === 0 ? (
-            <p className="text-muted-foreground">No batches yet.</p>
+            <EmptyState icon={Wallet} message="No batches yet." />
           ) : (
             batchesByStatus.map((row) => (
-              <div key={row.status} className="flex justify-between tabular-nums">
-                <span className="text-muted-foreground">{row.status}</span>
-                <span>{row._count}</span>
+              <div key={row.status} className="flex items-center justify-between">
+                <StatusBadge status={row.status} tone={payoutBatchStatusTone(row.status)} />
+                <span className="tabular-nums">{row._count}</span>
               </div>
             ))
           )}

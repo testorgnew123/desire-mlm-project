@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { requireSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -162,7 +163,9 @@ export default async function ProjectDetailPage({
               {priceLists.map((priceList) => (
                 <div key={priceList.id} className="flex items-center justify-between py-1.5 text-sm first:pt-0">
                   <span>
-                    v{priceList.version} — {priceList.name} ({priceList.status}, {priceList._count.items} item(s))
+                    v{priceList.version} — {priceList.name} (
+                    <Badge variant="secondary">{priceList.status.replaceAll("_", " ")}</Badge>, {priceList._count.items}{" "}
+                    item(s))
                   </span>
                   {priceList.status === "DRAFT" || priceList.status === "PENDING_APPROVAL" ? (
                     <form action={publishPriceListAction}>
@@ -240,7 +243,7 @@ export default async function ProjectDetailPage({
             {schemes.map((scheme) => (
               <div key={scheme.id} className="flex items-center justify-between py-1.5 text-sm first:pt-0">
                 <span>
-                  v{scheme.version} — {scheme.name} ({scheme.status})
+                  v{scheme.version} — {scheme.name} (<Badge variant="secondary">{scheme.status.replaceAll("_", " ")}</Badge>)
                 </span>
                 {scheme.status === "DRAFT" || scheme.status === "PENDING_APPROVAL" ? (
                   <form action={publishSchemeAction}>

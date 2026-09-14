@@ -80,50 +80,54 @@ export default async function InventoryBoardPage({
   // redundant rows on the first poll.
   const readStartedAt = new Date();
 
-  const project = await db.project.findUnique({
-    where: { id: projectId, orgId },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      city: true,
-      towers: {
-        select: { id: true, code: true, name: true },
-        orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
-      },
-    },
-  });
-  if (!project) notFound();
-
-  const rows = await db.unit.findMany({
-    where: { orgId, projectId },
-    select: {
-      id: true,
-      unitNumber: true,
-      floor: true,
-      towerId: true,
-      facing: true,
-      plcTags: true,
-      status: true,
-      blockReason: true,
-      currentHoldId: true,
-      updatedAt: true,
-      carpetAreaOverride: true,
-      saleableAreaOverride: true,
-      unitType: {
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          bedrooms: true,
-          carpetArea: true,
-          builtUpArea: true,
-          saleableArea: true,
+  // Independent reads -- neither depends on the other's result, unlike the
+  // holds lookup below (which needs holdIds out of `rows`) -- so they run
+  // concurrently instead of paying two sequential round trips.
+  const [project, rows] = await Promise.all([
+    db.project.findUnique({
+      where: { id: projectId, orgId },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        city: true,
+        towers: {
+          select: { id: true, code: true, name: true },
+          orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
         },
       },
-    },
-    orderBy: [{ floor: "desc" }, { unitNumber: "asc" }],
-  });
+    }),
+    db.unit.findMany({
+      where: { orgId, projectId },
+      select: {
+        id: true,
+        unitNumber: true,
+        floor: true,
+        towerId: true,
+        facing: true,
+        plcTags: true,
+        status: true,
+        blockReason: true,
+        currentHoldId: true,
+        updatedAt: true,
+        carpetAreaOverride: true,
+        saleableAreaOverride: true,
+        unitType: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            bedrooms: true,
+            carpetArea: true,
+            builtUpArea: true,
+            saleableArea: true,
+          },
+        },
+      },
+      orderBy: [{ floor: "desc" }, { unitNumber: "asc" }],
+    }),
+  ]);
+  if (!project) notFound();
 
   // currentHoldId is a denormalised pointer with no Prisma relation on Unit
   // (packages/db/prisma/schema.prisma), so the live holds are a second read --

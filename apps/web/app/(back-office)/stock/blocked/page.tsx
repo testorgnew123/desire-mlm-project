@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { ShieldAlert } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
 import { listBlockedUnits } from "@desire/services/units";
 import { requireSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +39,7 @@ export default async function BlockedUnitsPage() {
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {units.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No blocked units.</p>
+            <EmptyState icon={ShieldAlert} message="No blocked units." />
           ) : (
             <table className="w-full text-sm">
               <thead>

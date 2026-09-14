@@ -11,10 +11,10 @@ actor and asserts. **The UI hiding a button is not access control.**
 
 | Role | Scope |
 |---|---|
-| `SUPER_ADMIN` | Everything, including schemes and RBAC. MFA required |
-| `FINANCE_ADMIN` | Payouts, tax, receipt verification, recoveries, liability. **Cannot touch inventory or schemes.** MFA required |
+| `SUPER_ADMIN` | Everything, including schemes and RBAC. MFA planned (see §MFA) |
+| `FINANCE_ADMIN` | Payouts, tax, receipt verification, recoveries, liability. **Cannot touch inventory or schemes.** MFA planned (see §MFA) |
 | `PROJECT_MANAGER` | Inventory, price lists, unit blocking — scoped to assigned projects |
-| `SALES_HEAD` | All associates and bookings, discount approvals, tree moves. MFA required |
+| `SALES_HEAD` | All associates and bookings, discount approvals, tree moves. MFA planned (see §MFA) |
 | `SALES_ADMIN` | Booking paperwork, receipt entry, hold administration |
 | `TEAM_LEAD` | Own team's leads, bookings, downline performance, own + team earnings |
 | `ASSOCIATE` | Own leads, holds, bookings, own earnings |
@@ -129,6 +129,12 @@ the model already carries this field directly; the generic
 
 ## MFA
 
-TOTP mandatory for `SUPER_ADMIN`, `FINANCE_ADMIN`, `SALES_HEAD` — set via
-`Role.requiresMfa`. Optional below. A user holding any MFA-required role cannot
-complete login without it.
+TOTP infrastructure (`Role.requiresMfa`, enrollment, `verifyMfaToken`) is
+built and working, but **not currently enforced for any role** — deferred by
+client decision 2026-09-14: real enrollment isn't ready yet, and forcing it
+now would lock people out. `MFA_REQUIRED_ROLES`/`MFA_REQUIRED_ROLE_CODES`
+are both empty. Originally-planned mandatory roles: `SUPER_ADMIN`,
+`FINANCE_ADMIN`, `SALES_HEAD` — restore by naming them in both lists (they
+must stay equal, a test enforces this) once the client is ready to enroll.
+A user who already has `User.mfaEnabled = true` is unaffected either way —
+that per-user opt-in path is independent of role-level enforcement.

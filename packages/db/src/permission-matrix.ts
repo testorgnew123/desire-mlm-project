@@ -41,8 +41,14 @@ export const ROLE_NAMES: Record<RoleCode, string> = {
 /** Mirrors auth.ts MFA_REQUIRED_ROLE_CODES -- duplicated as data here
  *  (rather than importing from auth.ts) because this file seeds Role rows
  *  directly and must not create a circular dependency between the two. The
- *  seed-consistency test asserts the two lists match. */
-export const MFA_REQUIRED_ROLES: RoleCode[] = ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD"];
+ *  seed-consistency test asserts the two lists match.
+ *
+ *  Deferred by client decision (2026-09-14): MFA enrollment isn't ready
+ *  yet, so no role forces it at login for now -- see docs/09-RBAC-MATRIX.md
+ *  §MFA and the PROGRESS.md decision log. Not a removal of the capability:
+ *  a user who already has User.mfaEnabled=true is unaffected, and this list
+ *  goes back to naming real roles once the client is ready to enroll. */
+export const MFA_REQUIRED_ROLES: RoleCode[] = [];
 
 export const PERMISSION_CODES = [
   "project.read",

@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import { Users } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { getSourceRoi } from "@desire/services/leads";
 import { requireSession } from "@/lib/session";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +30,7 @@ export default async function SourceRoiPage() {
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No leads yet.</p>
+            <EmptyState icon={Users} message="No leads yet." />
           ) : (
             <table className="w-full text-sm">
               <thead>

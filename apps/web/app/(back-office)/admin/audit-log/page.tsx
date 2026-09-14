@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ClipboardList } from "lucide-react";
 import type { AuditAction } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listAuditLog } from "@desire/services/audit";
 import { requireSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -76,7 +78,7 @@ export default async function AuditLogPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No matching audit rows.</p>
+            <EmptyState icon={ClipboardList} message="No matching audit rows." />
           ) : (
             <table className="w-full text-sm">
               <thead>

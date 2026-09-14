@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Building2 } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
 import { getStockStatement } from "@desire/services/units";
 import { requireSession } from "@/lib/session";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { unitStatusTone } from "@/lib/status-tone";
 
 export const dynamic = "force-dynamic";
 
@@ -73,7 +77,7 @@ export default async function StockStatementPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No units yet.</p>
+            <EmptyState icon={Building2} message="No units yet." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -89,7 +93,9 @@ export default async function StockStatementPage({
                   <tr key={index}>
                     <td className="py-1.5 pr-4">{row.towerName ?? "—"}</td>
                     <td className="py-1.5 pr-4">{row.unitTypeName}</td>
-                    <td className="py-1.5 pr-4">{row.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <StatusBadge status={row.status} tone={unitStatusTone(row.status)} />
+                    </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{row.count}</td>
                   </tr>
                 ))}

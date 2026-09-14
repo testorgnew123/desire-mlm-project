@@ -152,5 +152,8 @@ export async function userRequiresMfa(db: PrismaClient, userId: string): Promise
  *  schema is the seeded source of truth the real login flow checks (via a
  *  DB lookup through the user's actual roles) -- this constant exists for
  *  tests and for a seed-time assertion that the matrix was seeded
- *  consistently with the doc, not as a second, divergent source of truth. */
-export const MFA_REQUIRED_ROLE_CODES = ["SUPER_ADMIN", "FINANCE_ADMIN", "SALES_HEAD"] as const;
+ *  consistently with the doc, not as a second, divergent source of truth.
+ *
+ *  Deferred by client decision (2026-09-14): empty for now, see the mirror
+ *  of this comment on permission-matrix.ts's MFA_REQUIRED_ROLES. */
+export const MFA_REQUIRED_ROLE_CODES = [] as const;

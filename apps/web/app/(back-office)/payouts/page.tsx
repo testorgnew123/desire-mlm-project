@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Wallet } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listPayoutBatches } from "@desire/services/payouts";
 import { requireSession } from "@/lib/session";
@@ -8,6 +9,9 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { payoutBatchStatusTone } from "@/lib/status-tone";
 import { prepareBatchAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -72,7 +76,7 @@ export default async function PayoutsPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {batches.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No payout batches.</p>
+            <EmptyState icon={Wallet} message="No payout batches." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -94,7 +98,9 @@ export default async function PayoutsPage({
                     <td className="py-1.5 pr-4 tabular-nums">
                       {formatDate(batch.periodStart)} – {formatDate(batch.periodEnd)}
                     </td>
-                    <td className="py-1.5 pr-4">{batch.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <StatusBadge status={batch.status} tone={payoutBatchStatusTone(batch.status)} />
+                    </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(batch.totalNetPayable)}</td>
                   </tr>
                 ))}

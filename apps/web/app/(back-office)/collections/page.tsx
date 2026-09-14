@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Receipt } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { getCollectionsConsole } from "@desire/services/collections-sweep";
 import { requireSession } from "@/lib/session";
@@ -8,6 +9,7 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
 import { promiseToPayAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -114,7 +116,7 @@ export default async function CollectionsPage({
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No open demands.</p>
+            <EmptyState icon={Receipt} message="No open demands." />
           ) : (
             <table className="w-full text-sm">
               <thead>

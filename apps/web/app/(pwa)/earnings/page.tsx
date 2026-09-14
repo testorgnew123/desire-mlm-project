@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Users, Wallet } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { getEarnings } from "@desire/services/commission";
 import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
 import { formatDate } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { commissionEntryStatusTone } from "@/lib/status-tone";
 
 export const metadata: Metadata = {
   title: "Earnings — Desire",
@@ -32,7 +36,7 @@ export default async function EarningsPage() {
   if (!associate) {
     return (
       <div className="p-4">
-        <p className="text-sm text-muted-foreground">No associate record found.</p>
+        <EmptyState icon={Users} message="No associate record found." />
       </div>
     );
   }
@@ -121,7 +125,7 @@ export default async function EarningsPage() {
         </CardHeader>
         <CardContent className="flex flex-col divide-y divide-border">
           {entries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No commission entries yet.</p>
+            <EmptyState icon={Wallet} message="No commission entries yet." />
           ) : (
             entries.map((entry) => (
               <Link
@@ -132,7 +136,8 @@ export default async function EarningsPage() {
                 <div>
                   <p className="font-medium">{entry.role === "SELF" ? "Self" : `Override, L${entry.level}`}</p>
                   <p className="text-xs text-muted-foreground">
-                    {formatDate(entry.accruedAt)} · {entry.status}
+                    {formatDate(entry.accruedAt)} ·{" "}
+                    <StatusBadge status={entry.status} tone={commissionEntryStatusTone(entry.status)} />
                   </p>
                 </div>
                 <span className="font-medium tabular-nums">{formatMoney(entry.grossAmount)}</span>

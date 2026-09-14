@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Bell, CalendarClock, TrendingUp, Users } from "lucide-react";
 import { getPrismaClient, Prisma } from "@desire/db";
 import { getEarnings } from "@desire/services/commission";
 import { listNotifications } from "@desire/services/notifications";
@@ -10,6 +11,7 @@ import { formatIstClock } from "@/app/board/[projectId]/format";
 import { getGradeProgress } from "@desire/services/grades";
 import { getCollectionsConsole } from "@desire/services/collections-sweep";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const metadata: Metadata = {
   title: "Home — Desire",
@@ -31,9 +33,10 @@ export default async function PwaHomePage() {
   if (!associate) {
     return (
       <div className="p-4">
-        <p className="text-sm text-muted-foreground">
-          No associate record found for {session.user.name}. Nothing to show yet.
-        </p>
+        <EmptyState
+          icon={Users}
+          message={`No associate record found for ${session.user.name}. Nothing to show yet.`}
+        />
       </div>
     );
   }
@@ -118,7 +121,7 @@ export default async function PwaHomePage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm">
             {gradeProgress.thresholds.length === 0 ? (
-              <p className="text-muted-foreground">No auto-qualification thresholds configured for this grade.</p>
+              <EmptyState icon={TrendingUp} message="No auto-qualification thresholds configured for this grade." />
             ) : (
               gradeProgress.thresholds.map((threshold) => (
                 <div key={threshold.label} className="flex justify-between">
@@ -190,7 +193,7 @@ export default async function PwaHomePage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {todaysVisits.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No site visits scheduled today.</p>
+            <EmptyState icon={CalendarClock} message="No site visits scheduled today." />
           ) : (
             todaysVisits.map((visit) => (
               <div key={visit.id} className="flex items-center justify-between text-sm">
@@ -211,7 +214,7 @@ export default async function PwaHomePage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {recentNotifications.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No notifications yet.</p>
+            <EmptyState icon={Bell} message="No notifications yet." />
           ) : (
             recentNotifications.map((notification) => (
               <div key={notification.id} className="flex flex-col gap-0.5 text-sm">

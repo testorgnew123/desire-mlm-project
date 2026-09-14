@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Receipt } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listAdjustments } from "@desire/services/payouts";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +37,7 @@ export default async function AdjustmentsPage() {
       <Card>
         <CardContent className="overflow-x-auto">
           {adjustments.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No adjustments.</p>
+            <EmptyState icon={Receipt} message="No adjustments." />
           ) : (
             <table className="w-full text-sm">
               <thead>

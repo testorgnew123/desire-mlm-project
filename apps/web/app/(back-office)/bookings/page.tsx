@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ClipboardList } from "lucide-react";
 import type { BookingStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listBookings } from "@desire/services/bookings";
-import { getSessionPermissions } from "@desire/services/rbac";
-import { requireSession } from "@/lib/session";
+import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { bookingStatusTone } from "@/lib/status-tone";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +44,7 @@ export default async function BookingsPage({
 
   const [bookings, permissions] = await Promise.all([
     listBookings(db, { orgId: session.user.orgId, actorId: session.user.id, status: selectedStatus }),
-    getSessionPermissions(db, session.user.id),
+    getCachedSessionPermissions(db, session.user.id),
   ]);
 
   const projectIds = [...new Set(bookings.map((b) => b.projectId))];
@@ -95,7 +98,7 @@ export default async function BookingsPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {bookings.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No bookings.</p>
+            <EmptyState icon={ClipboardList} message="No bookings." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -120,7 +123,9 @@ export default async function BookingsPage({
                     <td className="py-1.5 pr-4">{projectById.get(booking.projectId)?.name ?? "—"}</td>
                     <td className="py-1.5 pr-4">{unitById.get(booking.unitId)?.unitNumber ?? "—"}</td>
                     <td className="py-1.5 pr-4">{customerById.get(booking.customerId)?.name ?? "—"}</td>
-                    <td className="py-1.5 pr-4">{booking.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <StatusBadge status={booking.status} tone={bookingStatusTone(booking.status)} />
+                    </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(booking.agreementValue)}</td>
                     <td className="py-1.5 pr-4 tabular-nums">{formatDate(booking.bookingDate)}</td>
                   </tr>

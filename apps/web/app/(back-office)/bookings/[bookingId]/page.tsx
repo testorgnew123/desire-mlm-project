@@ -1,14 +1,19 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { ClipboardList, Percent, Wallet } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { getBookingForActor, previewCancellation } from "@desire/services/bookings";
 import { getDemandsForBooking } from "@desire/services/payment-plans";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { formatArea, formatMoney } from "@/lib/money";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { approvalStatusTone, bookingStatusTone } from "@/lib/status-tone";
 import { requestDiscountAction, cancelBookingAction, raiseDemandAction, waiveDemandAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +59,8 @@ export default async function BookingDetailPage({
       <div>
         <h1 className="text-lg font-semibold">{booking.bookingNumber}</h1>
         <p className="text-sm text-muted-foreground">
-          {project?.name} ({project?.code}) · Unit {unit?.unitNumber} · {customer?.name} · {booking.status}
+          {project?.name} ({project?.code}) · Unit {unit?.unitNumber} · {customer?.name} ·{" "}
+          <StatusBadge status={booking.status} tone={bookingStatusTone(booking.status)} />
         </p>
       </div>
 
@@ -103,7 +109,7 @@ export default async function BookingDetailPage({
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {demands.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No payment plan attached to this booking.</p>
+            <EmptyState icon={ClipboardList} message="No payment plan attached to this booking." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -123,7 +129,9 @@ export default async function BookingDetailPage({
                     <td className="py-1.5 pr-4">{demand.description}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(demand.amount)}</td>
                     <td className="py-1.5 pr-4 tabular-nums">{formatDate(demand.dueDate)}</td>
-                    <td className="py-1.5 pr-4">{demand.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <Badge variant="secondary">{demand.status.replaceAll("_", " ")}</Badge>
+                    </td>
                     <td className="py-1.5 pr-4">
                       <div className="flex flex-wrap items-center gap-1.5">
                         {demand.status === "SCHEDULED" ? (
@@ -162,7 +170,7 @@ export default async function BookingDetailPage({
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {discountRequests.length === 0 ? (
-              <p className="text-sm text-muted-foreground">None requested.</p>
+              <EmptyState icon={Percent} message="None requested." />
             ) : (
               discountRequests.map((request) => (
                 <div key={request.id} className="flex flex-col gap-0.5 border-b border-border pb-2 text-sm last:border-0">
@@ -170,7 +178,7 @@ export default async function BookingDetailPage({
                     <span className="font-medium">
                       {formatMoney(request.amount)} ({request.pctOfBase.toString()}%)
                     </span>
-                    <span className="text-xs text-muted-foreground">{request.status}</span>
+                    <StatusBadge status={request.status} tone={approvalStatusTone(request.status)} />
                   </div>
                   <p className="text-xs text-muted-foreground">{request.justification}</p>
                   {request.decisionNote ? (
@@ -208,7 +216,7 @@ export default async function BookingDetailPage({
                 <div>
                   <p className="mb-2 text-sm font-medium">Clawback preview</p>
                   {!clawbackPreview || clawbackPreview.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No commission entries to claw back.</p>
+                    <EmptyState icon={Wallet} message="No commission entries to claw back." />
                   ) : (
                     <table className="w-full text-sm">
                       <thead>

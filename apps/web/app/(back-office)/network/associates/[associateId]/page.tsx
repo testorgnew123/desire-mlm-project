@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Users } from "lucide-react";
+import type { AssociateStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { getAssociateTree } from "@desire/services/associates";
 import { getEarnings } from "@desire/services/commission";
@@ -8,6 +10,9 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { associateStatusTone } from "@/lib/status-tone";
 import { moveAssociateAction, assignGradeAction } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -57,8 +62,9 @@ export default async function AssociateDetailPage({
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{tree.associate.name}</h1>
-        <p className="text-sm text-muted-foreground">
-          {tree.associate.code} · {tree.associate.gradeCode ?? "No grade"} · {tree.associate.status}
+        <p className="flex items-center gap-1 text-sm text-muted-foreground">
+          {tree.associate.code} · {tree.associate.gradeCode ?? "No grade"} ·{" "}
+          <StatusBadge status={tree.associate.status} tone={associateStatusTone(tree.associate.status as AssociateStatus)} />
         </p>
       </div>
 
@@ -148,7 +154,7 @@ export default async function AssociateDetailPage({
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {tree.downline.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No downline.</p>
+            <EmptyState icon={Users} message="No downline." />
           ) : (
             <table className="w-full text-sm">
               <thead>

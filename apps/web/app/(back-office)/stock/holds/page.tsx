@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { KeyRound } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
 import { listActiveHolds } from "@desire/services/units";
 import { requireSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +40,7 @@ export default async function ActiveHoldsPage() {
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {holds.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No active holds.</p>
+            <EmptyState icon={KeyRound} message="No active holds." />
           ) : (
             <table className="w-full text-sm">
               <thead>

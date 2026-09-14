@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ClipboardList } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { getPayoutBatch } from "@desire/services/payouts";
 import { requireSession } from "@/lib/session";
@@ -8,6 +9,9 @@ import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { payoutBatchStatusTone } from "@/lib/status-tone";
 import { approveBatchAction, exportBatchAction } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -38,8 +42,9 @@ export default async function PayoutBatchDetailPage({
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{batch.batchNumber}</h1>
-        <p className="text-sm text-muted-foreground">
-          {formatDate(batch.periodStart)} – {formatDate(batch.periodEnd)} · {batch.status}
+        <p className="flex items-center gap-1 text-sm text-muted-foreground">
+          {formatDate(batch.periodStart)} – {formatDate(batch.periodEnd)} ·{" "}
+          <StatusBadge status={batch.status} tone={payoutBatchStatusTone(batch.status)} />
         </p>
       </div>
 
@@ -123,7 +128,7 @@ export default async function PayoutBatchDetailPage({
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {batch.lines.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No lines.</p>
+            <EmptyState icon={ClipboardList} message="No lines." />
           ) : (
             <table className="w-full text-sm">
               <thead>

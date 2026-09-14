@@ -891,6 +891,11 @@ model Unit {
   @@index([projectId, status])
   @@index([projectId, towerId, floor])
   @@index([orgId, updatedAt])
+  // Backs getUnitDeltas (packages/services/src/units.ts) -- the board's 60s
+  // delta poll, the single most-executed query in the app -- which filters
+  // by projectId + updatedAt > since and sorts by updatedAt. Neither
+  // existing index covers that combination.
+  @@index([projectId, updatedAt])
   @@map("units")
 }
 

@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { TrendingUp } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listGradeHistory } from "@desire/services/grades";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +38,7 @@ export default async function PromotionsPage() {
       <Card>
         <CardContent className="overflow-x-auto">
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No grade changes recorded yet.</p>
+            <EmptyState icon={TrendingUp} message="No grade changes recorded yet." />
           ) : (
             <table className="w-full text-sm">
               <thead>

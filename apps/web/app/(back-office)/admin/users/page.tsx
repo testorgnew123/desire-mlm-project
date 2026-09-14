@@ -4,6 +4,7 @@ import { getPrismaClient, ROLE_CODES, ROLE_NAMES } from "@desire/db";
 import { listUsers } from "@desire/services/admin";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -98,7 +99,9 @@ export default async function AdminUsersPage({
                 <tr key={user.id}>
                   <td className="py-1.5 pr-4">{user.email}</td>
                   <td className="py-1.5 pr-4">{user.name}</td>
-                  <td className="py-1.5 pr-4">{user.status}</td>
+                  <td className="py-1.5 pr-4">
+                    <Badge variant="secondary">{user.status.replaceAll("_", " ")}</Badge>
+                  </td>
                   <td className="py-1.5 pr-4 tabular-nums">{user.lastLoginAt ? formatDate(user.lastLoginAt) : "Never"}</td>
                   <td className="py-1.5 pr-4">
                     <form action={updateUserRolesAction} className="flex items-center gap-1.5">

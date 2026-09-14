@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Building2 } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { requireSession } from "@/lib/session";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const metadata: Metadata = {
   title: "Inventory — Desire",
@@ -25,7 +27,7 @@ export default async function PwaInventoryPage() {
     <div className="flex flex-col gap-3 p-4">
       <h1 className="text-lg font-semibold">Inventory</h1>
       {projects.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No projects yet.</p>
+        <EmptyState icon={Building2} message="No projects yet." />
       ) : (
         projects.map((project) => (
           <Link key={project.id} href={`/inventory/${project.id}`}>

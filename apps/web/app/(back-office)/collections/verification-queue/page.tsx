@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Receipt } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listReceipts } from "@desire/services/receipts";
 import { requireSession } from "@/lib/session";
@@ -7,6 +8,7 @@ import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 import { verifyReceiptAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +49,7 @@ export default async function VerificationQueuePage({
       <Card>
         <CardContent className="overflow-x-auto">
           {receipts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nothing waiting on verification.</p>
+            <EmptyState icon={Receipt} message="Nothing waiting on verification." />
           ) : (
             <table className="w-full text-sm">
               <thead>

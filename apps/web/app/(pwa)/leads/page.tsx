@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Users } from "lucide-react";
 import type { LeadStage } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listLeads } from "@desire/services/leads";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
+import { EmptyState } from "@/components/empty-state";
 import { STAGES, STAGE_LABELS } from "./constants";
 
 export const metadata: Metadata = {
@@ -58,7 +60,7 @@ export default async function LeadsPage({
       </div>
 
       {leads.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No leads.</p>
+        <EmptyState icon={Users} message="No leads." />
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border">
           {leads.map((lead) => (

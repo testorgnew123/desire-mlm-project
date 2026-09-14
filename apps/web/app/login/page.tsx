@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { Building2, CircleAlert } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -51,7 +52,10 @@ export default async function LoginPage({
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted p-4">
       <Card className="w-full max-w-sm">
-        <CardHeader>
+        <CardHeader className="items-center text-center">
+          <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Building2 className="size-5" />
+          </div>
           <CardTitle>Sign in to Desire</CardTitle>
           <CardDescription>Real estate sales &amp; commission platform</CardDescription>
         </CardHeader>
@@ -72,7 +76,8 @@ export default async function LoginPage({
               />
             </div>
             {error ? (
-              <p role="alert" className="text-sm text-danger">
+              <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
+                <CircleAlert className="mt-0.5 size-4 shrink-0" />
                 {error}
               </p>
             ) : null}

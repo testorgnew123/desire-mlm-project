@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Users } from "lucide-react";
+import type { AssociateStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listAssociates } from "@desire/services/associates";
 import { requireSession } from "@/lib/session";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { associateStatusTone } from "@/lib/status-tone";
 
 export const dynamic = "force-dynamic";
 
@@ -64,7 +69,7 @@ export default async function NetworkPage() {
       <Card>
         <CardContent>
           {ordered.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No associates.</p>
+            <EmptyState icon={Users} message="No associates." />
           ) : (
             <ul className="flex flex-col gap-1 text-sm">
               {ordered.map((associate) => (
@@ -72,8 +77,9 @@ export default async function NetworkPage() {
                   <Link href={`/network/associates/${associate.associateId}`} className="hover:underline">
                     {associate.name}
                   </Link>{" "}
-                  <span className="text-xs text-muted-foreground">
-                    ({associate.code} · {associate.gradeCode ?? "—"} · {associate.status})
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    ({associate.code} · {associate.gradeCode ?? "—"} ·{" "}
+                    <StatusBadge status={associate.status} tone={associateStatusTone(associate.status as AssociateStatus)} />)
                   </span>
                 </li>
               ))}

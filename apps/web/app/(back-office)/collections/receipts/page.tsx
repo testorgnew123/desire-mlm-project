@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Receipt } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listReceipts } from "@desire/services/receipts";
 import { requireSession } from "@/lib/session";
@@ -8,6 +9,9 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { receiptStatusTone } from "@/lib/status-tone";
 import { enterReceiptAction, verifyReceiptAction, clearReceiptAction, bounceReceiptAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -79,7 +83,7 @@ export default async function ReceiptsPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {receipts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No receipts.</p>
+            <EmptyState icon={Receipt} message="No receipts." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -104,7 +108,9 @@ export default async function ReceiptsPage({
                     </td>
                     <td className="py-1.5 pr-4">{receipt.booking.customer.name}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(receipt.amount)}</td>
-                    <td className="py-1.5 pr-4">{receipt.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <StatusBadge status={receipt.status} tone={receiptStatusTone(receipt.status)} />
+                    </td>
                     <td className="py-1.5 pr-4 tabular-nums">{formatDate(receipt.receivedOn)}</td>
                     <td className="py-1.5 pr-4">
                       {receipt.status === "ENTERED" ? (

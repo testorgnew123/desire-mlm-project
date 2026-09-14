@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Percent } from "lucide-react";
 import type { CommissionEntryStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listCommissionEntries } from "@desire/services/commission";
@@ -9,6 +10,9 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { commissionEntryStatusTone } from "@/lib/status-tone";
 import { raiseDisputeAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -87,7 +91,7 @@ export default async function CommissionLedgerPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {entries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No commission entries.</p>
+            <EmptyState icon={Percent} message="No commission entries." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -110,7 +114,9 @@ export default async function CommissionLedgerPage({
                         {entry.role === "OVERRIDE" ? `Override L${entry.level}` : "Self"}
                       </td>
                       <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(entry.grossAmount)}</td>
-                      <td className="py-1.5 pr-4">{entry.status}</td>
+                      <td className="py-1.5 pr-4">
+                        <StatusBadge status={entry.status} tone={commissionEntryStatusTone(entry.status)} />
+                      </td>
                       <td className="py-1.5 pr-4 tabular-nums">{formatDateTime(entry.accruedAt)}</td>
                       <td className="py-1.5 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5">

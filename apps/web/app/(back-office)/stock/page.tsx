@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Building2 } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { requireSession } from "@/lib/session";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const metadata: Metadata = {
   title: "Inventory — Desire",
@@ -56,7 +58,7 @@ export default async function InventoryHubPage() {
       <div>
         <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Live board</h2>
         {projects.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No projects yet.</p>
+          <EmptyState icon={Building2} message="No projects yet." />
         ) : (
           <div className="grid gap-4 sm:grid-cols-3">
             {projects.map((project) => (

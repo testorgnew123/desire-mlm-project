@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { getPrismaClient } from "@desire/db";
-import { getSessionPermissions } from "@desire/services/rbac";
-import { requireSession } from "@/lib/session";
+import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { BACK_OFFICE_NAV, filterNav } from "@/lib/nav";
+import { HeaderTitle } from "@/components/header-title";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { UserMenu } from "@/components/user-menu";
 import {
   Sidebar,
   SidebarContent,
@@ -26,7 +28,7 @@ import {
 export default async function BackOfficeLayout({ children }: { children: ReactNode }) {
   const session = await requireSession();
   const db = getPrismaClient();
-  const permissions = await getSessionPermissions(db, session.user.id);
+  const permissions = await getCachedSessionPermissions(db, session.user.id);
   const items = filterNav(BACK_OFFICE_NAV, permissions);
 
   return (
@@ -41,7 +43,10 @@ export default async function BackOfficeLayout({ children }: { children: ReactNo
               <SidebarMenu>
                 {items.map((item) => (
                   <SidebarMenuItem key={item.key}>
-                    <SidebarMenuButton render={<Link href={item.href} />}>{item.label}</SidebarMenuButton>
+                    <SidebarMenuButton render={<Link href={item.href} />}>
+                      <item.icon />
+                      <span>{item.label}</span>
+                    </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>
@@ -49,16 +54,16 @@ export default async function BackOfficeLayout({ children }: { children: ReactNo
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {session.user.name}
-            <br />
-            {session.user.email}
-          </div>
+          <UserMenu name={session.user.name} email={session.user.email} />
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
+          <div className="flex-1">
+            <HeaderTitle shell="back-office" />
+          </div>
+          <ThemeToggle />
         </header>
         <div className="flex-1 p-6">{children}</div>
       </SidebarInset>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Percent } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listPendingDiscountRequests } from "@desire/services/discounts";
 import { requireSession } from "@/lib/session";
@@ -7,6 +8,7 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
 import { decideDiscountAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +51,7 @@ export default async function DiscountApprovalsPage({
       {requests.length === 0 ? (
         <Card>
           <CardContent>
-            <p className="text-sm text-muted-foreground">No discount requests waiting on your decision.</p>
+            <EmptyState icon={Percent} message="No discount requests waiting on your decision." />
           </CardContent>
         </Card>
       ) : (

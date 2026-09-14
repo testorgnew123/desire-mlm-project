@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Bell } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listNotificationRules } from "@desire/services/notifications";
 import { requireSession } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
 import { createNotificationRuleAction, toggleNotificationRuleAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -67,7 +69,7 @@ export default async function NotificationRulesPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {rules.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No notification rules.</p>
+            <EmptyState icon={Bell} message="No notification rules." />
           ) : (
             <table className="w-full text-sm">
               <thead>

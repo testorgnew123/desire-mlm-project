@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Building2 } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { requireSession } from "@/lib/session";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
 
 export const metadata: Metadata = {
   title: "Projects — Desire",
@@ -30,7 +32,7 @@ export default async function ProjectsPage() {
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Projects</h1>
       {projects.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No projects yet.</p>
+        <EmptyState icon={Building2} message="No projects yet." />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (

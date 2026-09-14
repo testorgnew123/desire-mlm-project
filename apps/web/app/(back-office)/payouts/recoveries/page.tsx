@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Receipt } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listRecoveries } from "@desire/services/payouts";
 import { requireSession } from "@/lib/session";
@@ -8,6 +9,9 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { recoveryStatusTone } from "@/lib/status-tone";
 import { writeOffRecoveryAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +53,7 @@ export default async function RecoveriesPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {recoveries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No recoveries.</p>
+            <EmptyState icon={Receipt} message="No recoveries." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -73,7 +77,9 @@ export default async function RecoveriesPage({
                     </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(recovery.amount)}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(recovery.outstandingAmount)}</td>
-                    <td className="py-1.5 pr-4">{recovery.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <StatusBadge status={recovery.status} tone={recoveryStatusTone(recovery.status)} />
+                    </td>
                     <td className="py-1.5 pr-4">{recovery.reason}</td>
                     <td className="py-1.5 pr-4 tabular-nums">{formatDate(recovery.createdAt)}</td>
                     <td className="py-1.5 pr-4">

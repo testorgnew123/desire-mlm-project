@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
+import { Users } from "lucide-react";
+import type { AssociateStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { getAssociateTree } from "@desire/services/associates";
 import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { associateStatusTone } from "@/lib/status-tone";
 
 export const metadata: Metadata = {
   title: "Team — Desire",
@@ -27,7 +32,7 @@ export default async function TeamPage() {
   if (!associate) {
     return (
       <div className="p-4">
-        <p className="text-sm text-muted-foreground">No associate record found.</p>
+        <EmptyState icon={Users} message="No associate record found." />
       </div>
     );
   }
@@ -53,7 +58,7 @@ export default async function TeamPage() {
       <h1 className="text-lg font-semibold">Team</h1>
 
       {tree.downline.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No downline yet.</p>
+        <EmptyState icon={Users} message="No downline yet." />
       ) : (
         <Card>
           <CardHeader>
@@ -66,7 +71,11 @@ export default async function TeamPage() {
                 <div>
                   <p className="font-medium">{member.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {member.code} · {member.gradeCode ?? "No grade"} · {member.status}
+                    {member.code} · {member.gradeCode ?? "No grade"} ·{" "}
+                    <StatusBadge
+                      status={member.status}
+                      tone={associateStatusTone(member.status as AssociateStatus)}
+                    />
                   </p>
                 </div>
                 <span className="font-medium tabular-nums">

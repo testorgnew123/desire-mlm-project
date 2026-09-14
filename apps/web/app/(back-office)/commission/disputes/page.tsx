@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Handshake } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
-import { getSessionPermissions } from "@desire/services/rbac";
-import { requireSession } from "@/lib/session";
+import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
 import { resolveDisputeAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +46,7 @@ export default async function CommissionDisputesPage({
       },
       orderBy: { createdAt: "asc" },
     }),
-    getSessionPermissions(db, session.user.id),
+    getCachedSessionPermissions(db, session.user.id),
   ]);
 
   const canResolve = permissions.has("commission.dispute_resolve");
@@ -68,7 +69,7 @@ export default async function CommissionDisputesPage({
       {disputes.length === 0 ? (
         <Card>
           <CardContent>
-            <p className="text-sm text-muted-foreground">No pending disputes.</p>
+            <EmptyState icon={Handshake} message="No pending disputes." />
           </CardContent>
         </Card>
       ) : (

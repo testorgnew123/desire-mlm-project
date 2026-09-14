@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { Calendar, ClipboardList } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listLeads } from "@desire/services/leads";
 import { requireSession } from "@/lib/session";
@@ -7,6 +8,7 @@ import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/empty-state";
 import { STAGE_LABELS, ACTIVITY_TYPE_LABELS } from "@/app/(pwa)/leads/constants";
 import { reassignLeadAction } from "./actions";
 
@@ -105,7 +107,7 @@ export default async function CrmLeadDetailPage({
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {siteVisits.length === 0 ? (
-              <p className="text-sm text-muted-foreground">None scheduled.</p>
+              <EmptyState icon={Calendar} message="None scheduled." />
             ) : (
               siteVisits.map((visit) => (
                 <div key={visit.id} className="flex items-center justify-between text-sm">
@@ -126,7 +128,7 @@ export default async function CrmLeadDetailPage({
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {activities.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No activity logged yet.</p>
+            <EmptyState icon={ClipboardList} message="No activity logged yet." />
           ) : (
             activities.map((activity) => (
               <div key={activity.id} className="flex flex-col gap-0.5 border-b border-border pb-2 text-sm last:border-0">

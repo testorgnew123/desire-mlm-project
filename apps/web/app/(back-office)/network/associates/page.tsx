@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Users } from "lucide-react";
+import type { AssociateStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listAssociates } from "@desire/services/associates";
 import { requireSession } from "@/lib/session";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { associateStatusTone } from "@/lib/status-tone";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +34,7 @@ export default async function AssociatesListPage() {
       <Card>
         <CardContent className="overflow-x-auto">
           {associates.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No associates.</p>
+            <EmptyState icon={Users} message="No associates." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -51,7 +56,9 @@ export default async function AssociatesListPage() {
                       </Link>
                     </td>
                     <td className="py-1.5 pr-4">{associate.gradeCode ?? "—"}</td>
-                    <td className="py-1.5 pr-4">{associate.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <StatusBadge status={associate.status} tone={associateStatusTone(associate.status as AssociateStatus)} />
+                    </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{associate.depth}</td>
                   </tr>
                 ))}

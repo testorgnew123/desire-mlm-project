@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { FileBarChart } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listSavedViews } from "@desire/services/report-schedules";
 import { requireSession } from "@/lib/session";
@@ -7,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EmptyState } from "@/components/empty-state";
 import { createSavedViewAction, deleteSavedViewAction } from "./actions";
 
 export const metadata: Metadata = {
@@ -109,7 +111,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
           </form>
 
           {savedViews.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No saved views yet.</p>
+            <EmptyState icon={FileBarChart} message="No saved views yet." />
           ) : (
             <table className="w-full text-sm">
               <thead>

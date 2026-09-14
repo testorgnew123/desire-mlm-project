@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Users } from "lucide-react";
 import type { LeadStage } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listLeads } from "@desire/services/leads";
 import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/empty-state";
+import { StatusBadge } from "@/components/status-badge";
+import { leadStageTone } from "@/lib/status-tone";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +94,7 @@ export default async function CrmLeadsPage({
       <Card>
         <CardContent className="overflow-x-auto">
           {leads.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No leads.</p>
+            <EmptyState icon={Users} message="No leads." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -115,7 +119,9 @@ export default async function CrmLeadsPage({
                       </td>
                       <td className="py-1.5 pr-4">{lead.phone}</td>
                       <td className="py-1.5 pr-4">{lead.source}</td>
-                      <td className="py-1.5 pr-4">{lead.stage}</td>
+                      <td className="py-1.5 pr-4">
+                        <StatusBadge status={lead.stage} tone={leadStageTone(lead.stage)} />
+                      </td>
                       <td className="py-1.5 pr-4">{associate ? `${associate.user.name} (${associate.code})` : "—"}</td>
                       <td className="py-1.5 pr-4 tabular-nums">{formatDate(lead.createdAt)}</td>
                     </tr>

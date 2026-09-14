@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { FileX } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listSchemes } from "@desire/services/schemes";
 import { requireSession } from "@/lib/session";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +42,7 @@ export default async function SchemesPage() {
       <Card>
         <CardContent className="overflow-x-auto">
           {schemes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No schemes.</p>
+            <EmptyState icon={FileX} message="No schemes." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -62,7 +65,9 @@ export default async function SchemesPage() {
                       </Link>
                     </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{scheme.version}</td>
-                    <td className="py-1.5 pr-4">{scheme.status}</td>
+                    <td className="py-1.5 pr-4">
+                      <Badge variant="secondary">{scheme.status.replaceAll("_", " ")}</Badge>
+                    </td>
                     <td className="py-1.5 pr-4">
                       {scheme.gradeRates.map((r) => `${r.grade.code}: ${r.rateValue.toString()}${r.rateType === "PCT_OF_BASE" ? "%" : ""}`).join(", ")}
                     </td>
