@@ -28,8 +28,21 @@ const nextConfig: NextConfig = {
   // promise rejection) on every route, not just the statement one, since
   // Netlify bundles the whole app into one function. Confirmed via
   // `netlify logs --source functions` against the live deploy.
+  //
+  // @node-rs/argon2's JS entry does the same trick: a platform-specific
+  // dynamic require() (picked at runtime by process.platform/arch) of an
+  // optional sibling package -- @node-rs/argon2-linux-x64-gnu on Netlify's
+  // Amazon Linux Lambda. The tracer can't follow that any better than
+  // pdfkit's font lookup, so the native binary was silently missing from
+  // the deployed function -- MODULE_NOT_FOUND on every /login attempt in
+  // prod, 500ing the whole login flow (webpack externals below stop
+  // `next build` from choking on it, but do nothing for the deploy-time
+  // file list).
   outputFileTracingIncludes: {
     "/api/**/*": ["../../node_modules/.pnpm/pdfkit@*/node_modules/pdfkit/js/standard-fonts/**/*"],
+    "/login/**/*": [
+      "../../node_modules/.pnpm/@node-rs+argon2-linux-x64-gnu@*/node_modules/@node-rs/argon2-linux-x64-gnu/**/*",
+    ],
   },
 
   // serverExternalPackages alone does not stop webpack from opening
