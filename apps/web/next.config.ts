@@ -11,20 +11,22 @@ const nextConfig: NextConfig = {
   // straight through it, because neither parses the binary; only building or
   // actually running the app surfaces it.
   //
-  // @node-rs/argon2 itself being listed here is not enough on its own -- its
-  // index.js requires a PLATFORM-SPECIFIC sibling package (a different
-  // require() request string), so that sibling has to be externalized too:
-  // -win32-x64-msvc locally, -linux-x64-gnu on Netlify. Needed now that
-  // Phase 3.5's login flow (apps/web/app/login/actions.ts) is the first
-  // request-path code to import packages/services/src/password.ts.
-  //
-  // It DOES still need to be listed, though (this entry was missing --
-  // confirmed live via `netlify logs`: "Cannot find module '@node-rs/argon2'"
-  // on every /login and /admin/users request). Without it, Next's output
-  // file tracer never copies @node-rs/argon2's own directory into the
-  // deployed function at all -- the webpack externals block below only stops
-  // `next build` from trying to parse the native binary, it does nothing for
-  // which files end up in the Lambda zip.
+  // @node-rs/argon2 also needs to be here, but listing it was NOT sufficient
+  // on its own (confirmed live via `netlify logs`: "Cannot find module
+  // '@node-rs/argon2'" on every /login request, even after adding this
+  // entry). Root cause: apps/web never had @node-rs/argon2 as its own
+  // package.json dependency -- it only reached apps/web transitively via
+  // packages/services/packages/db. transpilePackages (above) makes Next
+  // inline their .ts *source*, but under pnpm's strict linking that does
+  // nothing for a native dependency's actual on-disk resolution: nothing
+  // under apps/web/node_modules pointed at @node-rs/argon2, so neither
+  // Node's runtime require() nor Next's file tracer could resolve it from
+  // the compiled apps/web/.next/server/... output, no matter what's listed
+  // here. Fixed by adding @node-rs/argon2 directly to apps/web/package.json
+  // (matching the same "each package that needs it declares it" pattern
+  // already used for packages/db) -- once pnpm symlinks it into
+  // apps/web/node_modules, both resolution and tracing work, platform
+  // binary included, with nothing extra needed here.
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg", "@node-rs/argon2"],
 
   // pdfkit (a dependency of @react-pdf/renderer, used by the commission
@@ -36,21 +38,8 @@ const nextConfig: NextConfig = {
   // promise rejection) on every route, not just the statement one, since
   // Netlify bundles the whole app into one function. Confirmed via
   // `netlify logs --source functions` against the live deploy.
-  //
-  // @node-rs/argon2's JS entry does the same trick: a platform-specific
-  // dynamic require() (picked at runtime by process.platform/arch) of an
-  // optional sibling package -- @node-rs/argon2-linux-x64-gnu on Netlify's
-  // Amazon Linux Lambda. The tracer can't follow that any better than
-  // pdfkit's font lookup, so the native binary was silently missing from
-  // the deployed function -- MODULE_NOT_FOUND on every /login attempt in
-  // prod, 500ing the whole login flow (webpack externals below stop
-  // `next build` from choking on it, but do nothing for the deploy-time
-  // file list).
   outputFileTracingIncludes: {
     "/api/**/*": ["../../node_modules/.pnpm/pdfkit@*/node_modules/pdfkit/js/standard-fonts/**/*"],
-    "/login/**/*": [
-      "../../node_modules/.pnpm/@node-rs+argon2-linux-x64-gnu@*/node_modules/@node-rs/argon2-linux-x64-gnu/**/*",
-    ],
   },
 
   // serverExternalPackages alone does not stop webpack from opening
