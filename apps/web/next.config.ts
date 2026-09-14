@@ -11,13 +11,21 @@ const nextConfig: NextConfig = {
   // straight through it, because neither parses the binary; only building or
   // actually running the app surfaces it.
   //
-  // @node-rs/argon2 itself being listed was not enough on its own -- its
+  // @node-rs/argon2 itself being listed here is not enough on its own -- its
   // index.js requires a PLATFORM-SPECIFIC sibling package (a different
   // require() request string), so that sibling has to be externalized too:
   // -win32-x64-msvc locally, -linux-x64-gnu on Netlify. Needed now that
   // Phase 3.5's login flow (apps/web/app/login/actions.ts) is the first
   // request-path code to import packages/services/src/password.ts.
-  serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg"],
+  //
+  // It DOES still need to be listed, though (this entry was missing --
+  // confirmed live via `netlify logs`: "Cannot find module '@node-rs/argon2'"
+  // on every /login and /admin/users request). Without it, Next's output
+  // file tracer never copies @node-rs/argon2's own directory into the
+  // deployed function at all -- the webpack externals block below only stops
+  // `next build` from trying to parse the native binary, it does nothing for
+  // which files end up in the Lambda zip.
+  serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg", "@node-rs/argon2"],
 
   // pdfkit (a dependency of @react-pdf/renderer, used by the commission
   // statement route) resolves its built-in fonts via a dynamic require
