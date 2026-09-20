@@ -714,6 +714,22 @@ model AssociateGrade {
 ///   · an associate is never their own ancestor
 ///   · exactly one row per associate has validTo = null
 ///   · moves are rejected while a payout period is open
+///
+/// The prefix scan that makes `path` worth having needs an index Prisma
+/// cannot express. A plain btree (`@@index([path])`) is USELESS for
+/// `path LIKE 'prefix%'` on this database, because its collation is
+/// en_US.utf8 rather than C -- proven with EXPLAIN against real Postgres,
+/// seq-scan disabled: the planner still applied path as a Filter, never an
+/// Index Cond. So the index is hand-written with the text_pattern_ops
+/// operator class instead:
+///
+///   CREATE INDEX associate_hierarchy_path_prefix
+///     ON associate_hierarchy (path text_pattern_ops);
+///
+/// Without it every "all my downline" read (associates.ts's startsWith
+/// queries, used by the team dashboards) scans the whole table. Asserted in
+/// packages/db/test/partial-indexes.test.ts so a future migration cannot
+/// drop it silently.
 model AssociateHierarchy {
   id          String    @id @default(cuid())
   associateId String
@@ -729,7 +745,8 @@ model AssociateHierarchy {
 
   @@index([associateId, validTo])
   @@index([parentId, validTo])
-  @@index([path])
+  // NOTE: no @@index([path]) here on purpose -- see the text_pattern_ops
+  // index in this model's doc comment above.
   @@map("associate_hierarchy")
 }
 
@@ -1269,6 +1286,15 @@ model Booking {
   @@index([projectId, status])
   @@index([sellingAssociateId, bookingDate])
   @@index([customerId])
+  // unitId and leadId are foreign keys that were the only two relations on
+  // this model with no index of their own -- Postgres does not create one for
+  // a FK automatically. Both are read through, not just written: the stock
+  // statement (reports.ts) looks up a booking per unit across what is meant
+  // to reach 50,000 units, and the source-ROI report (leads.ts) filters leads
+  // by whether a booking references them. Cheap now, and they are the two
+  // indexes whose absence turns into a full scan per row later.
+  @@index([unitId])
+  @@index([leadId])
   @@map("bookings")
 }
 

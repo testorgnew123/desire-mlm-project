@@ -1,0 +1,23 @@
+-- Hand-written: Prisma cannot express a btree operator class, so this index
+-- lives in its own migration rather than a generated one (same reasoning as
+-- 20260905092850_add_partial_unique_indexes).
+--
+-- The previous migration dropped associate_hierarchy_path_idx, a plain btree
+-- on the same column. That index could never do its job: on this database
+-- (collation en_US.utf8, not C) a plain btree CANNOT serve
+-- `path LIKE 'prefix%'`. Proven with EXPLAIN against real Postgres with
+-- enable_seqscan = off -- the planner still chose a different index for the
+-- validTo predicate and applied path as a Filter, never an Index Cond. So
+-- the table was effectively being scanned for every downline read.
+--
+-- text_pattern_ops compares byte-by-byte rather than by collation rules,
+-- which is precisely what a prefix match needs. This serves the "all my
+-- downline" queries in packages/services/src/associates.ts (startsWith on
+-- the materialised ancestor path) that the team dashboards depend on, and
+-- which schema.prisma documents as "a prefix scan instead of a recursive
+-- CTE".
+--
+-- Asserted in packages/db/test/partial-indexes.test.ts so that a future
+-- migration, or a stray `prisma db push`, cannot drop it silently.
+CREATE INDEX "associate_hierarchy_path_prefix"
+  ON "associate_hierarchy" ("path" text_pattern_ops);

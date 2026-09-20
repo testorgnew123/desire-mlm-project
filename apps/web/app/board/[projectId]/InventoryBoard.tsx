@@ -26,6 +26,19 @@ const NO_TOWER = "__no_tower__";
  *  does not justify a shared module yet. */
 const HOLD_REQUEST_TIMEOUT_MS = 15_000;
 
+/** How old the server snapshot may be before the board force-refreshes on
+ *  mount.
+ *
+ *  Deliberately WELL BELOW next.config.ts's staleTimes.dynamic window (15 s):
+ *  a cache replay can hand us a snapshot of any age up to that window, so a
+ *  threshold at or above it would let replays through. High enough, though,
+ *  that a genuinely fresh render -- age is just the render+network time, and
+ *  this runs before the hook has measured clock skew -- does not trip it and
+ *  spend an invocation for nothing. Anything younger than this is at most a
+ *  few seconds stale, far inside the 60 s the board already tolerates
+ *  between ticks. */
+const STALE_SNAPSHOT_MS = 5_000;
+
 export interface InventoryBoardProps {
   projectId: string;
   projectName: string;
@@ -98,6 +111,29 @@ export function InventoryBoard({
   useEffect(() => {
     setIsReloading(false);
   }, [serverTime]);
+
+  // Re-poll on mount IF the snapshot we rendered from is already old.
+  //
+  // useUnitDeltas deliberately does not fetch on mount -- see its comment,
+  // "the server snapshot this page rendered with is already current, so the
+  // first poll is one interval away. One invocation saved on every board
+  // open." That assumption held while every board open was a fresh server
+  // render. It stopped holding when next.config.ts enabled
+  // staleTimes.dynamic: navigating back to the board within that window now
+  // replays a CACHED payload, so `units` can be seconds old while the hook
+  // happily waits up to 60 s for its first tick -- an associate could be
+  // looking at a unit someone else has already held.
+  //
+  // Conditional rather than unconditional so the original optimisation
+  // survives: a genuinely fresh render still costs no extra invocation, and
+  // only a cache replay pays for one. The threshold is generous because this
+  // runs before the hook has measured clock skew; erring towards an extra
+  // poll is the right way to be wrong on this screen.
+  useEffect(() => {
+    const snapshotAgeMs = Date.now() - Date.parse(serverTime);
+    if (snapshotAgeMs > STALE_SNAPSHOT_MS) refreshNow();
+    // serverTime identifies the snapshot; a new one means a real re-render.
+  }, [serverTime, refreshNow]);
 
   // A hold error is about the PREVIOUSLY selected unit -- switching to a
   // different one (or closing the drawer) must not carry it along and show a

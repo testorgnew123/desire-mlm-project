@@ -32,3 +32,40 @@ describe("hand-written partial unique indexes", () => {
     await prisma.$disconnect();
   });
 });
+
+// Same backstop, different reason: this one is not about correctness but about
+// the index being USABLE at all. A plain btree on `path` cannot serve
+// `LIKE 'prefix%'` under this database's en_US.utf8 collation -- the planner
+// silently falls back to filtering every row, which is what it did before
+// 20260920185000 replaced it with a text_pattern_ops index. If someone
+// "tidies" this back into a normal @@index([path]) in schema.prisma, the
+// downline queries keep working and only get quietly slower, so a plain
+// existence check is not enough -- assert the operator class too.
+describe("hand-written text_pattern_ops index", () => {
+  it("associate_hierarchy_path_prefix exists AND uses text_pattern_ops", async () => {
+    const rows = await prisma.$queryRaw<Array<{ indexdef: string }>>`
+      SELECT indexdef FROM pg_indexes WHERE indexname = 'associate_hierarchy_path_prefix'
+    `;
+    expect(rows, "Missing index: associate_hierarchy_path_prefix").toHaveLength(1);
+    expect(rows[0]?.indexdef).toMatch(/text_pattern_ops/i);
+  });
+
+  it("is actually chosen by the planner for a downline prefix scan", async () => {
+    // enable_seqscan off so table size (tiny in test) cannot decide this for
+    // us -- we want to know the index is CAPABLE of serving the predicate.
+    await prisma.$executeRawUnsafe("SET enable_seqscan = off");
+    const plan = await prisma.$queryRawUnsafe<Array<Record<string, string>>>(
+      `EXPLAIN SELECT * FROM associate_hierarchy WHERE path LIKE 'A/B/%'`,
+    );
+    const text = plan.map((row) => Object.values(row)[0]).join("\n");
+    expect(text, `planner did not use the prefix index:\n${text}`).toContain(
+      "associate_hierarchy_path_prefix",
+    );
+    // An Index Cond is a real range scan; a Filter means it read every row.
+    expect(text).toMatch(/Index Cond/);
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+});

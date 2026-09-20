@@ -5,6 +5,22 @@ const nextConfig: NextConfig = {
   // package.json main points at .ts, so Next has to transpile them.
   transpilePackages: ["@desire/services", "@desire/db"],
 
+  experimental: {
+    // Client-side router cache. Next 15 defaults dynamic routes to 0, so every
+    // back/forward re-fetched the whole RSC payload from Ohio -- measured at
+    // 378-518 ms per navigation (and 64 KB for /dashboard). 15 s makes repeat
+    // navigation instant, and also cuts function invocations, which are the
+    // binding free-tier constraint (125k/month, docs/21-TIER-LIMITS.md §1).
+    //
+    // 15 s rather than the 30 s+ that would cut more: this app's own rule is
+    // "inventory that is cached is inventory that is wrong"
+    // (app/board/[projectId]/page.tsx). The board additionally refreshes on
+    // mount so it can never paint stale unit states out of this cache -- the
+    // cache window only ever affects how quickly the shell appears there, not
+    // what availability the associate is shown.
+    staleTimes: { dynamic: 15, static: 180 },
+  },
+
   // Prisma's engineType="client" build carries a WASM query compiler. Bundling
   // it produces "Module parse failed: Unexpected character" at request time --
   // a 500 on every route touching the database. Typecheck and lint pass
