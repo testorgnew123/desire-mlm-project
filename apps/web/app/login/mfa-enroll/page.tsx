@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import QRCode from "qrcode";
 import { getPrismaClient } from "@desire/db";
-import { buildMfaEnrollmentUri, generateMfaSecret } from "@desire/services/auth";
+import { buildMfaEnrollmentUri, generateMfaSecret } from "@desire/services/mfa";
 import { readPendingMfaUserId } from "../pending";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";

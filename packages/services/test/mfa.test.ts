@@ -5,7 +5,7 @@ import {
   encryptMfaSecret,
   generateMfaSecret,
   verifyMfaToken,
-} from "../src/auth";
+} from "../src/mfa";
 
 describe("MFA (TOTP)", () => {
   beforeAll(() => {

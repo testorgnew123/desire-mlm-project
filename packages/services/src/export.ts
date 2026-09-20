@@ -2,9 +2,15 @@
 // caller of what used to be payouts.ts's private CSV helpers (its
 // bank-file/payroll-handoff export), which is what makes this a real shared
 // invariant rather than the usual per-file duplication convention in this
-// codebase. XLSX is new -- docs/20-REPORTS.md requires "CSV and XLSX" for
-// every report.
-import ExcelJS from "exceljs";
+// codebase.
+//
+// This module is deliberately dependency-light: CSV needs no library, and
+// keeping it that way is what allows payouts.ts (and, through it, grades.ts
+// and associates.ts) to import toCsv without dragging a spreadsheet engine
+// into their bundles. XLSX lives in ./xlsx, which owns the heavy `exceljs`
+// import -- see that file's header for the measurement that forced the
+// split. docs/20-REPORTS.md still requires "CSV and XLSX" for every report;
+// only the module boundary changed, not the capability.
 import type { PrismaClient, Prisma as PrismaNS } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 
@@ -20,29 +26,6 @@ export function csvField(value: string): string {
 
 export function toCsv(header: string[], rows: string[][]): string {
   return [header, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
-}
-
-/** Rows are plain strings, same as toCsv -- reports format money/dates
- *  themselves before handing rows here, so both export formats show
- *  identical values (docs/20-REPORTS.md's own convention: exact figures,
- *  DD-MMM-YYYY dates). */
-export async function toXlsx(columns: ReportColumn[], rows: string[][], asOf: Date): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("Report");
-
-  sheet.columns = columns.map((column) => ({ header: column.label, key: column.key }));
-  for (const row of rows) {
-    sheet.addRow(row);
-  }
-  sheet.getRow(1).font = { bold: true };
-
-  // docs/20-REPORTS.md: "As-of timestamp printed on every export."
-  const asOfRow = sheet.addRow([]);
-  asOfRow.getCell(1).value = `As of ${asOf.toISOString()}`;
-  asOfRow.font = { italic: true };
-
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
 }
 
 /** docs/20-REPORTS.md: "Every export writes AuditAction.EXPORT." Not tied to

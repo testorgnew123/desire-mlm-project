@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
-import { encryptMfaSecret, verifyMfaToken } from "@desire/services/auth";
+import { encryptMfaSecret, verifyMfaToken } from "@desire/services/mfa";
 import { readPendingMfaUserId } from "../pending";
 import { establishSession } from "../session";
 

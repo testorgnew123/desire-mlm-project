@@ -1,6 +1,7 @@
 export * from "./encryption";
 export * from "./audit";
 export * from "./auth";
+export * from "./mfa";
 export * from "./password";
 export * from "./rbac";
 export * from "./unit-transitions";
@@ -26,6 +27,11 @@ export * from "./payouts";
 export * from "./invariant-monitor";
 export * from "./backup";
 export * from "./export";
+// ./xlsx is deliberately NOT re-exported here. It owns the ~810 KB exceljs
+// import, and a barrel re-export would put that back into the bundle of
+// anything that ever imports this barrel -- which is exactly the leak the
+// export.ts/xlsx.ts split was made to fix. Import "@desire/services/xlsx"
+// directly (only the reports download route needs it).
 export * from "./reports";
 export * from "./email";
 export * from "./report-schedules";

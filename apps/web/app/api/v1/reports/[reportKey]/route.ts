@@ -23,7 +23,10 @@ import {
   getTallyTransactionExport,
   type ReportResult,
 } from "@desire/services/reports";
-import { toCsv, toXlsx, writeExportAudit } from "@desire/services/export";
+import { toCsv, writeExportAudit } from "@desire/services/export";
+// Narrow subpath on purpose: @desire/services/xlsx owns the ~810 KB exceljs
+// import, and this is the only route in the app that needs a workbook.
+import { toXlsx } from "@desire/services/xlsx";
 import { readSessionToken } from "@/lib/api-session";
 
 export const dynamic = "force-dynamic";

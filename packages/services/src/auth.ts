@@ -11,9 +11,7 @@
 // 12h idle / 7d absolute timeout, per-account lockout after 5 failed
 // attempts, server-side revocation on demand.
 import { randomBytes, createHash } from "node:crypto";
-import { authenticator } from "otplib";
 import type { PrismaClient, Prisma } from "@desire/db";
-import { decryptField, encryptField } from "./encryption";
 
 const SESSION_TOKEN_BYTES = 32;
 const SESSION_IDLE_TIMEOUT_MINUTES = 12 * 60;
@@ -128,30 +126,11 @@ export async function revokeAllSessions(
 
 // ── MFA (TOTP) ───────────────────────────────────────────────────────────
 //
-// mfaSecret is stored encrypted (via the same AES-256-GCM used for KYC
-// fields) even though the schema does not split it into separate
-// ciphertext/last4 columns the way PAN/Aadhaar do -- it is a single opaque
-// String column, so the "keyId:iv:tag:ciphertext" format from encryptField
-// fits it directly with no schema change. A TOTP secret is as sensitive as a
-// password; storing it in the clear next to an argon2id hash would be an
-// inconsistent security posture for no benefit.
-
-export function generateMfaSecret(): string {
-  return authenticator.generateSecret();
-}
-
-export function buildMfaEnrollmentUri(secret: string, accountLabel: string, issuer: string): string {
-  return authenticator.keyuri(accountLabel, issuer, secret);
-}
-
-export function verifyMfaToken(encryptedSecret: string, token: string): boolean {
-  const secret = decryptField(encryptedSecret);
-  return authenticator.verify({ token, secret });
-}
-
-export function encryptMfaSecret(plainSecret: string): string {
-  return encryptField(plainSecret);
-}
+// The TOTP functions themselves now live in ./mfa, which owns the `otplib`
+// import. They were moved out because this file holds validateSession, which
+// runs on every authenticated request -- see ./mfa's header. Only
+// userRequiresMfa stays here: it is a plain database read with no otplib
+// involvement, and it is part of the login flow's session logic.
 
 /** Whether ANY of the user's current roles requires MFA. `Role.requiresMfa`
  *  is the seeded source of truth (see the comment on MFA_REQUIRED_ROLE_CODES
