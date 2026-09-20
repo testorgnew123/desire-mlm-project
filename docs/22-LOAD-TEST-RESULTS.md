@@ -1,5 +1,43 @@
 # 22 — Load Test Results
 
+> ## Production latency investigation, 2026-09-20
+>
+> The client reported the deployed app "feeling slow". Measured production
+> directly (10 samples per route, median TTFB) instead of guessing, and found
+> the cause was **geography, not application code**:
+>
+> - The Netlify function ran in **`us-east-2` (Ohio)** — confirmed via
+>   `netlify api getSite` → `functions_region` — while Neon sat in
+>   **`ap-southeast-1` (Singapore)**. Every request therefore went
+>   India → Ohio → Singapore → Ohio → India.
+> - Measured RTT from the client machine: **~270 ms to Ohio, ~60 ms to
+>   Singapore**. The Ohio↔Singapore leg cost **~200 ms per query**, paid on
+>   every single round trip, warm or cold.
+> - The dashboard needs **7 sequential round trips minimum (21 queries
+>   total)**, so ~1.5 s of its latency was pure network.
+>
+> **Fix: moved the database to `aws-us-east-2`, colocating it with the
+> function** (Neon cannot change an existing project's region, so this was a
+> new free project + a data migration through this repo's own backup/restore
+> tooling — 59 tables, 436 rows, verified row-for-row before cutover).
+>
+> | Route | Before | After | |
+> |---|---|---|---|
+> | `/login` (renders a page, **zero** DB queries) | 471 ms | 437 ms | unchanged, as expected |
+> | `/api/health` (same, plus **one** `SELECT 1`) | 643 ms | 443 ms | **−200 ms** |
+>
+> (Minimum of 10 samples — the cleanest signal, least polluted by cold starts
+> and Neon's free-tier scale-to-zero wake.) The per-query penalty collapsed
+> from **~193 ms to ~6 ms**: `/api/health` now costs the same as the route
+> that does no database work at all, which is exactly what colocation should
+> produce.
+>
+> **The remaining ~440 ms floor is the India→Ohio round trip and is not
+> fixable on the free tier.** Netlify only allows choosing the function region
+> on **Pro**, which the permanent no-paid-services constraint rules out
+> (PROGRESS.md decision log, 2026-09-13). Recorded in
+> [21-TIER-LIMITS §7](21-TIER-LIMITS.md), not quietly absorbed.
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the

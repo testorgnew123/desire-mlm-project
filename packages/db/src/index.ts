@@ -21,7 +21,27 @@ function getAdapter(): PrismaPg {
     if (!connectionString) {
       throw new Error("DATABASE_URL is not set.");
     }
-    cachedAdapter = new PrismaPg({ connectionString });
+    // Pool options set explicitly; pg's defaults are not built for
+    // serverless. max is small on purpose -- a serverless container serves
+    // one request at a time and the widest Promise.all burst in this
+    // codebase is ~4 queries, so a bigger pool only buys simultaneous
+    // handshakes on a cold start. connectionTimeoutMillis is set because
+    // pg's default of 0 means a stalled connect hangs until the whole
+    // function times out, with no error worth reading.
+    //
+    // idleTimeoutMillis is raised off pg's 10s default (a warm container
+    // idle just over ten seconds would otherwise drop its socket and
+    // re-handshake) but deliberately NOT set to 0/never: with the database
+    // now colocated in us-east-2 a handshake is single-digit ms, so
+    // "never reap" buys almost nothing, while holding sockets open forever
+    // is a real liability in any long-lived process (it destabilised the
+    // 38-file test suite when tried).
+    cachedAdapter = new PrismaPg({
+      connectionString,
+      max: 5,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    });
   }
   return cachedAdapter;
 }

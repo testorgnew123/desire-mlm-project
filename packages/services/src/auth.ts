@@ -17,6 +17,10 @@ import { decryptField, encryptField } from "./encryption";
 
 const SESSION_TOKEN_BYTES = 32;
 const SESSION_IDLE_TIMEOUT_MINUTES = 12 * 60;
+/** How stale lastActiveAt may get before validateSession writes it back.
+ *  Trades a tiny amount of idle-timeout precision (5 min out of 12 h) for
+ *  one fewer database round trip on every authenticated request. */
+const LAST_ACTIVE_WRITE_TOLERANCE_MINUTES = 5;
 const SESSION_ABSOLUTE_TIMEOUT_DAYS = 7;
 
 export class SessionInvalidError extends Error {
@@ -83,10 +87,22 @@ export async function validateSession(db: PrismaClient, rawToken: string) {
   );
   if (idleDeadline < new Date()) throw new SessionInvalidError("idle timeout expired");
 
-  await db.session.update({
-    where: { id: session.id },
-    data: { lastActiveAt: new Date() },
-  });
+  // Only touch lastActiveAt when it is actually stale. This used to be an
+  // unconditional write, which cost a second serial database round trip on
+  // every authenticated request -- measurable, since the hosted database is
+  // a network hop away and the idle window this feeds is 12 HOURS. Letting
+  // it drift by at most LAST_ACTIVE_WRITE_TOLERANCE_MINUTES moves the
+  // effective idle deadline by well under 1%, and removes a write from the
+  // hot path of every single request (which also matters on a free tier
+  // metered by compute).
+  const lastActiveIsStale =
+    Date.now() - session.lastActiveAt.getTime() > LAST_ACTIVE_WRITE_TOLERANCE_MINUTES * 60_000;
+  if (lastActiveIsStale) {
+    await db.session.update({
+      where: { id: session.id },
+      data: { lastActiveAt: new Date() },
+    });
+  }
 
   return session;
 }

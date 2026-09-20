@@ -107,12 +107,37 @@ describe("attemptLogin / lockout", () => {
 });
 
 describe("sessions", () => {
-  it("creates a session, validates it, and touches lastActiveAt", async () => {
+  it("creates a session and validates it", async () => {
     const user = await makeTestUser("session-create");
     const { rawToken } = await createSession(db, user.id, { ipAddress: "127.0.0.1" });
 
     const validated = await validateSession(db, rawToken);
     expect(validated.userId).toBe(user.id);
+  });
+
+  it("does NOT rewrite lastActiveAt on a freshly-touched session", async () => {
+    const user = await makeTestUser("session-fresh-no-write");
+    const { rawToken } = await createSession(db, user.id, {});
+    const before = await db.session.findFirstOrThrow({ where: { userId: user.id } });
+
+    await validateSession(db, rawToken);
+
+    // Within the write tolerance, so the write is skipped -- that skipped
+    // round trip is the whole point (see validateSession's comment).
+    const after = await db.session.findFirstOrThrow({ where: { userId: user.id } });
+    expect(after.lastActiveAt.getTime()).toBe(before.lastActiveAt.getTime());
+  });
+
+  it("DOES rewrite lastActiveAt once it is stale, so the idle window still moves", async () => {
+    const user = await makeTestUser("session-stale-write");
+    const { rawToken } = await createSession(db, user.id, {});
+    const staleAt = new Date(Date.now() - 30 * 60_000); // 30 min: stale, but well inside the 12h idle limit
+    await db.session.updateMany({ where: { userId: user.id }, data: { lastActiveAt: staleAt } });
+
+    await validateSession(db, rawToken);
+
+    const after = await db.session.findFirstOrThrow({ where: { userId: user.id } });
+    expect(after.lastActiveAt.getTime()).toBeGreaterThan(staleAt.getTime());
   });
 
   it("rejects an unknown token", async () => {

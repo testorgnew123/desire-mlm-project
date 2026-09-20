@@ -103,12 +103,19 @@ So under the chosen stack, **relational data including KYC sits outside India.**
 > Neither country is currently restricted under DPDP, so the analysis below is
 > unchanged in kind — but the client should be told the data is US-hosted, and
 > the answer to "where is our data" changes again on upgrade.
+>
+> **This is now fact, not plan: the database was physically moved from
+> `ap-southeast-1` to `aws-us-east-2` on 2026-09-20**, with client approval,
+> after the Singapore↔Ohio split was measured costing ~200 ms on every single
+> query. No real KYC data existed at the time of the move — only synthetic
+> seed data — so nothing regulated has ever been stored in Singapore.
 
 Where that stands:
 
 - DPDP does **not** impose blanket localization. It permits cross-border transfer
-  except to countries the government restricts. Singapore is not restricted today.
-  Legal now — **standing policy risk** over a multi-year product.
+  except to countries the government restricts. Neither the United States (where
+  the data actually is) nor Singapore is restricted today. Legal now —
+  **standing policy risk** over a multi-year product.
 - **RBI payment-data localization** binds the payment gateway, not this system,
   provided we never store card or payment-instrument data. We don't. Keep it that way.
 - The practical risk is the client's counsel, not the statute — and that

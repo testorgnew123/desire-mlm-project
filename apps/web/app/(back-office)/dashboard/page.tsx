@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense, type ReactNode } from "react";
 import { ClipboardList, Inbox, KeyRound, Percent, Receipt, Wallet } from "lucide-react";
 import { getPrismaClient, Prisma } from "@desire/db";
 import { isHoldLive } from "@desire/services/holds";
@@ -8,6 +9,7 @@ import { requireSession } from "@/lib/session";
 import { formatMoney } from "@/lib/money";
 import { formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { bookingStatusTone, commissionEntryStatusTone, payoutBatchStatusTone, unitStatusTone } from "@/lib/status-tone";
@@ -25,7 +27,21 @@ const STOCK_OVERVIEW_ROLES = new Set(["SUPER_ADMIN", "SALES_HEAD", "PROJECT_MANA
  *  PWA Home tab instead (apps/web/app/page.tsx). No backend gaps: every
  *  widget below reads an existing table or the existing
  *  getCollectionsConsole function, nothing new. */
-export default async function DashboardPage() {
+export default function DashboardPage() {
+  // Deliberately NOT async: the heading flushes immediately, and everything
+  // that needs the database (including working out which tiles this role
+  // even gets) streams in behind a boundary.
+  return (
+    <div className="flex flex-col gap-4">
+      <h1 className="text-lg font-semibold">Dashboard</h1>
+      <Suspense fallback={<TileSkeleton />}>
+        <DashboardTiles />
+      </Suspense>
+    </div>
+  );
+}
+
+async function DashboardTiles() {
   const session = await requireSession();
   const db = getPrismaClient();
   const { orgId } = session.user;
@@ -36,35 +52,63 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-lg font-semibold">Dashboard</h1>
-
       {[...roleCodes].some((code) => STOCK_OVERVIEW_ROLES.has(code)) ? (
-        <StockAndBookingSummary db={db} orgId={orgId} />
+        <Tile><StockAndBookingSummary db={db} orgId={orgId} /></Tile>
       ) : null}
 
-      {isSuperAdmin || roleCodes.has("SALES_HEAD") ? <ExecutiveMetrics db={db} orgId={orgId} /> : null}
+      {isSuperAdmin || roleCodes.has("SALES_HEAD") ? (
+        <Tile><ExecutiveMetrics db={db} orgId={orgId} /></Tile>
+      ) : null}
 
       {isSuperAdmin || roleCodes.has("FINANCE_ADMIN") ? (
         <>
-          <CollectionsAgingSummary db={db} orgId={orgId} actorId={actorId} />
-          <CommissionOverview db={db} orgId={orgId} />
-          <FinanceOpsSummary db={db} orgId={orgId} actorId={actorId} />
+          <Tile><CollectionsAgingSummary db={db} orgId={orgId} actorId={actorId} /></Tile>
+          <Tile><CommissionOverview db={db} orgId={orgId} /></Tile>
+          <Tile><FinanceOpsSummary db={db} orgId={orgId} actorId={actorId} /></Tile>
         </>
       ) : null}
 
       {isSuperAdmin || roleCodes.has("PROJECT_MANAGER") ? (
         <>
-          <PendingPriceLists db={db} orgId={orgId} />
-          <ActiveHolds db={db} orgId={orgId} />
+          <Tile><PendingPriceLists db={db} orgId={orgId} /></Tile>
+          <Tile><ActiveHolds db={db} orgId={orgId} /></Tile>
         </>
       ) : null}
 
-      {isSuperAdmin || roleCodes.has("SALES_HEAD") ? <PendingDiscountApprovals db={db} orgId={orgId} /> : null}
+      {isSuperAdmin || roleCodes.has("SALES_HEAD") ? (
+        <Tile><PendingDiscountApprovals db={db} orgId={orgId} /></Tile>
+      ) : null}
 
-      {roleCodes.has("AUDITOR") ? <RecentAuditLog db={db} orgId={orgId} /> : null}
+      {roleCodes.has("AUDITOR") ? <Tile><RecentAuditLog db={db} orgId={orgId} /></Tile> : null}
 
-      {roleCodes.has("SALES_ADMIN") || roleCodes.has("AUDITOR") ? <OpenItemsSummary db={db} orgId={orgId} /> : null}
+      {roleCodes.has("SALES_ADMIN") || roleCodes.has("AUDITOR") ? (
+        <Tile><OpenItemsSummary db={db} orgId={orgId} /></Tile>
+      ) : null}
     </div>
+  );
+}
+
+/** Each tile owns its own Suspense boundary so the page flushes its shell
+ *  immediately and every tile streams in as its own queries resolve, rather
+ *  than the whole response waiting on the slowest widget (CollectionsAging,
+ *  which alone is three serial round trips). Independent boundaries also
+ *  mean one slow tile can't hold up the other eight. */
+function Tile({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<TileSkeleton />}>{children}</Suspense>;
+}
+
+function TileSkeleton() {
+  return (
+    <Card>
+      <CardHeader>
+        <Skeleton className="h-5 w-32" />
+        <Skeleton className="h-3 w-48" />
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-3/4" />
+      </CardContent>
+    </Card>
   );
 }
 

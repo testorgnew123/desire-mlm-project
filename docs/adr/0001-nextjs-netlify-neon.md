@@ -68,9 +68,15 @@ is capacity and operational posture, plus a known upgrade point before Phase 4.
 
 ### Accepted costs
 
-**No India region on Neon.** Relational data including KYC sits in Singapore.
-DPDP permits this today — Singapore is not a restricted country — but it is
-standing policy risk on a multi-year product. **No longer partially mitigated
+**No India region on Neon.** Relational data including KYC sits in the United
+States (`aws-us-east-2`). The project was originally created in Singapore and
+**actually moved to Ohio on 2026-09-20**, with client approval, to colocate it
+with the Ohio-locked functions — that removed ~200 ms from every query (see
+[22-LOAD-TEST-RESULTS](../22-LOAD-TEST-RESULTS.md)); the amendment above had
+specified Ohio from the start but the original project was created in Singapore
+regardless. DPDP permits US hosting today — the US is not a restricted country
+— but this is standing policy risk on a multi-year product, and it is now US
+rather than merely offshore. **No longer partially mitigated
 by India-resident document storage** — see the amendment below; the original
 S3-in-Mumbai plan was replaced with Netlify Blobs, which has no region
 control. See [11-COMPLIANCE-INDIA](../11-COMPLIANCE-INDIA.md).

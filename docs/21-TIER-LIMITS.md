@@ -88,7 +88,7 @@ every 15 min  =  2,880 / month
   materialises the audit row and the notification, so a slower cadence costs
   notification latency and nothing else.
 
-## 2. Region — the database must move to Ohio
+## 2. Region — the database must move to Ohio — **DONE 2026-09-20**
 
 Functions are locked to `cmh` (Ohio) on Free. If Neon stays in Singapore every
 query crosses the Pacific at ~200 ms, so a page issuing five queries spends a
@@ -97,6 +97,19 @@ full second on network alone.
 **Move Neon to `aws-us-east-2` (Ohio).** Colocated, the function↔DB hop is ~1 ms
 and the user pays the ~250 ms India→Ohio trip once per request rather than once
 per query.
+
+> **Status: done, and this section's prediction was exactly right.** The
+> original Neon project was created in `ap-southeast-1` anyway (2026-09-05),
+> so the app shipped with precisely the trans-Pacific penalty described here
+> until the client reported it as "slow" on 2026-09-20. Measured before the
+> move: **~193 ms added per single query** (`/api/health` vs an identical
+> route doing no DB work). After moving to `aws-us-east-2`: **~6 ms** — a
+> query now costs what the doc predicted. Real before/after numbers and
+> method in [22-LOAD-TEST-RESULTS](22-LOAD-TEST-RESULTS.md).
+>
+> The remaining **~440 ms per-request floor is the India→Ohio hop** in the
+> diagram below. It is not fixable on Free: the `sin` row needs Pro. Treat it
+> as this tier's permanent ceiling, not as something still to tune.
 
 ```
 Free:  User (India) ──250ms──► Netlify cmh (Ohio)   ──1ms──► Neon us-east-2
