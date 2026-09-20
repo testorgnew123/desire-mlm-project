@@ -37,6 +37,37 @@
 > on **Pro**, which the permanent no-paid-services constraint rules out
 > (PROGRESS.md decision log, 2026-09-13). Recorded in
 > [21-TIER-LIMITS §7](21-TIER-LIMITS.md), not quietly absorbed.
+>
+> ### End state, measured live in production
+>
+> | Measurement | Result |
+> |---|---|
+> | `/api/health` (one query) | **442 ms min / 498 ms median** (was 643/891) |
+> | `/login` (zero queries) | 485 ms min |
+> | Authenticated `/dashboard`, real data | **537–674 ms first byte, 650–790 ms total** |
+>
+> `/api/health` is now *faster* than `/login` — a database query no longer
+> costs more than not doing one, which is the whole point. The dashboard
+> makes **≥7 sequential round trips**, so at the pre-move rate of ~193 ms
+> each it was carrying roughly **1.3–1.5 s** of pure network that is now gone.
+> (That delta is an inference from two solid measurements — the per-query
+> penalty and the round-trip count — not a directly measured before/after of
+> the authenticated page, which was never captured pre-move.)
+>
+> ### On the streaming change: working, but currently invisible
+>
+> Reading the production response chunk by chunk, `/dashboard` arrives in
+> **6–9 chunks**, so it genuinely streams. But the skeleton and the real tile
+> data now land in the *same millisecond* — because with the database
+> colocated the tile queries finish before the shell has even flushed. Run
+> against local Postgres, where render is slow relative to the DB, the gap is
+> visible and real: **skeleton at 98 ms, data at 196 ms** in one response.
+>
+> So the colocation win has made the streaming win redundant *at today's data
+> volume*. It is kept deliberately anyway: it is the thing that stops one slow
+> query blocking an entire page once there is real data (the audit log alone
+> is projected at 1–2 GB/year), and `loading.tsx` still gives instant feedback
+> on client-side navigation regardless of query speed.
 
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
