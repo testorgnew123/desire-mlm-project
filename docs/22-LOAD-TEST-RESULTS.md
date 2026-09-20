@@ -68,6 +68,63 @@
 > query blocking an entire page once there is real data (the audit log alone
 > is projected at 1–2 GB/year), and `loading.tsx` still gives instant feedback
 > on client-side navigation regardless of query speed.
+>
+> ## Round two, same day: cold start, bundle weight, indexes
+>
+> With warm requests near the ~440 ms network floor, the remaining prize was
+> the **cold start** — the worst experience any user gets on this tier, since
+> Netlify Free has no provisioned concurrency.
+>
+> | | Before | After |
+> |---|---|---|
+> | **Cold `/dashboard`** (first hit after a deploy) | **4.2 s** | **1.73 s** |
+> | `/dashboard` server trace | 7.62 MB, 124 files | **4.91 MB** |
+> | Chunks over 1 MB | two, at 2,539 KB each | **none** |
+>
+> **What was actually wrong.** Prisma's `engineType="client"` ships its query
+> compiler as a 2.5 MB base64 string. It was being inlined into the bundle
+> **twice** — the identical blob emitted as two chunks, one traced by 97 of 98
+> routes and a second by 34 more (the back-office pages, which reach it
+> through a second webpack layer via their server actions). `/dashboard`
+> traced both: 5.08 MB of its 7.62 MB, base64-decoded and WASM-compiled on
+> every cold start. `serverExternalPackages` did not prevent it because
+> `transpilePackages` includes `@desire/db`, whose `main` is TypeScript
+> source, so the generated client entered webpack's graph and took its dynamic
+> import with it. Externalising it exposed a second bug: `apps/web` had never
+> declared `@prisma/client` — it only reached it transitively through
+> `packages/db` — the same pnpm strict-linking failure as the `/login` argon2
+> incident, and the same fix.
+>
+> Two libraries were also loading for routes that never use them: `exceljs`
+> (~810 KB) appeared in 26 of 98 route traces because CSV and XLSX shared a
+> module, and `otplib` sat in `auth.ts` beside `validateSession`, so every
+> authenticated request paid for it.
+>
+> **Indexes.** Two `Booking` foreign keys had no index. More importantly,
+> `AssociateHierarchy.path` had one that **could never be used**: every
+> downline read queries it with `startsWith`, and on this database
+> (collation `en_US.utf8`, not `C`) a plain btree cannot serve
+> `LIKE 'prefix%'`. Confirmed with `EXPLAIN … enable_seqscan = off` — the
+> planner applied `path` as a *Filter*, reading every row. Replaced with a
+> hand-written `text_pattern_ops` index; now an *Index Cond*, verified in
+> production. Seven further indexes the audit proposed were **deferred**:
+> with 440 rows they buy nothing measurable and cost storage against the
+> 0.5 GB cap.
+>
+> **Client-side caching.** `staleTimes.dynamic` was 0, so every back/forward
+> refetched the full RSC payload (378–518 ms). Now 15 s. The inventory board
+> refreshes on mount when its snapshot is older than 5 s, so the one screen
+> where "cached inventory is wrong" can never paint stale availability out of
+> that cache.
+>
+> **Rejected, with the arithmetic.** A keep-warm pinger would dodge cold
+> starts and Neon's 5-minute scale-to-zero, but Neon Free allows
+> **100 CU-hours/month** and keeping a 0.25 CU compute alive 24/7 costs
+> 730 × 0.25 = **182 CU-h** — it would suspend the database mid-month. Even
+> business-hours-only is ~90 CU-h, leaving no headroom. Server-side
+> `unstable_cache` was also rejected: those queries now cost ~2–6 ms against a
+> ~440 ms floor, so it would buy single-digit milliseconds for real
+> invalidation risk.
 
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
