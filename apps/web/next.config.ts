@@ -59,6 +59,25 @@ const nextConfig: NextConfig = {
           if (request && request.startsWith("@node-rs/argon2")) {
             return callback(null, `commonjs ${request}`);
           }
+          // Prisma's engineType="client" ships its query compiler as a 2.5 MB
+          // base64 string in an .mjs file, loaded by the generated client via
+          // `await import("@prisma/client/runtime/...")`. Listing
+          // @prisma/client in serverExternalPackages above does NOT keep it
+          // out of the bundle here, because transpilePackages includes
+          // @desire/db (whose main is TypeScript source), so the generated
+          // client enters webpack's graph and its dynamic import gets inlined
+          // with it. Measured: the same 2 539 KB blob was emitted as TWO
+          // chunks -- one on 97 of 98 routes, a second on 34 more (the
+          // back-office pages, which pull it through a second layer via their
+          // server actions). /dashboard traced both: 5.08 MB of its 7.62 MB.
+          //
+          // `import` (not `commonjs`) because these are real ESM files loaded
+          // through dynamic import -- requiring an .mjs would throw at
+          // runtime. Node then loads the file from node_modules once, instead
+          // of every route carrying its own base64 copy to decode on cold start.
+          if (request && request.startsWith("@prisma/client/runtime/")) {
+            return callback(null, `import ${request}`);
+          }
           callback();
         },
       ];
