@@ -147,10 +147,40 @@ export async function getAccessibleAssociateIds(
 ): Promise<string[]> {
   if (mode === "OWN") return [actorAssociateId];
 
-  const rows = await db.associateHierarchy.findMany({
-    where: { validTo: null },
-    select: { associateId: true, path: true },
+  // Two indexed lookups instead of loading the whole table.
+  //
+  // This used to read EVERY current placement -- no orgId filter, no bound --
+  // and narrow it in memory with resolveAccessibleAssociateIds. That is one
+  // full-table read per scoped query, on a model sized for 2,000 associates,
+  // and it runs on most list screens. (It was never a data leak: isInScope
+  // frames the match as "/<cuid>/", and cuids are globally unique, so a row
+  // from another org could not match. It was purely waste.)
+  //
+  // A descendant is exactly a row whose path begins with the actor's own path
+  // plus the actor's id -- the same prefix form associates.ts already uses for
+  // subtree reads -- so the database can answer this with the
+  // associate_hierarchy_path_prefix index (text_pattern_ops, added
+  // 2026-09-20) rather than handing us every row to filter. It also makes the
+  // org filter moot: a descendant of this actor is in this actor's org by
+  // construction.
+  //
+  // Equivalence with the in-memory resolver is asserted in rbac-scope.test.ts
+  // against a real tree, using resolveAccessibleAssociateIds as the oracle --
+  // the pure function is the well-tested one, so the DB path is checked
+  // against it rather than re-specified.
+  const placement = await db.associateHierarchy.findFirst({
+    where: { associateId: actorAssociateId, validTo: null },
+    select: { path: true },
   });
 
-  return resolveAccessibleAssociateIds(actorAssociateId, mode, rows);
+  // No current placement: the actor can still always see themselves. Same
+  // fallback the pure resolver applies for a row missing from the set.
+  if (!placement) return [actorAssociateId];
+
+  const descendants = await db.associateHierarchy.findMany({
+    where: { validTo: null, path: { startsWith: `${placement.path}${actorAssociateId}/` } },
+    select: { associateId: true },
+  });
+
+  return [actorAssociateId, ...descendants.map((row) => row.associateId)];
 }
