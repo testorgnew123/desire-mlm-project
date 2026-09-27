@@ -27,3 +27,7 @@ packages/db/prisma/*.d.ts.map
 # Prisma's engineType="client" generates the client into src/ (so tsconfig's
 # rootDir/include naturally picks it up) -- it is build output, never commit it.
 packages/db/src/generated/
+
+# Local credential/secret reference notes -- never commit these.
+CREDENTIALS.local.md
+*.local.md
