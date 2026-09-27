@@ -6,6 +6,7 @@ import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { PWA_NAV, filterNav } from "@/lib/nav";
 import { HeaderTitle } from "@/components/header-title";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UserMenu } from "@/components/user-menu";
 
 // "usable one-handed at 360px" applies to every PWA screen, not just the
 // board (docs/08-SCREENS.md, docs/12-NFR.md).
@@ -31,6 +32,11 @@ export default async function PwaLayout({ children }: { children: ReactNode }) {
           <HeaderTitle shell="pwa" />
         </div>
         <ThemeToggle />
+        {/* The PWA had no sign-out at all: the shell is a 5-tab bottom nav
+            with no sidebar footer to put one in, so the UserMenu the
+            back-office uses was never mounted here. Sessions last 12h idle /
+            7d absolute, so on a personal phone there was no way to end one. */}
+        <UserMenu name={session.user.name} email={session.user.email} compact />
       </header>
       <main className="flex-1 overflow-y-auto pb-16">{children}</main>
       <nav className="fixed inset-x-0 bottom-0 flex h-16 border-t border-border bg-background">

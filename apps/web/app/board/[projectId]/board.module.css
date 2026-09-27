@@ -759,3 +759,85 @@
   margin: 0;
   font-weight: 600;
 }
+
+/* Dark mode for the board's own surface.
+   The tone block below re-tints the tiles; without this the page they sit on
+   would stay hard-coded white (--paper: #ffffff), which would make the board
+   WORSE in dark mode rather than better. Kept as its own set of values rather
+   than wired to the app's tokens, because this module is deliberately
+   self-contained -- but chosen to sit against the same dark ground. */
+:global(.dark) .board {
+  --ink: #e8ecef;
+  --ink-soft: #a3aeb8;
+  --paper: #0f1318;
+  --paper-sunk: #1a2027;
+  --rule: #39444e;
+  --rule-strong: #e8ecef;
+  --focus: #7aa7ff;
+}
+
+/* Dark mode for the seven status tones.
+   =====================================
+   These tones were authored as light-mode hex before the app had a theme
+   toggle. Once next-themes landed (ThemeProvider attribute="class", so the
+   switch is a `dark` class on <html>), every tile kept painting a pale
+   pastel fill onto a dark page -- unreadable, and wrong on the desktop board
+   as well as the phone grid.
+
+   Only the colour channel is redefined. Status is carried on four channels
+   (colour, label, glyph, border style -- see status.ts), and the other three
+   are theme-independent, so they need no dark variant.
+
+   :global() is required: `dark` is set on <html> by next-themes and is not
+   one of this module's own hashed class names.
+
+   Fills are dark and desaturated, lines and ink are lifted, so each tone
+   keeps its hue identity while clearing contrast against the dark ground. */
+:global(.dark) .toneAvailable {
+  --tone-bg: #0d2c1a;
+  --tone-line: #3ddc84;
+  --tone-ink: #c7f2d8;
+}
+
+:global(.dark) .toneHeld {
+  --tone-bg: #3a2a05;
+  --tone-line: #f0b429;
+  --tone-ink: #ffe9b8;
+}
+
+:global(.dark) .toneBooked {
+  --tone-bg: #11244a;
+  --tone-line: #6fa0ff;
+  --tone-ink: #d3e2ff;
+}
+
+:global(.dark) .toneAgreement {
+  --tone-bg: #271a45;
+  --tone-line: #b795ff;
+  --tone-ink: #e7dcff;
+}
+
+:global(.dark) .toneRegistered {
+  --tone-bg: #082e36;
+  --tone-line: #4fc3d9;
+  --tone-ink: #cdeff6;
+}
+
+:global(.dark) .tonePossession {
+  --tone-bg: #2d2a10;
+  --tone-line: #d4c95f;
+  --tone-ink: #f1ecc4;
+}
+
+:global(.dark) .toneBlocked {
+  --tone-bg: #3d120d;
+  --tone-line: #ff8272;
+  --tone-ink: #ffd8d2;
+  /* The hatch has to be re-tinted too -- the light one is a dark-red wash
+     that disappears against a dark fill. */
+  --tone-overlay: repeating-linear-gradient(
+    45deg,
+    rgba(255, 130, 114, 0.22) 0 5px,
+    rgba(255, 130, 114, 0) 5px 11px
+  );
+}
