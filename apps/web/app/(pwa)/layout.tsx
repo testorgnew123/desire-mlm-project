@@ -38,6 +38,7 @@ export default async function PwaLayout({ children }: { children: ReactNode }) {
           <Link
             key={item.key}
             href={item.href}
+            prefetch={item.prefetch}
             className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted-foreground active:text-primary"
           >
             <item.icon className="size-5" />

@@ -43,7 +43,7 @@ export default async function BackOfficeLayout({ children }: { children: ReactNo
               <SidebarMenu>
                 {items.map((item) => (
                   <SidebarMenuItem key={item.key}>
-                    <SidebarMenuButton render={<Link href={item.href} />}>
+                    <SidebarMenuButton render={<Link href={item.href} prefetch={item.prefetch} />}>
                       <item.icon />
                       <span>{item.label}</span>
                     </SidebarMenuButton>

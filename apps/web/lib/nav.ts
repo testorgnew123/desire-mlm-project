@@ -34,14 +34,39 @@ export interface NavItem {
   /** Omit (or empty) for "always visible to an authenticated user of this
    *  shell" -- otherwise the actor needs at least one of these. */
   permissions?: PermissionCode[];
+  /** Fetch this route's FULL RSC payload on prefetch, rather than the
+   *  loading.tsx shell Next returns by default for a dynamic route.
+   *
+   *  This does NOT change how many requests are made. Measured against a
+   *  local production build: every link in the shell is prefetched on every
+   *  page load either way -- that is Next's existing default behaviour, not
+   *  something this flag turns on. What it changes is what each prefetch
+   *  COSTS and what it is worth:
+   *
+   *    default (partial) -- a uniform ~27.7 KB shell, identical for every
+   *                         route, and the click still pays a full round
+   *                         trip (~600 ms to Ohio) to fetch the real page.
+   *    prefetch: true    -- the route actually renders server-side
+   *                         (31-64 KB, and its real database work), and a
+   *                         click inside the cache window costs NOTHING.
+   *
+   *  So the cost is server compute per prefetch, which is why this is an
+   *  allowlist and not the default: full-rendering all eleven sections on
+   *  every page load would run the dashboard's ~13 sequential queries for
+   *  screens most actors never open.
+   *
+   *  Bounded by next.config.ts's `staleTimes.dynamic` (15s) -- a click
+   *  within that window renders from the router cache, a later one refetches
+   *  as before. Verified both ways in docs/22-LOAD-TEST-RESULTS.md. */
+  prefetch?: true;
 }
 
 export const BACK_OFFICE_NAV: NavItem[] = [
-  { key: "dashboard", label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { key: "dashboard", label: "Dashboard", href: "/dashboard", prefetch: true, icon: LayoutDashboard },
   { key: "projects", label: "Projects", href: "/projects", icon: Building2, permissions: ["project.read"] },
-  { key: "inventory", label: "Inventory", href: "/stock", icon: Warehouse, permissions: ["unit.read"] },
-  { key: "crm", label: "CRM", href: "/crm", icon: Users, permissions: ["lead.read"] },
-  { key: "bookings", label: "Bookings", href: "/bookings", icon: Handshake, permissions: ["booking.read"] },
+  { key: "inventory", label: "Inventory", href: "/stock", prefetch: true, icon: Warehouse, permissions: ["unit.read"] },
+  { key: "crm", label: "CRM", href: "/crm", prefetch: true, icon: Users, permissions: ["lead.read"] },
+  { key: "bookings", label: "Bookings", href: "/bookings", prefetch: true, icon: Handshake, permissions: ["booking.read"] },
   {
     key: "collections",
     label: "Collections",
@@ -57,9 +82,9 @@ export const BACK_OFFICE_NAV: NavItem[] = [
 ];
 
 export const PWA_NAV: NavItem[] = [
-  { key: "home", label: "Home", href: "/home", icon: Home },
-  { key: "inventory", label: "Inventory", href: "/inventory", icon: Warehouse, permissions: ["unit.read"] },
-  { key: "leads", label: "Leads", href: "/leads", icon: Users, permissions: ["lead.read"] },
+  { key: "home", label: "Home", href: "/home", prefetch: true, icon: Home },
+  { key: "inventory", label: "Inventory", href: "/inventory", prefetch: true, icon: Warehouse, permissions: ["unit.read"] },
+  { key: "leads", label: "Leads", href: "/leads", prefetch: true, icon: Users, permissions: ["lead.read"] },
   { key: "earnings", label: "Earnings", href: "/earnings", icon: Wallet, permissions: ["commission.read"] },
   // Managers only -- lead.reassign is granted to TEAM_LEAD and above, never
   // to a plain ASSOCIATE (docs/08-SCREENS.md: "Team -- Managers only").
