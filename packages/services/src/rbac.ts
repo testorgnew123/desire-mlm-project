@@ -32,14 +32,21 @@ async function getPermissionCodes(
   userId: string,
   options: PermissionCheckOptions = {},
 ): Promise<Set<string>> {
+  // `select`, not `include`. Only permission.code is read below, and this
+  // walks three relation levels to reach it -- with `include` each level
+  // returned whole rows (Role's name/description/requiresMfa, every
+  // RolePermission column, every Permission column) on a query that runs on
+  // effectively every authenticated request.
   const userRoles = await db.userRole.findMany({
     where: {
       userId,
       OR: [{ projectId: null }, ...(options.projectId ? [{ projectId: options.projectId }] : [])],
     },
-    include: {
+    select: {
       role: {
-        include: { rolePermissions: { include: { permission: true } } },
+        select: {
+          rolePermissions: { select: { permission: { select: { code: true } } } },
+        },
       },
     },
   });

@@ -9,13 +9,16 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
-import type { User } from "@desire/db";
 import { SessionInvalidError, validateSession } from "@desire/services/auth";
+import type { SessionUser } from "@desire/services/auth";
 import { getSessionPermissions } from "@desire/services/rbac";
 import { SESSION_COOKIE_NAME } from "./api-session";
 
 export interface CurrentSession {
-  user: User;
+  /** Deliberately NOT the full User row -- validateSession selects only the
+   *  four fields anything actually reads (see SESSION_USER_SELECT in
+   *  packages/services/src/auth.ts). */
+  user: SessionUser;
   expiresAt: Date;
 }
 
