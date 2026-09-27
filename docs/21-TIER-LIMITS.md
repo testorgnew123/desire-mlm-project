@@ -467,3 +467,61 @@ deliberate — the alternative costs the database.
 
 *Account setup is the client's — nothing here can be provisioned from the
 repository.*
+
+## 13. Read replicas — free, and genuinely useful later, but not for today's bottleneck
+
+Raised by the client 2026-09-27. Checked against Neon's own documentation
+rather than assumed: **the Free plan allows up to 3 read replica computes per
+project**, they read from the same storage (so no duplicated data and no extra
+storage cost), and they support autoscaling and scale-to-zero. The capability
+is real and it is free.
+
+**It still does not help here, and the measurements say why.**
+
+| | |
+|---|---|
+| What a read replica optimises | the database portion of a request |
+| What that portion currently is | **3 ms of 660 ms — 0.5%** (§12, [22-LOAD-TEST-RESULTS](22-LOAD-TEST-RESULTS.md)) |
+| What the other 99.5% is | ~80 ms India→edge, **~560 ms edge→Ohio** |
+
+Three specific reasons, not one:
+
+1. **Same-region only.** Neon supports replicas *only in the primary's region*;
+   a cross-region setup needs a **separate project plus logical replication**.
+   The version that sounds attractive — a replica near the users in India —
+   therefore puts an **Ohio function** in front of a **Mumbai replica**. That
+   is precisely the Ohio↔Singapore arrangement measured at **~193 ms per
+   query** and removed on 2026-09-20, rebuilt deliberately. Strictly worse
+   than today. The function region is the thing that would have to move, and
+   that is Pro-gated (§2).
+
+2. **It competes with keep-warm for the same 100 CU-h.** A replica is a
+   separate compute billed from the same allowance. §12 already commits ~55
+   CU-h to keep-warm, leaving ~45. Keep-warm buys back a measured **9.09 s**
+   cold start; a replica buys back part of 3 ms.
+
+3. **There is no contention to relieve.** Read replicas solve throughput and
+   lock contention. The load test found p99 **495 ms** at the free tier's own
+   stated 10-concurrent ceiling, against ~440 rows. Nothing is queueing.
+
+There is also a correctness cost: 52 interactive `$transaction` calls, and
+most nominally-read pages also write (`lastActiveAt` when stale, audit rows).
+Splitting reads onto an eventually-consistent replica introduces
+read-your-own-writes hazards in exchange for no measurable time.
+
+### Revisit when — concrete triggers, not "at scale"
+
+Adopt a read replica when **either** of these is true, and point it only at
+the endpoints named:
+
+- **Reporting contends with transactional traffic.** The stock statement and
+  payout export endpoints scan broadly and are projected to grow with the
+  audit log (1–2 GB/year, §3). If a report run measurably slows concurrent
+  board or booking traffic, move *those* endpoints to a replica — they are
+  already read-only, already tolerate staleness, and need no transaction.
+- **Neon compute is exhausted by read load specifically**, rather than by
+  keep-warm — i.e. the 100 CU-h is going to query execution, not idle wake.
+
+Not before. At that point the function region question (§2) should be
+reopened at the same time, since it is worth ~560 ms against the replica's
+few milliseconds.
