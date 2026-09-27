@@ -115,6 +115,26 @@ describe("sessions", () => {
     expect(validated.userId).toBe(user.id);
   });
 
+  // A regression guard, not a behaviour test. This used to be
+  // `include: { user: true }`, which handed every authenticated request the
+  // whole User row -- passwordHash and mfaSecret included. Asserting the
+  // exact key set means reintroducing that (or quietly widening
+  // SESSION_USER_SELECT) fails here rather than shipping.
+  it("returns ONLY the four non-sensitive user fields, never passwordHash or mfaSecret", async () => {
+    const user = await makeTestUser("session-user-shape");
+    await db.user.update({
+      where: { id: user.id },
+      data: { mfaSecret: "a-secret-that-must-not-travel", mfaEnabled: true },
+    });
+    const { rawToken } = await createSession(db, user.id, {});
+
+    const validated = await validateSession(db, rawToken);
+
+    expect(Object.keys(validated.user).sort()).toEqual(["email", "id", "name", "orgId"]);
+    expect(validated.user).not.toHaveProperty("passwordHash");
+    expect(validated.user).not.toHaveProperty("mfaSecret");
+  });
+
   it("does NOT rewrite lastActiveAt on a freshly-touched session", async () => {
     const user = await makeTestUser("session-fresh-no-write");
     const { rawToken } = await createSession(db, user.id, {});

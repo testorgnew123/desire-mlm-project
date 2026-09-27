@@ -65,6 +65,30 @@ export async function createSession(
   return { rawToken, expiresAt };
 }
 
+/** The only User columns any caller reads off a validated session, verified
+ *  across every route and page: id, orgId, name, email. Selected explicitly
+ *  rather than taken with `include: { user: true }`, which pulled the WHOLE
+ *  row -- passwordHash (argon2id) and mfaSecret (TOTP) included -- into the
+ *  render context of every authenticated request. Nothing leaked to the
+ *  client, but there is no reason for the hottest path in the app to carry
+ *  the two most sensitive columns in the schema. Widening this is a
+ *  deliberate act: add the field here and it starts travelling everywhere
+ *  again. */
+export const SESSION_USER_SELECT = {
+  id: true,
+  orgId: true,
+  name: true,
+  email: true,
+} as const;
+
+/** The shape SESSION_USER_SELECT produces -- what `session.user` is now. */
+export interface SessionUser {
+  id: string;
+  orgId: string;
+  name: string;
+  email: string;
+}
+
 /** Validates a raw session token from the cookie. Checks, in order: exists,
  *  not revoked, not past absolute expiry, not idle-timed-out. Touches
  *  lastActiveAt on success -- callers should not call this more than once
@@ -73,7 +97,7 @@ export async function validateSession(db: PrismaClient, rawToken: string) {
   const tokenHash = hashToken(rawToken);
   const session = await db.session.findUnique({
     where: { tokenHash },
-    include: { user: true },
+    include: { user: { select: SESSION_USER_SELECT } },
   });
 
   if (!session) throw new SessionInvalidError("no such session");
