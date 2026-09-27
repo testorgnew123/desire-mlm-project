@@ -5,7 +5,7 @@ import { ForbiddenError, assertPermission } from "@desire/services/rbac";
 import { effectiveUnitStatus } from "@desire/services/holds";
 import { formatArea } from "@/lib/money";
 import { getSession } from "@/lib/session";
-import { InventoryList } from "./InventoryList";
+import { InventoryGrid } from "./InventoryGrid";
 import type { BoardUnit } from "@/app/board/[projectId]/types";
 
 // Same reasoning as the desktop board: inventory that is cached is
@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 
 /** Mobile, single-column unit list for one project -- the PWA's version of
  *  the desktop board (docs/08-SCREENS.md). Reuses the exact same catalogue
- *  shape (BoardUnit) and delta-poll hook (useUnitDeltas, via InventoryList)
+ *  shape (BoardUnit) and delta-poll hook (useUnitDeltas, via InventoryGrid)
  *  as the desktop screen rather than a second implementation; only the
  *  layout differs (flat list, not a tower/floor grid). */
 export default async function PwaInventoryProjectPage({
@@ -122,7 +122,7 @@ export default async function PwaInventoryProjectPage({
   });
 
   return (
-    <InventoryList
+    <InventoryGrid
       projectId={project.id}
       projectName={project.name}
       units={units}

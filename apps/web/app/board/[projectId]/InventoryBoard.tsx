@@ -6,6 +6,7 @@ import type { UnitStatus } from "@desire/db";
 import { FilterRail } from "./FilterRail";
 import { UnitDrawer } from "./UnitDrawer";
 import { UnitTile } from "./UnitTile";
+import { displayStatus } from "./status";
 import { EXPIRY_WARNING_MS, formatCountdown, formatIstClock } from "./format";
 import {
   EMPTY_FILTERS,
@@ -50,17 +51,8 @@ export interface InventoryBoardProps {
   serverTime: string;
 }
 
-/** Lazy expiry, client side (docs/06-INVENTORY-SPEC.md section 3): ANY read
- *  treats a hold past its expiresAt as gone. This is the same rule
- *  effectiveUnitStatus applies on the server, so the tile flips to AVAILABLE
- *  the second the countdown runs out instead of lying until the next poll --
- *  and when that poll lands, it agrees. */
-function displayStatus(state: LiveUnitState, nowMs: number): UnitStatus {
-  if (state.status !== "HELD") return state.status;
-  const expiresAtMs =
-    state.currentHoldExpiresAt === null ? null : Date.parse(state.currentHoldExpiresAt);
-  return expiresAtMs === null || expiresAtMs <= nowMs ? "AVAILABLE" : "HELD";
-}
+// displayStatus (the client-side lazy-expiry rule) moved to ./status so the
+// PWA grid shares the one copy -- see the comment on it there.
 
 function emptyStatusCounts(): Record<UnitStatus, number> {
   return {

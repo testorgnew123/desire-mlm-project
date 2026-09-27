@@ -43,3 +43,26 @@ export const STATUS_PRESENTATION: Record<UnitStatus, StatusPresentation> = {
   POSSESSION: { short: "POSS", long: "Possession", glyph: "✔", tone: "tonePossession" },
   BLOCKED: { short: "BLOCK", long: "Blocked", glyph: "✕", tone: "toneBlocked" },
 };
+
+/** Client-side lazy expiry (docs/06-INVENTORY-SPEC.md section 3): ANY read
+ *  treats a hold past its expiresAt as gone, so a tile flips to AVAILABLE the
+ *  second its countdown runs out instead of lying until the next poll -- and
+ *  when that poll lands, it agrees.
+ *
+ *  Lives here rather than in InventoryBoard because BOTH shells need it: the
+ *  desktop board and the PWA grid. The server applies the identical rule in
+ *  effectiveUnitStatus (packages/services/src/holds.ts); a third copy would
+ *  be a third chance for the three to disagree about whether a unit is
+ *  sellable, which is the one thing this system must not get wrong.
+ *
+ *  Takes the two fields it actually reads rather than a wider state object,
+ *  so either shell's unit shape can be passed. */
+export function displayStatus(
+  unit: { status: UnitStatus; currentHoldExpiresAt: string | null },
+  nowMs: number,
+): UnitStatus {
+  if (unit.status !== "HELD") return unit.status;
+  const expiresAtMs =
+    unit.currentHoldExpiresAt === null ? null : Date.parse(unit.currentHoldExpiresAt);
+  return expiresAtMs === null || expiresAtMs <= nowMs ? "AVAILABLE" : "HELD";
+}
