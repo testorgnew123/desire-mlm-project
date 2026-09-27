@@ -62,6 +62,19 @@ every 5 min   =  8,640 / month
 every 15 min  =  2,880 / month
 ```
 
+> **Measured 2026-09-26: the 5-minute figure above is theoretical and the
+> sweep does not achieve it.** The `*/5 * * * *` schedule in
+> `.github/workflows/scheduled-jobs.yml` produced **8 runs in 24 hours, not
+> 288** — about 3% of the designed cadence, so roughly **240 invocations a
+> month rather than 8,640**. GitHub throttles scheduled workflows on free
+> repositories far harder than "best-effort, can be delayed" suggests.
+>
+> Two consequences, in opposite directions. The budget above is *over*-stated
+> by ~36× for this job, so there is more headroom than §1 claims. But the job
+> is under-running: hold-expiry audit rows and notifications lag by hours.
+> Correctness is unaffected (lazy expiry on read — [06-INVENTORY-SPEC §3](06-INVENTORY-SPEC.md)),
+> latency is not. The fix is the external pinger in §12, not a cron tweak.
+
 ### Free-tier budget
 
 | Consumer | Allocation |
@@ -86,7 +99,8 @@ every 15 min  =  2,880 / month
 - Hold expiry sweep **every 5 minutes**. Lazy expiry on read already guarantees
   correctness ([06-INVENTORY-SPEC §3](06-INVENTORY-SPEC.md)); the sweep only
   materialises the audit row and the notification, so a slower cadence costs
-  notification latency and nothing else.
+  notification latency and nothing else. (In practice it has been running every
+  2–5 *hours*, not every 5 minutes — see the measurement in §1.)
 
 ## 2. Region — the database must move to Ohio — **DONE 2026-09-20**
 
@@ -347,8 +361,12 @@ which platform.
 ### Constraints of the replacement
 
 - **GitHub Actions cron is best-effort** and can be delayed under load.
-  Acceptable: every job is idempotent, and lazy expiry means the inventory board
-  is never wrong between runs ([06-INVENTORY-SPEC §3](06-INVENTORY-SPEC.md)).
+  **Quantified 2026-09-26, and it is worse than "delayed": a `*/5` schedule
+  fired 8 times in 24 hours against 288 scheduled — a 36× shortfall, not a
+  drift.** Correctness survives it (every job is idempotent, and lazy expiry
+  means the inventory board is never wrong between runs —
+  [06-INVENTORY-SPEC §3](06-INVENTORY-SPEC.md)), but any job whose *timeliness*
+  matters cannot be scheduled this way. See §12.
 - **Scheduled workflows auto-disable after 60 days of repository inactivity.**
   Caught by the dead-man's switch below.
 - **The invocation budget is unchanged.** An external trigger still consumes one
@@ -386,3 +404,66 @@ Correctness never depends on a job running:
 
 The scheduler is a convenience layer over a system that is correct without it.
 That was already the design; this change makes it load-bearing.
+
+## 12. Keep-warm and the external scheduler — approved 2026-09-26
+
+Two problems share one fix.
+
+**Problem A — cold starts.** Neon Free scales the compute to zero after 5
+minutes idle and that cannot be disabled; Netlify Free has no provisioned
+concurrency. Measured on 2026-09-26 the first request of the day took
+**9.09 s**, against **0.62–1.12 s** warm. Nothing currently keeps either end
+awake, because the only thing hitting the site on a schedule is the cron in
+§11 — which, per §1, barely runs.
+
+**Problem B — the sweep does not keep its cadence** (§1, §11).
+
+### Why a keep-warm is now approved when it was previously rejected
+
+It was rejected twice on arithmetic, and that arithmetic has not changed —
+only the window has:
+
+| Schedule | Neon compute at 0.25 CU | Against the 100 CU-h free allowance |
+|---|---|---|
+| 24/7 | 730 h × 0.25 = **182 CU-h** | Suspends the database mid-month. **No** |
+| 12 h × 7 days | ~90 CU-h | No headroom for anything else. **No** |
+| **~10 h × 5 weekdays** | **~55 CU-h** | ~45 CU-h spare. **Approved** |
+
+### It must NOT be GitHub Actions
+
+§1's measurement is the whole reason: GitHub cron delivered 3% of a
+5-minute cadence. A keep-warm that fires every few hours keeps nothing warm.
+Use an external HTTP scheduler — cron-job.org, QStash, or equivalent; §11
+already anticipated this swap and no application code changes.
+
+### The configuration
+
+| | Keep-warm | Hold-expiry sweep |
+|---|---|---|
+| URL | `https://<site>/api/health` | `https://<site>/api/jobs/holds/expire` |
+| Method | `GET` | `POST` |
+| Auth | none — unauthenticated by design | `JOB_TRIGGER_SECRET` header, as today |
+| Interval | every **4 min** (under Neon's 5-minute idle timer) | every **5 min** |
+| Window | **09:00–19:00 IST, Mon–Fri** | same window |
+| Invocations | ~2,600 / month | ~2,600 / month |
+
+`/api/health` is the right target: unauthenticated, one `SELECT 1`, no writes,
+and it already reports `durationMs` so the pinger's own history doubles as a
+latency record. Both together cost ~5,200 of 125,000 invocations (4%).
+
+Outside the window the first request still pays a cold start. That is
+deliberate — the alternative costs the database.
+
+### Verification
+
+- After ~30 min of pinging, `/api/health` should return in **well under a
+  second** rather than multiple seconds, with `durationMs` in single digits.
+- The real test is **the next weekday morning**: the 09:00 request should not
+  look like the 9 s figure above.
+- Confirm `holds/expire` runs land ~5 minutes apart in the Netlify function
+  log, not 2–5 hours.
+- Check Neon's usage a few days in. **Abort if it trends past ~70 CU-h before
+  month end.**
+
+*Account setup is the client's — nothing here can be provisioned from the
+repository.*
