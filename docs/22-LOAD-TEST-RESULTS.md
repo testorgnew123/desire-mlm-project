@@ -126,6 +126,94 @@
 > ~440 ms floor, so it would buy single-digit milliseconds for real
 > invalidation risk.
 
+> ## Round three, 2026-09-26: two external checklists, and where the latency actually is
+>
+> A client-supplied performance checklist was checked item by item against the
+> repository and against live production. Almost none of it applied — the
+> reasons are in the PROGRESS.md decision log — but measuring it produced the
+> cleanest statement of the latency budget so far.
+>
+> ### The edge-hit/edge-miss measurement
+>
+> Requesting the **same immutable hashed JS chunk** from India, repeatedly:
+>
+> | | TTFB |
+> |---|---|
+> | Netlify Edge **hit** (`Cache-Status: hit; ttl=31536000`) | **80 ms** |
+> | Netlify Edge **miss** (`fwd=miss; stored`) | **620–700 ms** |
+> | `/api/health` — function + one query, reporting `durationMs: 3` | **660 ms** |
+>
+> India→edge is **80 ms**. Edge→Ohio origin adds **~560 ms**. **The database is
+> 3 ms of a 660 ms request — 0.5%.** A function route costs the same as a
+> static file that missed cache, which is the proof that nothing
+> application-side is left to find: no index, query rewrite, driver swap or
+> server-side cache can move a number that is 99.5% network. It is the
+> `functions_region` Pro gate ([21-TIER-LIMITS §2](21-TIER-LIMITS.md)).
+>
+> Low traffic means even immutable assets miss often — each PoP node caches
+> independently. Nothing to fix: `Cache-Control: public,max-age=31536000,immutable`
+> is already correct.
+>
+> ### Correcting round two's round-trip claim
+>
+> Round two said there was no sequential-query problem on the request path.
+> That was wrong: it counted `await`s. The Prisma generator here declares no
+> `previewFeatures`, so `relationLoadStrategy` defaults to `"query"` and
+> **every `include:` level is its own sequential SQL statement**.
+>
+> | Path | Sequential round trips | SQL statements |
+> |---|---|---|
+> | Back-office layout | 6 | 6 |
+> | `/dashboard` (SUPER_ADMIN, 8 tiles) | **13** | **~43** |
+> | `/bookings` | 10 (13 for TEAM_LEAD) | 16 |
+> | `/crm` | 11 (14 for TEAM_LEAD) | 15 |
+>
+> The conclusion is unchanged — at ~3 ms/query that is **~40 ms of a 660 ms
+> request, 6%** — but the reasoning behind it now matches reality. Prisma's
+> `relationJoins` preview feature would collapse most of it and is
+> **deliberately not adopted**: ~25 ms of upside, and its support under this
+> project's `engineType="client"` + `@prisma/adapter-pg` is unverified.
+>
+> ### Login bundle, measured
+>
+> 389 KB raw ≈ ~120 KB gzip, of which **341 KB is the React 19 + Next 15
+> baseline**. The chunks were grepped for `exceljs`, `pdfkit`, `@react-pdf`,
+> `qrcode`, `input-otp` and charting libraries: **none present**. The large
+> chunk in the client's screenshot is react-dom.
+>
+> ### Link prefetch — what it does and does not cost
+>
+> Sidebar links previously used Next's default prefetch. For a route marked
+> `force-dynamic` (31 of them are) that fetches **only the `loading.tsx`
+> shell**, so the click still paid the full round trip. Four back-office
+> destinations (Dashboard, Inventory, CRM, Bookings) and three PWA ones
+> (Home, Inventory, Leads) now set `prefetch` explicitly — see `NavItem` in
+> `apps/web/lib/nav.ts`.
+>
+> **The cost model is not the obvious one, and was corrected after measuring
+> it against a local production build.** Every link in the shell is
+> prefetched on every page load *either way* — that is Next's pre-existing
+> default, not something the flag enables. So request count is **unchanged**.
+> What changes is what each prefetch does:
+>
+> | | Response | Effect on the click |
+> |---|---|---|
+> | default (partial) | a uniform **~27.7 KB** shell, byte-similar for every route | still pays a full ~600 ms round trip |
+> | `prefetch` (full) | the route really renders: **31–64 KB** + its database work | costs **nothing** inside the cache window |
+>
+> Verified end to end on a local production build: clicking **`/bookings`
+> (allowlisted) issued no network request at all** — served from the router
+> cache — while **`/projects` (not allowlisted) issued a second request** on
+> the click, on top of its prefetch. That is the whole feature, demonstrated
+> both ways.
+>
+> So this is an allowlist, not a default, because the cost is **server compute
+> per prefetch**: full-rendering all eleven sections on every page load would
+> run the dashboard's ~13 sequential queries for screens most actors never
+> open. The benefit is bounded by `staleTimes.dynamic` (15 s) — a click inside
+> that window is free, a later one is unchanged. Stated plainly rather than
+> oversold.
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the
