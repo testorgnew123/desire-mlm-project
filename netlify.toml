@@ -34,3 +34,50 @@
 
 [build.environment]
   NODE_VERSION = "22"
+
+# ── Canonical host ────────────────────────────────────────────────────────
+#
+# The .netlify.app hostname stays live forever and does NOT pass through
+# Cloudflare, so every edge protection on crm.desirerealty.in -- the
+# anonymous-root redirect, and any WAF or rate limiting added later -- is one
+# hostname away from being skipped. That URL is also printed in this public
+# repository, so it is not obscure.
+#
+# These rules are host-scoped: they match ONLY when the Host header is
+# desire-mlm-project.netlify.app. Traffic to crm.desirerealty.in and to
+# deploy previews (deploy-preview-N--...) has a different Host and is
+# untouched.
+#
+# ORDER MATTERS -- Netlify applies the first matching rule.
+
+# /api/* is deliberately exempt. The scheduled jobs POST to
+# ${APP_BASE_URL}/api/jobs/* with `curl` that does NOT pass -L and treats
+# anything other than 200 as a failure (.github/workflows/scheduled-jobs.yml).
+# If APP_BASE_URL still holds the .netlify.app host, a 301 here would silently
+# kill hold expiry, the collections sweep, grade qualification, the invariant
+# monitor AND the nightly backup -- the only DR mechanism this project has.
+# A same-path 200 rewrite serves the route normally and keeps that safe
+# regardless of which host the secret holds.
+#
+# Once APP_BASE_URL is confirmed to be https://crm.desirerealty.in, this
+# exemption can be deleted so API traffic is canonicalised too.
+[[redirects]]
+  from = "https://desire-mlm-project.netlify.app/api/*"
+  to = "/api/:splat"
+  status = 200
+  force = true
+
+# Everything else on the bare Netlify host goes to the real domain.
+#
+# 302, not 301, despite "canonical host" sounding permanent. A 301 is cached
+# by browsers more or less forever: it would poison every developer's browser
+# against the .netlify.app host, which is exactly the host you want reachable
+# when Cloudflare or the custom domain is the thing being debugged. There is
+# also no SEO argument to trade against that -- the whole app is behind a
+# login and is not indexed. If the Netlify site is ever renamed, this host
+# disappears anyway.
+[[redirects]]
+  from = "https://desire-mlm-project.netlify.app/*"
+  to = "https://crm.desirerealty.in/:splat"
+  status = 302
+  force = true

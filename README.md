@@ -40,6 +40,8 @@ Start with the PRD, then the spec for whatever you're building.
 | [01-PRD](docs/01-PRD.md) | You need scope, users, and what's explicitly out |
 | [19-GLOSSARY](docs/19-GLOSSARY.md) | **Read this before writing any code.** The domain terms are not intuitive and getting one wrong pays the wrong amount |
 | [16-ROADMAP](docs/16-ROADMAP.md) | You need phases, exit criteria, team, effort |
+| [24-ROLE-PROFILES](docs/24-ROLE-PROFILES.md) | You need to explain to a person what their login can do |
+| [25-END-TO-END-FLOW](docs/25-END-TO-END-FLOW.md) | You need the whole lifecycle in one read — enquiry → booking → collection → commission → payout |
 | **[PROGRESS](PROGRESS.md)** | **Daily.** What is done, what is blocked, what to pick up next. Keep it open |
 
 ### Build it
