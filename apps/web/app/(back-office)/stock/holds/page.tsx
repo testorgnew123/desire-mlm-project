@@ -8,6 +8,7 @@ import { requireSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
+import { RefreshIfStale } from "@/components/refresh-if-stale";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,12 @@ export default async function ActiveHoldsPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* staleTimes.dynamic is 60 s and every nav link is prefetched, so this
+          list can be painted from the router cache without the server being
+          asked. Acceptable on a read-only screen; not here, where acting on
+          a hold that has since expired or been converted
+          wastes the actor's time and produces a confusing rejection. */}
+      <RefreshIfStale renderedAt={new Date().toISOString()} />
       <h1 className="text-lg font-semibold">Active holds</h1>
       <Card>
         <CardHeader>

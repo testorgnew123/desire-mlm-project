@@ -41,9 +41,26 @@ export default async function BackOfficeLayout({ children }: { children: ReactNo
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
+                {/* `prefetch` on every link, deliberately.
+
+                    Measured: prefetch does NOT change how many requests are
+                    made -- every link in the shell is prefetched on every page
+                    load either way, which is Next's own default. What it
+                    changes is the RESPONSE: the default returns a ~27.7 KB
+                    loading shell, identical for every route, and the click
+                    still pays a full ~450 ms round trip; `prefetch` makes the
+                    route actually render (31-64 KB plus its database work), so
+                    a click inside the staleTimes.dynamic window (60 s) costs
+                    nothing.
+
+                    The trade is server compute: /dashboard's ~13 sequential
+                    queries now run on every page load even for someone who
+                    never opens it. Accepted knowingly -- if Neon CU-hours
+                    climb, narrowing this back to the daily-driver routes is
+                    the first lever to pull, before touching keep-warm. */}
                 {items.map((item) => (
                   <SidebarMenuItem key={item.key}>
-                    <SidebarMenuButton render={<Link href={item.href} prefetch={item.prefetch} />}>
+                    <SidebarMenuButton render={<Link href={item.href} prefetch />}>
                       <item.icon />
                       <span>{item.label}</span>
                     </SidebarMenuButton>

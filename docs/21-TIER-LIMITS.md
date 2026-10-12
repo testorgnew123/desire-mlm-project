@@ -433,23 +433,61 @@ only the window has:
 
 §1's measurement is the whole reason: GitHub cron delivered 3% of a
 5-minute cadence. A keep-warm that fires every few hours keeps nothing warm.
-Use an external HTTP scheduler — cron-job.org, QStash, or equivalent; §11
-already anticipated this swap and no application code changes.
+
+### Use a Cloudflare Worker — free, and already in the stack
+
+**Superseded 2026-10-12.** This section previously recommended cron-job.org or
+QStash. Since then the site moved behind Cloudflare for
+`crm.desirerealty.in`, which makes a better option available at no cost and
+with no third-party account.
+
+Verified against Cloudflare's documentation, not assumed:
+
+| | |
+|---|---|
+| Cron Triggers on the Workers **Free** plan | **Yes** — 5 per account |
+| Minimum interval | 1 minute; `* * * * *` is a documented expression |
+| Free request allowance | **100,000/day**; this Worker uses ~150 |
+| CPU limit | 10 ms — not a constraint, *"waiting on network requests does not count toward CPU time"* |
+| Timezone | **UTC**, with no timezone setting |
+
+The Worker lives in [`infra/keepalive-worker/`](../infra/keepalive-worker/) so
+the schedule and target are reviewable in version control rather than being a
+dashboard setting somebody changed once. Deploying it is still a Cloudflare
+action.
+
+Two things that are easy to get wrong and are handled there:
+
+- **Keep it off the `desirerealty.in` zone's routes.** A same-zone `fetch()`
+  is documented to go straight to the origin, bypassing the Cloudflare proxy.
+  Still a valid keep-warm, but it would not exercise the edge path. A
+  cron-only Worker with no route avoids this.
+- **Cron is UTC.** 09:00–19:00 IST is 03:30–13:30 UTC and cron ranges cannot
+  express a half-hour offset, so the Worker uses `*/4 4-13 * * 1-5`
+  (09:30–19:29 IST) and accepts a 30-minute cold window at the start of the
+  day rather than burning half an hour of compute daily.
 
 ### The configuration
 
 | | Keep-warm | Hold-expiry sweep |
 |---|---|---|
-| URL | `https://<site>/api/health` | `https://<site>/api/jobs/holds/expire` |
+| URL | `https://crm.desirerealty.in/api/health` | `https://crm.desirerealty.in/api/jobs/holds/expire` |
 | Method | `GET` | `POST` |
 | Auth | none — unauthenticated by design | `JOB_TRIGGER_SECRET` header, as today |
 | Interval | every **4 min** (under Neon's 5-minute idle timer) | every **5 min** |
-| Window | **09:00–19:00 IST, Mon–Fri** | same window |
+| Window | **09:30–19:29 IST, Mon–Fri** | same window |
 | Invocations | ~2,600 / month | ~2,600 / month |
 
 `/api/health` is the right target: unauthenticated, one `SELECT 1`, no writes,
 and it already reports `durationMs` so the pinger's own history doubles as a
-latency record. Both together cost ~5,200 of 125,000 invocations (4%).
+latency record — a high elapsed time with a low `durationMs` means the
+**function** was cold, both high means **Neon** was asleep. Both jobs together
+cost ~5,200 of 125,000 Netlify invocations (4%).
+
+The sweep can move to the same Worker (a second cron expression, or a second
+trigger on the same one), which fixes §1's cadence problem at the same time.
+It needs the `JOB_TRIGGER_SECRET` as a Worker secret — `wrangler secret put`,
+not a `[vars]` entry, since `[vars]` is plain text in the dashboard.
 
 Outside the window the first request still pays a cold start. That is
 deliberate — the alternative costs the database.

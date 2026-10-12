@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/empty-state";
+import { RefreshIfStale } from "@/components/refresh-if-stale";
 import { decideDiscountAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,12 @@ export default async function DiscountApprovalsPage({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* staleTimes.dynamic is 60 s and every nav link is prefetched, so this
+          list can be painted from the router cache without the server being
+          asked. Acceptable on a read-only screen; not here, where acting on
+          a discount request a colleague has already decided
+          wastes the actor's time and produces a confusing rejection. */}
+      <RefreshIfStale renderedAt={new Date().toISOString()} />
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Discount approvals</h1>
         <Link href="/bookings" className="text-sm text-primary hover:underline">
