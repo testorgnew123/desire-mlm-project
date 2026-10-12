@@ -40,11 +40,13 @@ export default async function PwaLayout({ children }: { children: ReactNode }) {
       </header>
       <main className="flex-1 overflow-y-auto pb-16">{children}</main>
       <nav className="fixed inset-x-0 bottom-0 flex h-16 border-t border-border bg-background">
+        {/* `prefetch` on every tab -- see the note in
+            (back-office)/layout.tsx for why this costs no extra requests. */}
         {items.map((item) => (
           <Link
             key={item.key}
             href={item.href}
-            prefetch={item.prefetch}
+            prefetch
             className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted-foreground active:text-primary"
           >
             <item.icon className="size-5" />

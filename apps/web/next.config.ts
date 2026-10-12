@@ -12,13 +12,29 @@ const nextConfig: NextConfig = {
     // navigation instant, and also cuts function invocations, which are the
     // binding free-tier constraint (125k/month, docs/21-TIER-LIMITS.md §1).
     //
-    // 15 s rather than the 30 s+ that would cut more: this app's own rule is
-    // "inventory that is cached is inventory that is wrong"
-    // (app/board/[projectId]/page.tsx). The board additionally refreshes on
-    // mount so it can never paint stale unit states out of this cache -- the
-    // cache window only ever affects how quickly the shell appears there, not
-    // what availability the associate is shown.
-    staleTimes: { dynamic: 15, static: 180 },
+    // Raised 15 s -> 60 s. The client reported that moving between screens
+    // after login feels slow, and measuring production said why: a static
+    // asset off the Cloudflare edge is 4 ms, but /api/health -- a function
+    // plus one SELECT 1 -- is 398 ms. That ~394 ms is the India->Ohio round
+    // trip, paid before this app does any work at all (its own work is only
+    // 84-257 ms, which is why all eleven sections land within 408-623 ms).
+    // The function region is Pro-gated, so no free change moves it.
+    //
+    // The only way to make a click fast is therefore to not make the request.
+    // A cache hit costs 0 ms; 60 s covers realistic "click around the sidebar"
+    // behaviour where 15 s did not.
+    //
+    // The original 15 s existed because of this app's rule that "inventory
+    // that is cached is inventory that is wrong". That rule still holds and is
+    // still enforced -- but by freshness guards at the screens that need them,
+    // not by starving the whole app's cache:
+    //   - the board refreshes on mount when its snapshot is > 5 s old
+    //     (app/board/[projectId]/InventoryBoard.tsx)
+    //   - receipt verification, discount approvals and holds use
+    //     <RefreshIfStale> for the same reason -- they are the screens where
+    //     two people can act on the same row
+    // Everything else is a read that tolerates a minute.
+    staleTimes: { dynamic: 60, static: 180 },
   },
 
   // Prisma's engineType="client" build carries a WASM query compiler. Bundling

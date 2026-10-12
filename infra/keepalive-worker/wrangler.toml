@@ -1,0 +1,35 @@
+name = "desire-keepalive"
+main = "src/index.js"
+compatibility_date = "2026-10-12"
+
+# No `routes` and no `workers_dev` entry, deliberately.
+#
+# This Worker only ever runs on a schedule; it never needs to receive an
+# inbound request. Keeping it off the desirerealty.in zone's routes also
+# avoids Cloudflare's same-zone fetch() behaviour, which is documented to send
+# the request straight to the origin and bypass the Cloudflare proxy -- still
+# a valid keep-warm, but it would not exercise the edge path we actually want
+# warm.
+
+[vars]
+# The target is /api/health deliberately: unauthenticated, one SELECT 1, no
+# writes, and it already reports `durationMs` so the Worker log doubles as a
+# latency record. Hitting an authenticated route instead would need a session
+# and would write lastActiveAt on every ping.
+HEALTH_URL = "https://crm.desirerealty.in/api/health"
+
+[triggers]
+# Every 4 minutes, which is under Neon's 5-minute scale-to-zero timer, during
+# Indian working hours on weekdays only.
+#
+# CRON IS UTC. Cloudflare has no timezone setting. 09:00-19:00 IST is
+# 03:30-13:30 UTC, and cron ranges cannot express a half-hour offset, so this
+# uses 04:00-13:59 UTC = 09:30-19:29 IST. The trade is a 30-minute cold window
+# at 09:00-09:30 IST; widening to `3-13` would instead start warming at
+# 08:30 IST and waste ~30 min of compute every day.
+#
+# Cost: ~150 invocations/day against the Workers Free limit of 100,000/day,
+# and ~55 of Neon's 100 free CU-hours/month (the arithmetic is in
+# docs/21-TIER-LIMITS.md section 12). Weekday-hours-only is what makes it fit;
+# 24/7 would be 182 CU-h and would suspend the database mid-month.
+crons = ["*/4 4-13 * * 1-5"]

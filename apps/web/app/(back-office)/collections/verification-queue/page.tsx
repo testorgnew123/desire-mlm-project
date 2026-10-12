@@ -9,6 +9,7 @@ import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
+import { RefreshIfStale } from "@/components/refresh-if-stale";
 import { verifyReceiptAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,12 @@ export default async function VerificationQueuePage({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* staleTimes.dynamic is 60 s and every nav link is prefetched, so this
+          list can be painted from the router cache without the server being
+          asked. Acceptable on a read-only screen; not here, where acting on
+          a receipt a colleague has already verified or cleared
+          wastes the actor's time and produces a confusing rejection. */}
+      <RefreshIfStale renderedAt={new Date().toISOString()} />
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Verification queue</h1>
         <Link href="/collections/receipts" className="text-sm text-primary hover:underline">

@@ -214,6 +214,57 @@
 > that window is free, a later one is unchanged. Stated plainly rather than
 > oversold.
 
+> ## Round four, 2026-10-12: where the time actually goes, measured logged in
+>
+> The client reported that after signing in, "functionalities taking time to
+> render and open". Measured on production as `super_admin`, warm:
+>
+> | | |
+> |---|---|
+> | Static asset from the Cloudflare edge | **4 ms** |
+> | `/api/health` — function + one `SELECT 1` | **398 ms** |
+> | `/projects` full document | 482 ms |
+> | `/dashboard` full document | 655 ms |
+> | All 11 back-office sections (RSC payload) | 408–623 ms |
+>
+> **~394 ms of every click is the India→Ohio round trip, paid before the app
+> does anything.** The app's own work is only 84 ms (`/projects`) to 257 ms
+> (`/dashboard`) — which is why eleven very different screens land within
+> 215 ms of each other. The tight clustering is the finding: it says the
+> variable (server work) is small and the constant (network) dominates.
+>
+> This is the cleanest statement of the latency budget this project has, and
+> it is the answer to every future "can we make this faster" question:
+> **65–80% of it is geography**, the function region is Pro-gated, and the
+> no-paid-services constraint rules it out.
+>
+> ### What was done about it
+>
+> Since the network cannot get faster, the only lever is **not making the
+> request**. `staleTimes.dynamic` went 15 s → **60 s** and every sidebar link
+> now prefetches a full payload rather than a shell, so a click inside the
+> window is served from the router cache at **0 ms** instead of ~450 ms.
+>
+> The 15 s value existed to protect the rule that "inventory that is cached is
+> inventory that is wrong". That rule is now enforced where it belongs — at
+> the three screens where two people can act on the same row (receipt
+> verification, discount approvals, holds) via `<RefreshIfStale>`, generalised
+> from the board's existing mount-refresh — rather than by starving the whole
+> app's cache.
+>
+> **The trade, recorded honestly:** full-prefetching all eleven means
+> `/dashboard`'s ~13 sequential queries run on every page load even for
+> someone who never opens it. Request *count* is unchanged (Next prefetches
+> every link either way); server *compute* is not. If Neon CU-hours climb,
+> narrowing the prefetch set is the first lever, before touching keep-warm.
+>
+> ### Still the worst number: the cold start
+>
+> 9.09 s for the first request of the day, against 0.4–0.6 s warm. Unchanged
+> by any of the above, and ~20× larger than the warm-click problem. Addressed
+> by the keep-warm Worker in [21-TIER-LIMITS §12](21-TIER-LIMITS.md) once it
+> is deployed.
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the
