@@ -53,8 +53,11 @@ export async function createProjectAction(formData: FormData): Promise<void> {
     const project = await createProject(db, {
       code: String(formData.get("code") ?? "").trim(),
       name: String(formData.get("name") ?? "").trim(),
-      city: String(formData.get("city") ?? "").trim(),
-      state: String(formData.get("state") ?? "").trim(),
+      // Location is optional: a project is often created the day the land deal
+      // closes, before anyone has written the address down. Null, not "" --
+      // an empty string would make every reader special-case it anyway.
+      city: optional(formData.get("city")),
+      state: optional(formData.get("state")),
 
       // RERA is optional at creation on purpose: a PLANNING project has no
       // registration yet. holds.ts enforces it at the point it actually

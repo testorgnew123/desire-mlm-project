@@ -18,10 +18,10 @@ export const dynamic = "force-dynamic";
  *  fields and squeezing them into a sidebar form is how the payment-plan UI
  *  ended up able to express only one hardcoded milestone.
  *
- *  Only code, name, city and state are required -- matching createProject.
- *  Everything else can be filled in later from the project's own edit form,
- *  which matters because a PLANNING project genuinely does not have a RERA
- *  number yet. */
+ *  Only code and name are required -- matching createProject. Everything
+ *  else can be filled in later from the project's own edit form, which
+ *  matters because a project in planning has neither a RERA number nor,
+ *  often, a written-down address yet. */
 export default async function NewProjectPage({
   searchParams,
 }: {
@@ -68,15 +68,18 @@ export default async function NewProjectPage({
         <Card>
           <CardHeader>
             <CardTitle>Location</CardTitle>
+            <CardDescription>
+              All optional — a project is often set up before the address is settled.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="city">City</Label>
-              <Input id="city" name="city" placeholder="Jaipur" required />
+              <Input id="city" name="city" placeholder="Jaipur" />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="state">State</Label>
-              <Input id="state" name="state" placeholder="Rajasthan" required />
+              <Input id="state" name="state" placeholder="Rajasthan" />
             </div>
             <div className="flex flex-col gap-1.5 sm:col-span-2">
               <Label htmlFor="addressLine1">Address line 1</Label>

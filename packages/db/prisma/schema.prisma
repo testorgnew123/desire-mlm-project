@@ -803,8 +803,12 @@ model Project {
 
   addressLine1 String?
   addressLine2 String?
-  city         String
-  state        String
+  // Optional: a project is often created the day the land deal closes, before
+  // anyone has written down an address. Nothing in the system keys off city or
+  // state -- they are display only -- so an unknown one is left null rather
+  // than filled with a guess or an empty string.
+  city         String?
+  state        String?
   pincode      String?
   latitude     Decimal? @db.Decimal(10, 7)
   longitude    Decimal? @db.Decimal(10, 7)

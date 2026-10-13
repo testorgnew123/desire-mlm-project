@@ -91,7 +91,7 @@ export default async function ProjectDetailPage({
       <div>
         <h1 className="text-lg font-semibold">{project.name}</h1>
         <p className="text-sm text-muted-foreground">
-          {project.code} · {project.city}
+          {[project.code, project.city].filter(Boolean).join(" · ")}
         </p>
       </div>
 

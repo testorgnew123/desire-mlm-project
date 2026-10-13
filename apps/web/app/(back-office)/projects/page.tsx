@@ -50,7 +50,7 @@ export default async function ProjectsPage() {
                 <CardHeader>
                   <CardTitle>{project.name}</CardTitle>
                   <CardDescription>
-                    {project.code} · {project.city}
+                    {[project.code, project.city].filter(Boolean).join(" · ")}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex gap-4 text-sm text-muted-foreground">

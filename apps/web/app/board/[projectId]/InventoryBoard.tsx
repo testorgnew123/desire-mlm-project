@@ -44,7 +44,8 @@ export interface InventoryBoardProps {
   projectId: string;
   projectName: string;
   projectCode: string;
-  city: string;
+  /** Null when the project has no city recorded. */
+  city: string | null;
   towers: BoardTower[];
   units: BoardUnit[];
   /** serverTime of the snapshot in `units`. */
@@ -402,7 +403,7 @@ export function InventoryBoard({
       <header className={styles.header}>
         <h1 className={styles.title}>{projectName}</h1>
         <p className={styles.subtitle}>
-          {projectCode} · {city} · Live inventory
+          {[projectCode, city, "Live inventory"].filter(Boolean).join(" · ")}
         </p>
       </header>
 

@@ -35,7 +35,7 @@ export default async function PwaInventoryPage() {
               <CardHeader>
                 <CardTitle>{project.name}</CardTitle>
                 <CardDescription>
-                  {project.code} · {project.city}
+                  {[project.code, project.city].filter(Boolean).join(" · ")}
                 </CardDescription>
               </CardHeader>
             </Card>
