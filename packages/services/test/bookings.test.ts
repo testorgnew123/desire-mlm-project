@@ -27,6 +27,8 @@ const db = getPrismaClient();
 const ORG = "org_test_bookings";
 const OTHER_ORG = "org_test_bookings_other";
 const D = (v: string | number) => new Prisma.Decimal(v);
+/** The original PLC shape: rupees per unit of area. */
+const perArea = (v: string | number) => ({ basis: "PER_AREA" as const, value: D(v) });
 
 async function reset() {
   for (const orgId of [ORG, OTHER_ORG]) {
@@ -170,7 +172,7 @@ async function seedFixture(orgId: string = ORG) {
         create: [
           {
             unitTypeId: unitType.id,
-            baseRatePerSqft: "5000.00",
+            baseRate: "5000.00",
             plcCharges: { CORNER: 150 },
             otherCharges: [{ chargeHeadCode: "PARKING", amount: 300000 }],
           },
@@ -258,9 +260,9 @@ function expectedCostSheet() {
   return computeCostSheet({
     saleableArea: D("975.00"),
     carpetArea: D("650.00"),
-    baseRatePerSqft: D("5000.00"),
+    baseRate: D("5000.00"),
     plcTags: [],
-    plcChargesByTag: { CORNER: D(150) },
+    plcChargesByTag: { CORNER: perArea(150) },
     otherCharges: [{ chargeHeadCode: "PARKING", amount: D(300000) }],
     discount: D(0),
     chargeHeads: [
@@ -384,7 +386,7 @@ describe("draft pins priceListId and freezes area at booking time", () => {
     });
 
     expect(booking.saleableAreaAtBooking.toString()).toBe("975");
-    expect(booking.carpetAreaAtBooking.toString()).toBe("650");
+    expect(booking.carpetAreaAtBooking?.toString()).toBe("650");
     expect(booking.priceListId).toBe(priceList.id);
   });
 });

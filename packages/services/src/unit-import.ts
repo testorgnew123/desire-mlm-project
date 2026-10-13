@@ -351,14 +351,20 @@ function validateRow(
       typeAreas,
     );
     const inherited = `unit type '${unitTypeCode}' supplies any area not overridden`;
-    if (!effective.carpetArea.lessThan(effective.builtUpArea)) {
+    // A plot type has neither carpet nor built-up, so there is no hierarchy to
+    // check -- only the positive-saleable rule, which assertAreaHierarchy
+    // already owns. Skipping here rather than treating null as zero, which
+    // would report a nonsense "0.00 must be less than 0.00".
+    if (effective.carpetArea === null || effective.builtUpArea === null) {
+      // nothing to compare
+    } else if (!effective.carpetArea.lessThan(effective.builtUpArea)) {
       fail(
         "carpetAreaOverride",
         row.carpetAreaOverride,
         `carpet area (${effective.carpetArea.toFixed(2)}) must be less than built-up area ` +
           `(${effective.builtUpArea.toFixed(2)}) -- ${inherited}`,
       );
-    } else if (effective.builtUpArea.greaterThan(effective.saleableArea)) {
+    } else if (effective.builtUpArea !== null && effective.builtUpArea.greaterThan(effective.saleableArea)) {
       fail(
         "saleableAreaOverride",
         row.saleableAreaOverride,

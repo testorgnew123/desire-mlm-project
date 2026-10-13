@@ -21,6 +21,7 @@ import { assertValidTransition } from "./unit-transitions";
 import { resolveUnitAreas, type UnitTypeAreas } from "./projects";
 import {
   computeCostSheet,
+  parsePlcCharges,
   type ChargeHeadSpec,
   type CostSheetLineResult,
   type FixedChargeInput,
@@ -214,7 +215,6 @@ async function buildCostSheetInput(
     }));
   if (!item) throw new InvalidPriceListError(params.priceListId);
 
-  const plcChargesByTag = (item.plcCharges ?? {}) as Record<string, number | string>;
   const otherChargesRaw = (item.otherCharges ?? []) as Array<{ chargeHeadCode: string; amount: number | string }>;
 
   const chargeHeadRows = await tx.chargeHead.findMany({ where: { orgId: params.orgId } });
@@ -237,11 +237,13 @@ async function buildCostSheetInput(
     input: {
       saleableArea: areas.saleableArea,
       carpetArea: areas.carpetArea,
-      baseRatePerSqft: item.baseRatePerSqft,
+      baseRate: item.baseRate,
       plcTags: unit.plcTags,
-      plcChargesByTag: Object.fromEntries(
-        Object.entries(plcChargesByTag).map(([tag, amount]) => [tag, D(amount)]),
-      ),
+      // The SAME parser the read-only cost sheet uses. This path used to
+      // hand-roll its own, which silently knew nothing about the
+      // percentage-basis shape -- two parsers for one stored format is how a
+      // preview and a booking end up disagreeing about a price.
+      plcChargesByTag: parsePlcCharges(item.plcCharges),
       otherCharges,
       discount: params.discount,
       chargeHeads,

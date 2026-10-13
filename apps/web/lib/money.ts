@@ -8,6 +8,7 @@
 // same "no float arithmetic in a money path" rule board's own formatArea
 // already followed (docs/12-NFR.md).
 import { Prisma } from "@desire/db";
+import type { AreaBasis } from "@desire/db";
 import { groupIndian } from "./format";
 
 function toFixed2(value: Prisma.Decimal | string): Prisma.Decimal {
@@ -59,9 +60,27 @@ const AREA_LABELS: Record<AreaKind, string> = {
   saleable: "saleable",
 };
 
-/** Every area is labelled with which area it is -- a bare "1,250 sq ft" is
- *  the most expensive mistake in this domain: carpet quoted against a
- *  saleable rate misprices a unit by roughly 35% (docs/19-GLOSSARY.md). */
-export function formatArea(value: Prisma.Decimal | string, kind: AreaKind): string {
-  return `${groupSigned(toFixed2(value).toFixed(2))} sq ft (${AREA_LABELS[kind]})`;
+const AREA_UNITS: Record<AreaBasis, string> = {
+  SQFT: "sq ft",
+  SQYD: "sq yd",
+};
+
+/** Every area is labelled with which area it is AND which unit it is in.
+ *
+ *  A bare "1,250 sq ft" is the most expensive mistake in this domain: carpet
+ *  quoted against a saleable rate misprices a unit by roughly 35%
+ *  (docs/19-GLOSSARY.md). Since plotted land is quoted per square YARD, the
+ *  unit is now explicit too -- sq ft against a sq yd figure is a 9x error,
+ *  which makes the 35% one look mild.
+ *
+ *  Returns null for a missing area rather than a placeholder, so each caller
+ *  decides whether to show a dash or hide the row: a plot genuinely has no
+ *  carpet area, and "— (carpet)" on a land cost sheet is noise, not data. */
+export function formatArea(
+  value: Prisma.Decimal | string | null,
+  kind: AreaKind,
+  basis: AreaBasis = "SQFT",
+): string | null {
+  if (value === null) return null;
+  return `${groupSigned(toFixed2(value).toFixed(2))} ${AREA_UNITS[basis]} (${AREA_LABELS[kind]})`;
 }

@@ -99,7 +99,7 @@ async function seedFixture() {
     data: {
       orgId: ORG, projectId: project.id, version: 1, name: "v1", status: "ACTIVE", validFrom: new Date("2020-01-01"),
       preparedById: "u_test",
-      items: { create: [{ unitTypeId: unitType.id, baseRatePerSqft: "10000.00" }] },
+      items: { create: [{ unitTypeId: unitType.id, baseRate: "10000.00" }] },
     },
   });
   const customer = await db.customer.create({ data: { orgId: ORG, name: "Test Buyer", phone: "9999999999" } });

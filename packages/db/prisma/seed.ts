@@ -229,7 +229,7 @@ async function seedPricing() {
           {
             unitTypeId: UNIT_TYPE_ID,
             // PLACEHOLDER rate -- 975 sqft saleable x 5000 = Rs 48.75L base.
-            baseRatePerSqft: "5000.00",
+            baseRate: "5000.00",
             plcCharges: { CORNER: 150, PARK_FACING: 200 },
             otherCharges: [
               { chargeHeadCode: "PARKING", amount: 300000 },

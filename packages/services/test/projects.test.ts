@@ -99,7 +99,7 @@ describe("resolveUnitAreas (pure)", () => {
       { carpetAreaOverride: D("700.00"), saleableAreaOverride: D("1000.00") },
       unitType,
     );
-    expect(areas.carpetArea.toString()).toBe("700");
+    expect(areas.carpetArea?.toString()).toBe("700");
     expect(areas.saleableArea.toString()).toBe("1000");
     expect(areas.builtUpArea).toBe(unitType.builtUpArea);
   });
@@ -456,7 +456,7 @@ describe("createUnitType", () => {
       saleableArea: "975.00",
       audit: ctx(ORG, writer.id, "writer"),
     });
-    expect(unitType.carpetArea.toString()).toBe("650");
+    expect(unitType.carpetArea?.toString()).toBe("650");
   });
 
   it("accepts built-up == saleable (zero loading factor)", async () => {

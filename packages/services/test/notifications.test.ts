@@ -320,7 +320,7 @@ describe("wiring: the collections sweep queues real notifications when a rule is
       data: {
         orgId: ORG, projectId: project.id, version: 1, name: "v1", status: "ACTIVE",
         validFrom: new Date("2020-01-01"), preparedById: "u_test",
-        items: { create: [{ unitTypeId: unitType.id, baseRatePerSqft: "5000.00", plcCharges: {}, otherCharges: [] }] },
+        items: { create: [{ unitTypeId: unitType.id, baseRate: "5000.00", plcCharges: {}, otherCharges: [] }] },
       },
     });
     const customer = await db.customer.create({ data: { orgId: ORG, name: "Buyer", phone: "9999999999" } });

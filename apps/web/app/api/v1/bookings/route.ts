@@ -84,7 +84,7 @@ function serializeBooking(booking: Booking) {
     agreementValue: booking.agreementValue.toString(),
     commissionableValue: booking.commissionableValue.toString(),
     saleableAreaAtBooking: booking.saleableAreaAtBooking.toString(),
-    carpetAreaAtBooking: booking.carpetAreaAtBooking.toString(),
+    carpetAreaAtBooking: booking.carpetAreaAtBooking?.toString() ?? null,
     createdAt: booking.createdAt.toISOString(),
   };
 }
