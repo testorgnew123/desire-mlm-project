@@ -51,7 +51,8 @@ export default async function ProjectDetailPage({
   });
   if (!project) notFound();
 
-  const [towers, unitTypes, priceLists, paymentPlans, schemes, grades] = await Promise.all([
+  const [towers, unitTypes, priceLists, paymentPlans, schemes, grades, plcTagRows] =
+    await Promise.all([
     db.tower.findMany({ where: { projectId }, orderBy: { displayOrder: "asc" } }),
     db.unitType.findMany({ where: { projectId }, orderBy: { code: "asc" } }),
     db.priceList.findMany({
@@ -70,7 +71,20 @@ export default async function ProjectDetailPage({
       select: { id: true, name: true, version: true, status: true, preparedById: true },
     }),
     db.grade.findMany({ where: { orgId: session.user.orgId }, orderBy: { rank: "asc" } }),
+    // The price list must price every tag its units carry, or the cost sheet
+    // throws UnpricedPlcTagError at quoting time. So the form offers exactly
+    // the tags in use rather than a free-text box -- a typo'd "CORNOR" would
+    // write a charge no unit can ever match. unnest() because plcTags is a
+    // text[] and Prisma has no distinct-over-array-elements.
+    db.$queryRaw<Array<{ tag: string }>>`
+      SELECT DISTINCT unnest("plcTags") AS tag
+      FROM "units"
+      WHERE "projectId" = ${projectId}
+      ORDER BY tag
+    `,
   ]);
+
+  const plcTags = plcTagRows.map((row) => row.tag);
 
   return (
     <div className="flex flex-col gap-4">
@@ -156,7 +170,9 @@ export default async function ProjectDetailPage({
                   <p>
                     {unitType.code} — {unitType.name} ({unitType.bedrooms ?? "?"} BHK)
                   </p>
-                  <p className="text-xs text-muted-foreground">{formatArea(unitType.saleableArea, "saleable")}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}
+                  </p>
                 </div>
               ))}
             </div>
@@ -166,14 +182,27 @@ export default async function ProjectDetailPage({
                 <Input name="code" placeholder="Code (e.g. 3BHK)" required />
                 <Input name="name" placeholder="Name" required />
               </div>
+              {/* Same shape as the tower/block form above: one form for both,
+                  nothing hidden by script, and createUnitType owns which basis
+                  may carry which areas. Carpet and built-up are NOT marked
+                  required -- a plot has neither, and SQYD rejects them. */}
               <div className="flex gap-2">
                 <Input name="bedrooms" type="number" min="0" placeholder="Bedrooms" />
-                <Input name="carpetArea" placeholder="Carpet sq ft" required />
+                <select
+                  name="areaBasis"
+                  aria-label="Area basis"
+                  defaultValue="SQFT"
+                  className="h-9 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
+                >
+                  <option value="SQFT">Built: sq ft</option>
+                  <option value="SQYD">Plot: sq yd</option>
+                </select>
               </div>
               <div className="flex gap-2">
-                <Input name="builtUpArea" placeholder="Built-up sq ft" required />
-                <Input name="saleableArea" placeholder="Saleable sq ft" required />
+                <Input name="carpetArea" placeholder="Carpet (built only)" />
+                <Input name="builtUpArea" placeholder="Built-up (built only)" />
               </div>
+              <Input name="saleableArea" placeholder="Saleable / plot area" required />
               <Button type="submit" size="sm">
                 Add unit type
               </Button>
@@ -276,12 +305,62 @@ export default async function ProjectDetailPage({
                 <input type="hidden" name="projectId" value={project.id} />
                 <Input name="name" placeholder="Price list name (e.g. Launch pricing)" required />
                 {unitTypes.map((unitType) => (
-                  <div key={unitType.id} className="flex items-center gap-2">
-                    <Label className="w-24 shrink-0 text-xs">{unitType.code}</Label>
-                    <input type="hidden" name="unitTypeId" value={unitType.id} />
-                    <Input name={`rate_${unitType.id}`} placeholder="Rate per sq ft" />
+                  <div key={unitType.id} className="flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <Label className="w-24 shrink-0 text-xs">{unitType.code}</Label>
+                      <input type="hidden" name="unitTypeId" value={unitType.id} />
+                      <Input
+                        name={`rate_${unitType.id}`}
+                        placeholder={
+                          unitType.areaBasis === "SQYD" ? "Rate per sq yd" : "Rate per sq ft"
+                        }
+                      />
+                    </div>
+                    {/* One row per PLC tag the project's units actually carry.
+                        A corner plot's DLC uplift is "% of base" with a value
+                        of 10; a park-facing flat is more often a rupee figure
+                        per unit of area. Left blank, the tag is simply not
+                        priced for this type -- which is NOT the same as zero,
+                        and the cost sheet will refuse to quote a unit whose
+                        tag has no charge rather than quote it at nothing. */}
+                    {plcTags.map((tag) => (
+                      <div key={tag} className="flex items-center gap-2 pl-4">
+                        <Label
+                          title={tag}
+                          className="w-24 shrink-0 truncate text-xs text-muted-foreground"
+                        >
+                          {tag}
+                        </Label>
+                        <input type="hidden" name={`plcTag_${unitType.id}`} value={tag} />
+                        {/* PER_AREA first and selected by default: it is what
+                            every price list written so far means, so a number
+                            typed without touching this keeps its old meaning. */}
+                        <select
+                          name={`plcBasis_${unitType.id}`}
+                          aria-label={`${tag} charge basis for ${unitType.code}`}
+                          defaultValue="PER_AREA"
+                          className="h-9 w-32 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
+                        >
+                          <option value="PER_AREA">
+                            ₹ per {unitType.areaBasis === "SQYD" ? "sq yd" : "sq ft"}
+                          </option>
+                          <option value="PCT_OF_BASE">% of base</option>
+                        </select>
+                        <Input
+                          name={`plcValue_${unitType.id}`}
+                          aria-label={`${tag} charge for ${unitType.code}`}
+                          placeholder="Blank = not priced"
+                        />
+                      </div>
+                    ))}
                   </div>
                 ))}
+                {plcTags.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No PLC tags on this project&rsquo;s units yet. Tag units CORNER, PARK_FACING
+                    and so on when importing them, and each tag gets a rate here.
+                  </p>
+                ) : null}
                 <Button type="submit" size="sm">
                   Create draft price list
                 </Button>

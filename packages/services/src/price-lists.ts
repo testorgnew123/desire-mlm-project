@@ -135,15 +135,37 @@ async function lockProject(tx: Prisma.TransactionClient, projectId: string): Pro
 
 // ── Input shapes ───────────────────────────────────────────────────────
 
+/** How a PLC tag's charge is computed.
+ *
+ *  PER_AREA is the original behaviour: rupees per unit of area, multiplied by
+ *  saleable area. PCT_OF_BASE was added for plotted land, where a corner plot
+ *  is quoted as a percentage uplift on the land rate rather than a rupee
+ *  figure per square yard.
+ *
+ *  Declared here, in the writer, rather than in cost-sheet.ts which reads it:
+ *  cost-sheet.ts already imports from this module, so the reverse direction
+ *  would be a cycle. cost-sheet.ts imports the type from here. */
+export type PlcChargeBasis = "PER_AREA" | "PCT_OF_BASE";
+
+export interface PlcCharge {
+  basis: PlcChargeBasis;
+  value: Prisma.Decimal;
+}
+
 export interface PriceListItemInput {
   /** Rate for a whole unit type. Mutually exclusive with unitId. */
   unitTypeId?: string;
   /** Per-unit override, which wins over the unit-type rate at read time. */
   unitId?: string;
   baseRate: Prisma.Decimal;
-  /** Rupees per sqft keyed by PLC tag, e.g. { CORNER: 150 }. Keys must match
-   *  the tags on Unit.plcTags. */
-  plcCharges?: Readonly<Record<string, Prisma.Decimal>>;
+  /** Keyed by PLC tag; keys must match the tags on Unit.plcTags.
+   *
+   *  A bare Decimal is rupees per unit of area -- { CORNER: 150 } -- which is
+   *  what every price list written before plotted land used, and is still the
+   *  right shape for an apartment. A PlcCharge names its basis explicitly and
+   *  is how a percentage uplift is written: { CORNER: { basis: "PCT_OF_BASE",
+   *  value: 10 } }. */
+  plcCharges?: Readonly<Record<string, Prisma.Decimal | PlcCharge>>;
   /** Fixed charges: parking, club, IFMS, stamp duty, registration, ... */
   otherCharges?: readonly { chargeHeadCode: string; amount: Prisma.Decimal }[];
 }
@@ -503,6 +525,22 @@ function assertItemsValid(items: readonly PriceListItemInput[]): void {
     const target = hasUnit ? `unit ${item.unitId}` : `unit type ${item.unitTypeId}`;
     if (seen.has(target)) throw new DuplicatePriceListItemError(target);
     seen.add(target);
+
+    // cost-sheet.ts rejects a negative charge when it reads one, but that is
+    // at the moment a customer is being quoted. Rejecting it here means the
+    // preparer sees it while typing instead of the sales desk seeing it in
+    // front of a buyer.
+    if (item.baseRate.isNegative()) {
+      throw new PriceListItemTargetError(`Base rate for ${target} cannot be negative.`);
+    }
+    for (const [tag, charge] of Object.entries(item.plcCharges ?? {})) {
+      const value = charge instanceof Prisma.Decimal ? charge : charge.value;
+      if (value.isNegative()) {
+        throw new PriceListItemTargetError(
+          `PLC charge '${tag}' for ${target} cannot be negative.`,
+        );
+      }
+    }
   }
 }
 
@@ -524,12 +562,18 @@ function toItemCreateData(item: PriceListItemInput) {
 // forms so data written from the schema's example shape still parses.
 
 function serializeRates(
-  rates: Readonly<Record<string, Prisma.Decimal>> | undefined,
+  rates: Readonly<Record<string, Prisma.Decimal | PlcCharge>> | undefined,
 ): Prisma.InputJsonValue | undefined {
   if (!rates) return undefined;
-  const out: Record<string, string> = {};
+  const out: Record<string, string | { basis: PlcChargeBasis; value: string }> = {};
   for (const [tag, rate] of Object.entries(rates)) {
-    out[tag] = rate.toString();
+    // A plain per-area rate still writes as a bare string, byte-identical to
+    // what every existing list holds. Only a charge that names a basis writes
+    // the object form, so nothing already stored changes shape.
+    out[tag] =
+      rate instanceof Prisma.Decimal
+        ? rate.toString()
+        : { basis: rate.basis, value: rate.value.toString() };
   }
   return out;
 }
