@@ -103,7 +103,7 @@ export default async function ExplainEntryPage({
         <CardContent className="flex flex-col divide-y divide-border text-sm">
           <Row label="Commissionable value" value={formatMoney(entry.baseAmount)} />
           {booking ? (
-            <Row label="Saleable area" value={formatArea(booking.saleableAreaAtBooking, "saleable")} />
+            <Row label="Saleable area" value={formatArea(booking.saleableAreaAtBooking, "saleable")!} />
           ) : null}
           {sellingAssociate ? (
             <Row

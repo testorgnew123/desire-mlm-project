@@ -84,6 +84,16 @@ enum ProjectStatus {
   ON_HOLD
 }
 
+/// The unit of area a type is measured and priced in. Apartments are quoted
+/// per square foot; plotted land in India is quoted per square YARD, and the
+/// two differ by 9x -- entering one where the other is meant misprices a plot
+/// by an order of magnitude, which is why this is an explicit field rather
+/// than a convention.
+enum AreaBasis {
+  SQFT
+  SQYD
+}
+
 /// How a group of units within a project is organised. A project may contain
 /// both -- a township with apartment towers AND plotted land is the normal
 /// case in India, which is why this sits on the group and not on Project.
@@ -868,8 +878,20 @@ model UnitType {
   bathrooms Int?
   balconies Int?
 
-  carpetArea   Decimal  @db.Decimal(10, 2)
-  builtUpArea  Decimal  @db.Decimal(10, 2)
+  /// SQFT for apartments, SQYD for plots. Drives the rate label in the UI and
+  /// the area labels on a cost sheet.
+  areaBasis AreaBasis @default(SQFT)
+
+  /// Carpet and built-up are NULLABLE because a plot has neither -- there is
+  /// no carpet inside a piece of land. They remain REQUIRED for a SQFT type,
+  /// enforced in assertAreaHierarchy: carpet is the RERA-mandated figure on an
+  /// apartment's customer documents and dropping that guard for everything
+  /// would lose the protection against the most expensive mistake in this
+  /// domain (docs/19-GLOSSARY.md).
+  carpetArea   Decimal? @db.Decimal(10, 2)
+  builtUpArea  Decimal? @db.Decimal(10, 2)
+  /// Always required: this is the area pricing is quoted on, whatever the
+  /// basis. For a plot it IS the plot area.
   saleableArea Decimal  @db.Decimal(10, 2)
   terraceArea  Decimal? @db.Decimal(10, 2)
 
@@ -971,8 +993,15 @@ model PriceListItem {
   unitTypeId  String?
   unitId      String?
 
-  baseRatePerSqft Decimal @db.Decimal(12, 2)
-  /// { "CORNER": 150, "PARK_FACING": 200 } — rupees per sqft, keyed by PLC tag.
+  /// Rate per unit of the unit type's areaBasis -- rupees per sq ft for an
+  /// apartment, per sq YARD for a plot. Renamed from baseRatePerSqft, which
+  /// stopped being true once plots existed and would have had someone enter a
+  /// per-sqft figure against a per-sq-yard area: a 9x mispricing.
+  baseRate Decimal @db.Decimal(12, 2)
+  /// Per-tag preferential-location charges, keyed by PLC tag. Two shapes:
+  ///   { "CORNER": 150 }                                rate per area unit
+  ///   { "CORNER": { "basis": "PCT_OF_BASE", "value": 10 } }   % of base price
+  /// The bare-number form is the original and still works unchanged.
   plcCharges      Json?
   /// [{ "chargeHeadCode": "PARKING", "amount": 300000 }, ...]
   otherCharges    Json?
@@ -1268,7 +1297,10 @@ model Booking {
   creditBalance Decimal @default(0) @db.Decimal(18, 2)
 
   saleableAreaAtBooking Decimal @db.Decimal(10, 2)
-  carpetAreaAtBooking   Decimal @db.Decimal(10, 2)
+  /// Null when the unit is a plot -- land has no carpet area. Frozen here, as
+  /// saleable is, because the unit type's areas can change after a sale and a
+  /// booking must still render the sheet the customer signed.
+  carpetAreaAtBooking   Decimal? @db.Decimal(10, 2)
 
   paymentPlanId String?
 

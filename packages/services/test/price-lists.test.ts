@@ -102,7 +102,7 @@ function ctx(orgId: string, userId: string, label: string): AuditContext {
 }
 
 const items = (unitTypeId: string, rate: number) => [
-  { unitTypeId, baseRatePerSqft: D(rate), plcCharges: { CORNER: D(150) } },
+  { unitTypeId, baseRate: D(rate), plcCharges: { CORNER: D(150) } },
 ];
 
 beforeEach(reset);

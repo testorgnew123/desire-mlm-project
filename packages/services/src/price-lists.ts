@@ -140,7 +140,7 @@ export interface PriceListItemInput {
   unitTypeId?: string;
   /** Per-unit override, which wins over the unit-type rate at read time. */
   unitId?: string;
-  baseRatePerSqft: Prisma.Decimal;
+  baseRate: Prisma.Decimal;
   /** Rupees per sqft keyed by PLC tag, e.g. { CORNER: 150 }. Keys must match
    *  the tags on Unit.plcTags. */
   plcCharges?: Readonly<Record<string, Prisma.Decimal>>;
@@ -510,7 +510,7 @@ function toItemCreateData(item: PriceListItemInput) {
   return {
     unitTypeId: item.unitTypeId,
     unitId: item.unitId,
-    baseRatePerSqft: item.baseRatePerSqft,
+    baseRate: item.baseRate,
     plcCharges: serializeRates(item.plcCharges),
     otherCharges: serializeCharges(item.otherCharges),
   };

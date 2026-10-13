@@ -112,7 +112,7 @@ async function seedFixture(orgId: string = ORG) {
   const priceList = await db.priceList.create({
     data: {
       orgId, projectId: project.id, version: 1, name: "v1", status: "ACTIVE", validFrom: new Date("2020-01-01"), preparedById: "u_test",
-      items: { create: [{ unitTypeId: unitType.id, baseRatePerSqft: "5000.00" }] },
+      items: { create: [{ unitTypeId: unitType.id, baseRate: "5000.00" }] },
     },
   });
   const customer = await db.customer.create({ data: { orgId, name: "Test Buyer", phone: "9999999999" } });

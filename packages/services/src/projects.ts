@@ -17,6 +17,7 @@
 //      another.
 import { Prisma } from "@desire/db";
 import type {
+  AreaBasis,
   PrismaClient,
   ProjectStatus,
   Project,
@@ -77,13 +78,14 @@ export class DuplicateCodeError extends Error {
  *  figures so the message can show what was actually submitted. */
 export class InvalidUnitAreasError extends Error {
   constructor(
-    public readonly carpetArea: Prisma.Decimal,
-    public readonly builtUpArea: Prisma.Decimal,
+    public readonly carpetArea: Prisma.Decimal | null,
+    public readonly builtUpArea: Prisma.Decimal | null,
     public readonly saleableArea: Prisma.Decimal,
     detail: string,
   ) {
+    const show = (area: Prisma.Decimal | null) => (area === null ? "none" : area.toFixed(2));
     super(
-      `${detail} (carpet ${carpetArea.toFixed(2)}, built-up ${builtUpArea.toFixed(2)}, ` +
+      `${detail} (carpet ${show(carpetArea)}, built-up ${show(builtUpArea)}, ` +
         `saleable ${saleableArea.toFixed(2)}).`,
     );
     this.name = "InvalidUnitAreasError";
@@ -155,8 +157,10 @@ export class CrossProjectReferenceError extends Error {
 // ── Areas ──────────────────────────────────────────────────────────────
 
 export interface UnitTypeAreas {
-  carpetArea: Prisma.Decimal;
-  builtUpArea: Prisma.Decimal;
+  /** Null for a plot -- there is no carpet inside a piece of land. */
+  carpetArea: Prisma.Decimal | null;
+  builtUpArea: Prisma.Decimal | null;
+  /** Always present: the area pricing is quoted on, whatever the basis. */
   saleableArea: Prisma.Decimal;
 }
 
@@ -202,9 +206,52 @@ function patchOverride(
  *  balcony, so it is strictly larger; saleable adds a share of common areas
  *  and may equal built-up when the loading factor is zero
  *  (docs/19-GLOSSARY.md). */
-function assertAreaHierarchy(areas: UnitTypeAreas): void {
+/** A loaded UnitType row carries areaBasis; the pure UnitTypeAreas shape does
+ *  not, because it is also built from overrides. Narrow rather than widen the
+ *  shared type. */
+function unitTypeBasis(unitType: { areaBasis?: AreaBasis }): AreaBasis {
+  return unitType.areaBasis ?? "SQFT";
+}
+
+/** The carpet < built-up <= saleable rule is the guard against the single most
+ *  expensive mistake in this domain -- three different numbers that look
+ *  interchangeable, where swapping two misprices a unit by ~35%
+ *  (docs/19-GLOSSARY.md). It is NOT weakened for apartments here.
+ *
+ *  A plot genuinely has none of that: no carpet, no built-up, one area. So the
+ *  rule applies in full to a SQFT type and is replaced for a SQYD type by the
+ *  only check that means anything there -- a positive area, and no stray
+ *  apartment figures smuggled in alongside it. */
+function assertAreaHierarchy(areas: UnitTypeAreas, basis: AreaBasis = "SQFT"): void {
   const { carpetArea, builtUpArea, saleableArea } = areas;
-  if (!carpetArea.gt(0) || !builtUpArea.gt(0) || !saleableArea.gt(0)) {
+
+  if (!saleableArea.gt(0)) {
+    throw new InvalidUnitAreasError(carpetArea, builtUpArea, saleableArea, "Areas must be positive");
+  }
+
+  if (basis === "SQYD") {
+    // Accepting a carpet area on a plot would let an apartment type be
+    // mislabelled as land and quietly skip the hierarchy check below.
+    if (carpetArea !== null || builtUpArea !== null) {
+      throw new InvalidUnitAreasError(
+        carpetArea,
+        builtUpArea,
+        saleableArea,
+        "A plot has no carpet or built-up area; leave both empty",
+      );
+    }
+    return;
+  }
+
+  if (carpetArea === null || builtUpArea === null) {
+    throw new InvalidUnitAreasError(
+      carpetArea,
+      builtUpArea,
+      saleableArea,
+      "Carpet and built-up areas are required for a sq ft unit type",
+    );
+  }
+  if (!carpetArea.gt(0) || !builtUpArea.gt(0)) {
     throw new InvalidUnitAreasError(carpetArea, builtUpArea, saleableArea, "Areas must be positive");
   }
   if (!carpetArea.lt(builtUpArea)) {
@@ -570,8 +617,10 @@ export interface CreateUnitTypeParams {
   bedrooms?: number | null;
   bathrooms?: number | null;
   balconies?: number | null;
-  carpetArea: DecimalInput;
-  builtUpArea: DecimalInput;
+  /** SQFT (default) requires carpet and built-up; SQYD forbids them. */
+  areaBasis?: AreaBasis;
+  carpetArea?: DecimalInput | null;
+  builtUpArea?: DecimalInput | null;
   saleableArea: DecimalInput;
   terraceArea?: DecimalInput | null;
   floorPlanUrl?: string | null;
@@ -584,12 +633,13 @@ export async function createUnitType(
 ): Promise<UnitType> {
   const actorId = requireActor(params.audit);
 
+  const basis: AreaBasis = params.areaBasis ?? "SQFT";
   const areas: UnitTypeAreas = {
-    carpetArea: toArea(params.carpetArea),
-    builtUpArea: toArea(params.builtUpArea),
+    carpetArea: params.carpetArea == null ? null : toArea(params.carpetArea),
+    builtUpArea: params.builtUpArea == null ? null : toArea(params.builtUpArea),
     saleableArea: toArea(params.saleableArea),
   };
-  assertAreaHierarchy(areas);
+  assertAreaHierarchy(areas, basis);
 
   return withUniqueCode("Unit type code", params.code, () =>
     db.$transaction(async (tx) => {
@@ -604,6 +654,7 @@ export async function createUnitType(
         bedrooms: params.bedrooms,
         bathrooms: params.bathrooms,
         balconies: params.balconies,
+        areaBasis: basis,
         carpetArea: areas.carpetArea,
         builtUpArea: areas.builtUpArea,
         saleableArea: areas.saleableArea,
@@ -667,7 +718,7 @@ export async function createUnit(db: PrismaClient, params: CreateUnitParams): Pr
         carpetAreaOverride: patchOverride(params.carpetAreaOverride, null),
         saleableAreaOverride: patchOverride(params.saleableAreaOverride, null),
       };
-      assertAreaHierarchy(resolveUnitAreas(overrides, unitType));
+      assertAreaHierarchy(resolveUnitAreas(overrides, unitType), unitTypeBasis(unitType));
 
       const data = {
         orgId: project.orgId,
@@ -781,7 +832,7 @@ export async function updateUnit(db: PrismaClient, params: UpdateUnitParams): Pr
       projectId,
     );
     if (params.towerId) await assertTowerInProject(tx, params.towerId, projectId);
-    assertAreaHierarchy(resolveUnitAreas(overrides, unitType));
+    assertAreaHierarchy(resolveUnitAreas(overrides, unitType), unitTypeBasis(unitType));
 
     const unit = await withUniqueCode("Unit number", params.unitNumber ?? existing.unitNumber, () =>
       tx.unit.update({ where: { id: params.unitId }, data }),
@@ -803,16 +854,23 @@ async function loadUnitTypeInProject(
   tx: Prisma.TransactionClient,
   unitTypeId: string,
   projectId: string,
-): Promise<UnitTypeAreas> {
+): Promise<UnitTypeAreas & { areaBasis: AreaBasis }> {
   const unitType = await tx.unitType.findUnique({
     where: { id: unitTypeId },
-    select: { projectId: true, carpetArea: true, builtUpArea: true, saleableArea: true },
+    select: {
+      projectId: true,
+      areaBasis: true,
+      carpetArea: true,
+      builtUpArea: true,
+      saleableArea: true,
+    },
   });
   if (!unitType) throw new UnitTypeNotFoundError(unitTypeId);
   if (unitType.projectId !== projectId) {
     throw new CrossProjectReferenceError("Unit type", unitTypeId, projectId);
   }
   return {
+    areaBasis: unitType.areaBasis,
     carpetArea: unitType.carpetArea,
     builtUpArea: unitType.builtUpArea,
     saleableArea: unitType.saleableArea,

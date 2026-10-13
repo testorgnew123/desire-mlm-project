@@ -48,8 +48,9 @@ export interface BoardUnit {
    *  rendered next to which area it is -- docs/08-SCREENS.md is explicit that a
    *  bare area number is a bug, and docs/19-GLOSSARY.md explains why (quoting a
    *  carpet area against a saleable rate misprices a unit by ~35%). */
-  carpetArea: string;
-  builtUpArea: string;
+  /** Null for a plot -- land has no carpet area. */
+  carpetArea: string | null;
+  builtUpArea: string | null;
   saleableArea: string;
 
   blockReason: string | null;

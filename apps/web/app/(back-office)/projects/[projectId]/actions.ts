@@ -109,7 +109,7 @@ export async function createDraftPriceListAction(formData: FormData): Promise<vo
   const items = unitTypeIds
     .map((unitTypeId) => ({ unitTypeId, rawRate: String(formData.get(`rate_${unitTypeId}`) ?? "") }))
     .filter((item) => item.rawRate !== "")
-    .map((item) => ({ unitTypeId: item.unitTypeId, baseRatePerSqft: new Prisma.Decimal(item.rawRate) }));
+    .map((item) => ({ unitTypeId: item.unitTypeId, baseRate: new Prisma.Decimal(item.rawRate) }));
 
   if (items.length === 0) {
     redirect(`/projects/${projectId}?error=${encodeURIComponent("Enter at least one unit type's rate.")}`);

@@ -19,6 +19,8 @@ import {
 } from "../src/cost-sheet";
 
 const D = (v: string | number) => new Prisma.Decimal(v);
+/** The original PLC shape: rupees per unit of area. */
+const perArea = (v: string | number) => ({ basis: "PER_AREA" as const, value: D(v) });
 
 const HEADS: ChargeHeadSpec[] = [
   { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: D(5), countsTowardCommission: true, displayOrder: 1 },
@@ -34,9 +36,9 @@ function baseInput(overrides: Partial<CostSheetInput> = {}): CostSheetInput {
   return {
     saleableArea: D(1000),
     carpetArea: D(650),
-    baseRatePerSqft: D(5000),
+    baseRate: D(5000),
     plcTags: ["CORNER", "PARK_FACING"],
-    plcChargesByTag: { CORNER: D(150), PARK_FACING: D(200) },
+    plcChargesByTag: { CORNER: perArea(150), PARK_FACING: perArea(200) },
     otherCharges: [
       { chargeHeadCode: "PARKING", amount: D(300_000) },
       { chargeHeadCode: "CLUB", amount: D(100_000) },
@@ -187,7 +189,7 @@ describe("edge cases", () => {
     const r = computeCostSheet(
       baseInput({
         saleableArea: D("1000.005"),
-        baseRatePerSqft: D("3333.33"),
+        baseRate: D("3333.33"),
         plcTags: [],
         plcChargesByTag: {},
         otherCharges: [],

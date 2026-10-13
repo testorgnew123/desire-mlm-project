@@ -109,14 +109,32 @@ export interface FixedChargeInput {
   amount: Prisma.Decimal;
 }
 
+/** How a PLC tag's charge is computed.
+ *
+ *  PER_AREA is the original behaviour: rupees per unit of area, multiplied by
+ *  saleable area. PCT_OF_BASE was added for plotted land, where a corner plot
+ *  is quoted as a percentage uplift on the land rate rather than a rupee
+ *  figure per square yard -- the DLC tables themselves list corner plots at a
+ *  higher percentage.
+ *
+ *  Percentage is OF THE BASE PRICE, not of gross. Gross would compound with
+ *  other PLC tags and make the result depend on evaluation order. */
+export type PlcChargeBasis = "PER_AREA" | "PCT_OF_BASE";
+
+export interface PlcCharge {
+  basis: PlcChargeBasis;
+  value: Prisma.Decimal;
+}
+
 export interface CostSheetInput {
   saleableArea: Prisma.Decimal;
-  carpetArea: Prisma.Decimal;
-  baseRatePerSqft: Prisma.Decimal;
+  /** Null for a plot -- there is no carpet inside a piece of land. */
+  carpetArea: Prisma.Decimal | null;
+  baseRate: Prisma.Decimal;
   /** From Unit.plcTags. */
   plcTags: readonly string[];
-  /** Rupees per sqft keyed by PLC tag, from PriceListItem.plcCharges. */
-  plcChargesByTag: Readonly<Record<string, Prisma.Decimal>>;
+  /** Per-tag charge, from PriceListItem.plcCharges. */
+  plcChargesByTag: Readonly<Record<string, PlcCharge>>;
   /** Fixed charges: parking, club, IFMS, stamp duty, registration, ... */
   otherCharges: readonly FixedChargeInput[];
   /** Approved discount as a positive amount; it is subtracted here. */
@@ -142,7 +160,8 @@ export interface CostSheetLineResult {
 export interface CostSheetResult {
   lines: CostSheetLineResult[];
   saleableArea: Prisma.Decimal;
-  carpetArea: Prisma.Decimal;
+  /** Null for a plot. */
+  carpetArea: Prisma.Decimal | null;
   baseAmount: Prisma.Decimal;
   plcAmount: Prisma.Decimal;
   otherChargesAmount: Prisma.Decimal;
@@ -169,7 +188,7 @@ const COMPUTED_CATEGORIES: ReadonlySet<ChargeCategory> = new Set<ChargeCategory>
 /**
  * Computes a cost sheet from docs/06-INVENTORY-SPEC.md section 5:
  *
- *   baseAmount     = saleableArea x baseRatePerSqft
+ *   baseAmount     = saleableArea x baseRate
  *   plcAmount      = saleableArea x sum(plcCharges[tag] for tag in plcTags)
  *   otherCharges   = sum of fixed charges (parking, club, IFMS, ...)
  *   gross          = baseAmount + plcAmount + otherCharges - discount
@@ -193,12 +212,12 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
 
   // ── Base (BSP). Saleable area, never carpet (docs/19-GLOSSARY.md).
   const baseHead = requireHeadByCategory(input.chargeHeads, "BASE_PRICE");
-  const baseAmount = round2(input.saleableArea.mul(input.baseRatePerSqft));
+  const baseAmount = round2(input.saleableArea.mul(input.baseRate));
   lines.push(
     buildLine(baseHead, {
       description: baseHead.name,
       quantity: input.saleableArea,
-      rate: input.baseRatePerSqft,
+      rate: input.baseRate,
       amount: baseAmount,
     }),
   );
@@ -212,15 +231,30 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
   if (input.plcTags.length > 0) {
     const plcHead = requireHeadByCategory(input.chargeHeads, "PLC");
     for (const tag of input.plcTags) {
-      const rate = input.plcChargesByTag[tag];
-      if (rate === undefined) throw new UnpricedPlcTagError(tag);
-      const amount = round2(input.saleableArea.mul(rate));
+      const charge = input.plcChargesByTag[tag];
+      if (charge === undefined) throw new UnpricedPlcTagError(tag);
+      // Percentage is taken off the ALREADY-ROUNDED base amount, so the
+      // header reconciles to the printed lines to the paisa -- the same rule
+      // the PLC subtotal follows just below.
+      const amount =
+        charge.basis === "PCT_OF_BASE"
+          ? round2(baseAmount.mul(charge.value).div(100))
+          : round2(input.saleableArea.mul(charge.value));
       plcAmount = plcAmount.plus(amount);
+      const isPct = charge.basis === "PCT_OF_BASE";
       lines.push(
         buildLine(plcHead, {
-          description: `${plcHead.name} - ${tag}`,
-          quantity: input.saleableArea,
-          rate,
+          // The percentage goes in the description, not the rate column: a
+          // bare "10" beside an area quantity reads as rupees per unit, which
+          // is exactly the misreading this is meant to avoid.
+          description: isPct
+            ? `${plcHead.name} - ${tag} (${charge.value.toString()}% of base)`
+            : `${plcHead.name} - ${tag}`,
+          // Quantity x rate must multiply out to the amount or the printed
+          // sheet contradicts itself; for a percentage it does not, so both
+          // are left null exactly as a fixed charge does.
+          quantity: isPct ? null : input.saleableArea,
+          rate: isPct ? null : charge.value,
           amount,
         }),
       );
@@ -401,9 +435,9 @@ export async function buildCostSheetForUnit(
   const result = computeCostSheet({
     saleableArea: unit.saleableAreaOverride ?? unit.unitType.saleableArea,
     carpetArea: unit.carpetAreaOverride ?? unit.unitType.carpetArea,
-    baseRatePerSqft: item.baseRatePerSqft,
+    baseRate: item.baseRate,
     plcTags: unit.plcTags,
-    plcChargesByTag: parseRates(item.plcCharges),
+    plcChargesByTag: parsePlcCharges(item.plcCharges),
     otherCharges: parseCharges(item.otherCharges),
     discount: params.discount ?? zero(),
     chargeHeads,
@@ -436,24 +470,29 @@ function assertAreasAndRate(input: CostSheetInput): void {
       `Saleable area must be positive, got ${input.saleableArea.toString()}.`,
     );
   }
-  if (input.carpetArea.lessThanOrEqualTo(0)) {
-    throw new CostSheetInputError(
-      `Carpet area must be positive, got ${input.carpetArea.toString()}.`,
-    );
+  // A plot has no carpet area, so the guard below is skipped for one -- but
+  // it is NOT weakened for anything that has one. When carpet is present it
+  // must still be positive and still smaller than saleable.
+  if (input.carpetArea !== null) {
+    if (input.carpetArea.lessThanOrEqualTo(0)) {
+      throw new CostSheetInputError(
+        `Carpet area must be positive, got ${input.carpetArea.toString()}.`,
+      );
+    }
+    // Carpet is always smaller than saleable -- saleable is built-up plus a
+    // share of common areas (docs/19-GLOSSARY.md). If it is not, the two have
+    // been swapped somewhere upstream, which misprices the unit by roughly
+    // 35%. Fail loudly rather than quote it.
+    if (input.carpetArea.greaterThan(input.saleableArea)) {
+      throw new CostSheetInputError(
+        `Carpet area ${input.carpetArea.toString()} exceeds saleable area ` +
+          `${input.saleableArea.toString()}; the two areas look swapped.`,
+      );
+    }
   }
-  // Carpet is always smaller than saleable -- saleable is built-up plus a share
-  // of common areas (docs/19-GLOSSARY.md). If it is not, the two have been
-  // swapped somewhere upstream, which misprices the unit by roughly 35%. Fail
-  // loudly rather than quote it.
-  if (input.carpetArea.greaterThan(input.saleableArea)) {
+  if (input.baseRate.isNegative()) {
     throw new CostSheetInputError(
-      `Carpet area ${input.carpetArea.toString()} exceeds saleable area ` +
-        `${input.saleableArea.toString()}; the two areas look swapped.`,
-    );
-  }
-  if (input.baseRatePerSqft.isNegative()) {
-    throw new CostSheetInputError(
-      `Base rate per sqft cannot be negative, got ${input.baseRatePerSqft.toString()}.`,
+      `Base rate cannot be negative, got ${input.baseRate.toString()}.`,
     );
   }
 }
@@ -520,16 +559,42 @@ function maxDisplayOrder(lines: readonly CostSheetLineResult[]): number {
 // numbers go through their string form so the Decimal is the exact value the
 // JSON text meant.
 
-function parseRates(value: Prisma.JsonValue | null): Record<string, Prisma.Decimal> {
+/** Two stored shapes, because the bare-number one predates plotted land and
+ *  every existing price list uses it:
+ *
+ *    { "CORNER": 150 }                                  rate per area unit
+ *    { "CORNER": { "basis": "PCT_OF_BASE", "value": 10 } }   % of base price
+ *
+ *  A number (or a numeric string -- amounts are written as strings to keep
+ *  money off IEEE doubles) means PER_AREA. Anything else must name its basis
+ *  explicitly; guessing would be guessing about money. */
+export function parsePlcCharges(value: Prisma.JsonValue | null): Record<string, PlcCharge> {
   if (value === null) return {};
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new PriceListItemMalformedError(
       "PriceListItem.plcCharges must be an object keyed by PLC tag.",
     );
   }
-  const out: Record<string, Prisma.Decimal> = {};
+  const out: Record<string, PlcCharge> = {};
   for (const [tag, raw] of Object.entries(value)) {
-    out[tag] = toDecimal(raw, `plcCharges.${tag}`);
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+      const basis = (raw as Record<string, unknown>).basis;
+      if (basis !== "PER_AREA" && basis !== "PCT_OF_BASE") {
+        throw new PriceListItemMalformedError(
+          `plcCharges.${tag}.basis must be "PER_AREA" or "PCT_OF_BASE", got ${JSON.stringify(basis)}.`,
+        );
+      }
+      const parsed = toDecimal(
+        (raw as Record<string, Prisma.JsonValue>).value ?? null,
+        `plcCharges.${tag}.value`,
+      );
+      if (parsed.isNegative()) {
+        throw new PriceListItemMalformedError(`plcCharges.${tag}.value cannot be negative.`);
+      }
+      out[tag] = { basis, value: parsed };
+      continue;
+    }
+    out[tag] = { basis: "PER_AREA", value: toDecimal(raw, `plcCharges.${tag}`) };
   }
   return out;
 }
