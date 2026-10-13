@@ -212,3 +212,62 @@ describe("purity", () => {
     expect(JSON.stringify(b.errors)).toBe(JSON.stringify(a.errors));
   });
 });
+
+// ── Plotted blocks ─────────────────────────────────────────────────────
+//
+// A plot has no floor. The rule mirrors createUnit's assertUnitFloor exactly:
+// TOWER demands a floor, BLOCK forbids one, no target group leaves it
+// optional. The last of those is the one with teeth -- an earlier cut of this
+// change kept `floor === undefined` in validateRow's final guard, so every
+// plot was dropped with NO error at all: valid empty, errors empty, nothing
+// imported and nothing said. Silent data loss is the worst failure an
+// importer can have, so it is asserted directly.
+describe("plotted blocks", () => {
+  const BLOCK_CONTEXT: UnitImportContext = {
+    existingUnitNumbers: [],
+    unitTypeAreas: [["PLOT", { carpetArea: D(900), builtUpArea: D(950), saleableArea: D(1000) }]],
+    targetGroupKind: "BLOCK",
+  };
+  const plotRow = (over: Partial<RawUnitRow> = {}): RawUnitRow => ({
+    unitNumber: "B1-001",
+    unitTypeCode: "PLOT",
+    ...over,
+  });
+
+  it("accepts a plot with no floor, and actually returns it", () => {
+    const { valid, errors } = validateUnitImportRows(
+      [plotRow(), plotRow({ unitNumber: "B1-002" })],
+      BLOCK_CONTEXT,
+    );
+    expect(errors).toEqual([]);
+    // The regression: this was 0 while errors was also empty.
+    expect(valid).toHaveLength(2);
+    expect(valid[0]?.floor).toBeUndefined();
+  });
+
+  it("rejects a plot that carries a floor", () => {
+    const { valid, errors } = validateUnitImportRows([plotRow({ floor: 3 })], BLOCK_CONTEXT);
+    expect(valid).toHaveLength(0);
+    expect(fieldsFor(errors, 1)).toEqual(["floor"]);
+    expect(errors[0]?.message).toContain("must be empty for a plot in a block");
+  });
+
+  it("demands a floor when the batch targets a tower", () => {
+    const { valid, errors } = validateUnitImportRows([plotRow()], {
+      ...BLOCK_CONTEXT,
+      targetGroupKind: "TOWER",
+      towerTotalFloors: 10,
+    });
+    expect(valid).toHaveLength(0);
+    expect(errors[0]?.message).toContain("required for a unit in a tower");
+  });
+
+  it("leaves floor optional when the batch targets no group", () => {
+    const { valid, errors } = validateUnitImportRows([plotRow()], {
+      ...BLOCK_CONTEXT,
+      targetGroupKind: undefined,
+    });
+    expect(errors).toEqual([]);
+    expect(valid).toHaveLength(1);
+  });
+});

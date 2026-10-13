@@ -370,12 +370,12 @@ function validateRow(
 
   // The undefined checks below are already implied by problems.length === 0;
   // they are spelled out because the compiler cannot see that.
-  if (
-    problems.length > 0 ||
-    unitNumber === undefined ||
-    unitTypeCode === undefined ||
-    floor === undefined
-  ) {
+  //
+  // floor is NOT in this list: undefined is a legitimate value for a plot in
+  // a block, and the floor block above has already failed the row if the
+  // group actually required one. Including it here dropped every plot
+  // silently -- valid empty, errors empty, nothing imported and nothing said.
+  if (problems.length > 0 || unitNumber === undefined || unitTypeCode === undefined) {
     return { parsed: null, errors: problems };
   }
 
