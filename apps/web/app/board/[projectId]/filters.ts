@@ -44,8 +44,14 @@ export function matchesAttributeFilters(unit: BoardUnit, filters: BoardFilters):
     return false;
   }
 
-  if (filters.floorMin !== null && unit.floor < filters.floorMin) return false;
-  if (filters.floorMax !== null && unit.floor > filters.floorMax) return false;
+  // A plot in a block has no floor. A floor filter is a question about
+  // towers, so a floorless unit is excluded by it rather than silently
+  // treated as floor 0 -- which would surface every plot under "ground".
+  if (filters.floorMin !== null || filters.floorMax !== null) {
+    if (unit.floor === null) return false;
+    if (filters.floorMin !== null && unit.floor < filters.floorMin) return false;
+    if (filters.floorMax !== null && unit.floor > filters.floorMax) return false;
+  }
 
   return true;
 }

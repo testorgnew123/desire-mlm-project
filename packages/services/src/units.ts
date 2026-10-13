@@ -193,7 +193,8 @@ function isRestorable(status: UnitStatus): boolean {
 export interface UnitDelta {
   id: string;
   unitNumber: string;
-  floor: number;
+  /** Null for a plot in a BLOCK -- plots have no floor. */
+  floor: number | null;
   status: UnitStatus;
   currentHoldExpiresAt: Date | null;
   updatedAt: Date;

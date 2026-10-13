@@ -121,23 +121,38 @@ export function InventoryGrid({
     return [...byTower.values()]
       .sort((a, b) => (a.towerCode ?? "").localeCompare(b.towerCode ?? ""))
       .map((section) => {
+        // Plots have no floor. They collect into one floorless row rendered
+        // without a floor label, rather than being forced into a "floor 0"
+        // band that does not exist on the ground.
         const byFloor = new Map<number, typeof merged>();
+        const floorless: typeof merged = [];
         for (const unit of section.units) {
+          if (unit.floor === null) {
+            floorless.push(unit);
+            continue;
+          }
           const row = byFloor.get(unit.floor);
           if (row) row.push(unit);
           else byFloor.set(unit.floor, [unit]);
         }
-        return {
-          towerCode: section.towerCode,
-          floors: [...byFloor.entries()]
-            .sort((a, b) => b[0] - a[0])
-            .map(([floor, units]) => ({
-              floor,
-              units: [...units].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)),
-            })),
-        };
+        const floors: Array<{ floor: number | null; units: typeof merged }> = [
+          ...byFloor.entries(),
+        ]
+          .sort((a, b) => b[0] - a[0])
+          .map(([floor, units]) => ({
+            floor: floor as number | null,
+            units: [...units].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)),
+          }));
+        if (floorless.length > 0) {
+          floors.push({
+            floor: null,
+            units: [...floorless].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)),
+          });
+        }
+        return { towerCode: section.towerCode, floors };
       });
   }, [merged]);
+
 
   async function handleHold(unit: PwaUnit) {
     setHolding(true);
@@ -177,7 +192,9 @@ export function InventoryGrid({
               <h2 className={styles.towerLabel}>Tower {section.towerCode}</h2>
             ) : null}
             {section.floors.map(({ floor, units: floorUnits }) => (
-              <div key={floor} className={styles.floorRow}>
+              <div key={floor ?? "plots"} className={styles.floorRow}>
+                {/* Empty for plots: the label column stays so the grid keeps
+                    its left gutter and tiles stay aligned across sections. */}
                 <div className={styles.floorLabel} aria-hidden="true">
                   {floor}
                 </div>

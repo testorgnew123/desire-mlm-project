@@ -16,7 +16,15 @@
 //      so a mutation cannot write into one org while being audited under
 //      another.
 import { Prisma } from "@desire/db";
-import type { PrismaClient, ProjectStatus, Project, Tower, UnitType, Unit } from "@desire/db";
+import type {
+  PrismaClient,
+  ProjectStatus,
+  Project,
+  Tower,
+  UnitGroupKind,
+  UnitType,
+  Unit,
+} from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError } from "./rbac";
 import { UnitNotFoundError } from "./holds";
@@ -96,6 +104,41 @@ export class ProjectReraInvalidError extends Error {
   constructor(public readonly projectId: string) {
     super(`Project ${projectId} has no valid RERA registration; units cannot be created.`);
     this.name = "ProjectReraInvalidError";
+  }
+}
+
+/** A tower has floors and its units must say which one; a plotted block has
+ *  none and its plots must not pretend to. Storing 0 for a plot would put
+ *  every plot in a phantom ground-floor row on the inventory board, which
+ *  reads floors as a building elevation.
+ *
+ *  Three cases, not two -- Unit.towerId is nullable and units with no group at
+ *  all predate blocks, so they keep accepting an optional floor rather than
+ *  being retro-invalidated. */
+export class UnitFloorMismatchError extends Error {
+  constructor(
+    public readonly groupKind: "TOWER" | "BLOCK",
+    public readonly reason: "missing" | "unexpected",
+  ) {
+    super(
+      groupKind === "TOWER"
+        ? "A unit in a tower must have a floor."
+        : "A plot in a block must not have a floor.",
+    );
+    this.name = "UnitFloorMismatchError";
+  }
+}
+
+/** A block has no floors, so totalFloors on one is meaningless; a tower
+ *  without it cannot validate its own units. */
+export class TowerFloorsMismatchError extends Error {
+  constructor(public readonly groupKind: "TOWER" | "BLOCK") {
+    super(
+      groupKind === "TOWER"
+        ? "A tower must declare totalFloors."
+        : "A block must not declare totalFloors.",
+    );
+    this.name = "TowerFloorsMismatchError";
   }
 }
 
@@ -462,15 +505,32 @@ export interface CreateTowerParams {
   projectId: string;
   code: string;
   name: string;
-  totalFloors: number;
+  /** Defaults to TOWER so every existing caller keeps working unchanged. */
+  kind?: UnitGroupKind;
+  /** Required for a TOWER, must be absent for a BLOCK. */
+  totalFloors?: number | null;
   unitsPerFloor?: number | null;
   phase?: string | null;
   displayOrder?: number;
   audit: AuditContext;
 }
 
+/** The schema cannot express "required only when kind is TOWER", so the rule
+ *  lives here -- the same place every other cross-field invariant in this file
+ *  lives, rather than in a route that one caller could skip. */
+function assertTowerFloors(kind: UnitGroupKind, totalFloors: number | null | undefined): void {
+  if (kind === "TOWER" && (totalFloors === null || totalFloors === undefined)) {
+    throw new TowerFloorsMismatchError("TOWER");
+  }
+  if (kind === "BLOCK" && totalFloors !== null && totalFloors !== undefined) {
+    throw new TowerFloorsMismatchError("BLOCK");
+  }
+}
+
 export async function createTower(db: PrismaClient, params: CreateTowerParams): Promise<Tower> {
   const actorId = requireActor(params.audit);
+  const kind: UnitGroupKind = params.kind ?? "TOWER";
+  assertTowerFloors(kind, params.totalFloors);
 
   return withUniqueCode("Tower code", params.code, () =>
     db.$transaction(async (tx) => {
@@ -482,7 +542,8 @@ export async function createTower(db: PrismaClient, params: CreateTowerParams): 
         projectId: params.projectId,
         code: params.code,
         name: params.name,
-        totalFloors: params.totalFloors,
+        kind,
+        totalFloors: params.totalFloors ?? null,
         unitsPerFloor: params.unitsPerFloor,
         phase: params.phase,
         displayOrder: params.displayOrder,
@@ -572,7 +633,9 @@ export interface CreateUnitParams {
   towerId?: string | null;
   unitTypeId: string;
   unitNumber: string;
-  floor: number;
+  /** Required when the unit sits in a TOWER, forbidden in a BLOCK, optional
+   *  when it has no group at all. See assertUnitFloor. */
+  floor?: number | null;
   facing?: string | null;
   plcTags?: string[];
   /** Null or omitted means inherit from the unit type. */
@@ -595,7 +658,10 @@ export async function createUnit(db: PrismaClient, params: CreateUnitParams): Pr
       await assertPermission(tx, actorId, "project.write", { projectId: params.projectId });
 
       const unitType = await loadUnitTypeInProject(tx, params.unitTypeId, params.projectId);
-      if (params.towerId) await assertTowerInProject(tx, params.towerId, params.projectId);
+      const group = params.towerId
+        ? await assertTowerInProject(tx, params.towerId, params.projectId)
+        : null;
+      assertUnitFloor(group?.kind ?? null, params.floor);
 
       const overrides: UnitAreaOverrides = {
         carpetAreaOverride: patchOverride(params.carpetAreaOverride, null),
@@ -609,7 +675,7 @@ export async function createUnit(db: PrismaClient, params: CreateUnitParams): Pr
         towerId: params.towerId,
         unitTypeId: params.unitTypeId,
         unitNumber: params.unitNumber,
-        floor: params.floor,
+        floor: params.floor ?? null,
         facing: params.facing,
         plcTags: params.plcTags ?? [],
         carpetAreaOverride: overrides.carpetAreaOverride,
@@ -753,14 +819,35 @@ async function loadUnitTypeInProject(
   };
 }
 
+/** Returns the group's kind as well as validating it, because the floor rule
+ *  below needs it and a second query for one column would be waste. */
 async function assertTowerInProject(
   tx: Prisma.TransactionClient,
   towerId: string,
   projectId: string,
-): Promise<void> {
-  const tower = await tx.tower.findUnique({ where: { id: towerId }, select: { projectId: true } });
+): Promise<{ kind: UnitGroupKind }> {
+  const tower = await tx.tower.findUnique({
+    where: { id: towerId },
+    select: { projectId: true, kind: true },
+  });
   if (!tower) throw new TowerNotFoundError(towerId);
   if (tower.projectId !== projectId) {
     throw new CrossProjectReferenceError("Tower", towerId, projectId);
+  }
+  return { kind: tower.kind };
+}
+
+/** Three cases, not two. A unit with NO group predates blocks entirely and
+ *  keeps accepting an optional floor -- retro-invalidating those rows would
+ *  break existing inventory for no gain. */
+function assertUnitFloor(
+  groupKind: UnitGroupKind | null,
+  floor: number | null | undefined,
+): void {
+  if (groupKind === "TOWER" && (floor === null || floor === undefined)) {
+    throw new UnitFloorMismatchError("TOWER", "missing");
+  }
+  if (groupKind === "BLOCK" && floor !== null && floor !== undefined) {
+    throw new UnitFloorMismatchError("BLOCK", "unexpected");
   }
 }

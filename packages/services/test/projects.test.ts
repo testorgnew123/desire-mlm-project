@@ -9,6 +9,8 @@ import { UnitNotFoundError } from "../src/holds";
 import {
   CrossProjectReferenceError,
   DuplicateCodeError,
+  TowerFloorsMismatchError,
+  UnitFloorMismatchError,
   InvalidHoldPolicyError,
   InvalidUnitAreasError,
   ProjectNotFoundError,
@@ -828,5 +830,192 @@ describe("createUnit / updateUnit", () => {
         }),
       ).rejects.toThrow(DuplicateCodeError);
     });
+  });
+});
+
+// ── Plotted developments: tower vs block ───────────────────────────────
+//
+// A project may contain both an apartment tower and a plotted block (a
+// township is the normal case), so `kind` lives on the group, not the
+// project. The rule under test, stated once:
+//
+//   group is TOWER  -> the unit MUST have a floor
+//   group is BLOCK  -> the plot MUST NOT have a floor
+//   no group at all -> floor is optional (predates blocks; not retro-broken)
+//
+// Both directions are asserted, because a one-sided check would let every
+// plot be stored on floor 0 and render as a phantom ground floor on the
+// inventory board.
+describe("unit groups: towers and plotted blocks", () => {
+  async function seedProjectAndType() {
+    await seedOrg(ORG, "Plotting Org");
+    const writer = await makeUser(ORG, "writer");
+    const project = await createProject(db, {
+      code: "TWN",
+      name: "Township",
+      city: "Jaipur",
+      state: "Rajasthan",
+      reraRegNo: "RAJ/P/2026/0001",
+      reraValidTill: new Date("2030-01-01"),
+      audit: ctx(ORG, writer.id, "writer"),
+    });
+    const unitType = await createUnitType(db, {
+      projectId: project.id,
+      code: "PLOT",
+      name: "Plot",
+      // Apartment-shaped areas even for a "plot": the cost sheet still
+      // enforces carpet < built-up <= saleable, and relaxing that for plotted
+      // units is Stage 2 (land area + per-sq-yard rates), not this change.
+      carpetArea: D(900),
+      builtUpArea: D(950),
+      saleableArea: D(1000),
+      audit: ctx(ORG, writer.id, "writer"),
+    });
+    return { writer, project, unitType };
+  }
+
+  it("creates a BLOCK without totalFloors, and a TOWER with them", async () => {
+    const { writer, project } = await seedProjectAndType();
+    const a = ctx(ORG, writer.id, "writer");
+
+    const block = await createTower(db, {
+      projectId: project.id,
+      code: "B1",
+      name: "Block B1",
+      kind: "BLOCK",
+      audit: a,
+    });
+    expect(block.kind).toBe("BLOCK");
+    expect(block.totalFloors).toBeNull();
+
+    const tower = await createTower(db, {
+      projectId: project.id,
+      code: "T1",
+      name: "Tower 1",
+      kind: "TOWER",
+      totalFloors: 12,
+      audit: a,
+    });
+    expect(tower.kind).toBe("TOWER");
+    expect(tower.totalFloors).toBe(12);
+  });
+
+  it("defaults kind to TOWER, so existing callers are unaffected", async () => {
+    const { writer, project } = await seedProjectAndType();
+    const tower = await createTower(db, {
+      projectId: project.id,
+      code: "T0",
+      name: "Legacy tower",
+      totalFloors: 5,
+      audit: ctx(ORG, writer.id, "writer"),
+    });
+    expect(tower.kind).toBe("TOWER");
+  });
+
+  it("rejects a TOWER with no totalFloors, and a BLOCK that declares them", async () => {
+    const { writer, project } = await seedProjectAndType();
+    const a = ctx(ORG, writer.id, "writer");
+
+    await expect(
+      createTower(db, { projectId: project.id, code: "T2", name: "No floors", kind: "TOWER", audit: a }),
+    ).rejects.toThrow(TowerFloorsMismatchError);
+
+    await expect(
+      createTower(db, {
+        projectId: project.id,
+        code: "B2",
+        name: "Block with floors",
+        kind: "BLOCK",
+        totalFloors: 3,
+        audit: a,
+      }),
+    ).rejects.toThrow(TowerFloorsMismatchError);
+  });
+
+  it("requires a floor for a unit in a TOWER", async () => {
+    const { writer, project, unitType } = await seedProjectAndType();
+    const a = ctx(ORG, writer.id, "writer");
+    const tower = await createTower(db, {
+      projectId: project.id,
+      code: "T3",
+      name: "Tower 3",
+      kind: "TOWER",
+      totalFloors: 8,
+      audit: a,
+    });
+
+    await expect(
+      createUnit(db, {
+        projectId: project.id,
+        towerId: tower.id,
+        unitTypeId: unitType.id,
+        unitNumber: "T3-NOFLOOR",
+        audit: a,
+      }),
+    ).rejects.toThrow(UnitFloorMismatchError);
+
+    const ok = await createUnit(db, {
+      projectId: project.id,
+      towerId: tower.id,
+      unitTypeId: unitType.id,
+      unitNumber: "T3-101",
+      floor: 1,
+      audit: a,
+    });
+    expect(ok.floor).toBe(1);
+  });
+
+  it("refuses a floor on a plot in a BLOCK, and stores null when omitted", async () => {
+    const { writer, project, unitType } = await seedProjectAndType();
+    const a = ctx(ORG, writer.id, "writer");
+    const block = await createTower(db, {
+      projectId: project.id,
+      code: "B3",
+      name: "Block B3",
+      kind: "BLOCK",
+      audit: a,
+    });
+
+    await expect(
+      createUnit(db, {
+        projectId: project.id,
+        towerId: block.id,
+        unitTypeId: unitType.id,
+        unitNumber: "B3-WITHFLOOR",
+        floor: 0,
+        audit: a,
+      }),
+    ).rejects.toThrow(UnitFloorMismatchError);
+
+    const plot = await createUnit(db, {
+      projectId: project.id,
+      towerId: block.id,
+      unitTypeId: unitType.id,
+      unitNumber: "B3-07",
+      audit: a,
+    });
+    expect(plot.floor).toBeNull();
+  });
+
+  it("still allows a floor on a unit with no group at all", async () => {
+    const { writer, project, unitType } = await seedProjectAndType();
+    const a = ctx(ORG, writer.id, "writer");
+
+    const withFloor = await createUnit(db, {
+      projectId: project.id,
+      unitTypeId: unitType.id,
+      unitNumber: "ORPHAN-1",
+      floor: 3,
+      audit: a,
+    });
+    expect(withFloor.floor).toBe(3);
+
+    const withoutFloor = await createUnit(db, {
+      projectId: project.id,
+      unitTypeId: unitType.id,
+      unitNumber: "ORPHAN-2",
+      audit: a,
+    });
+    expect(withoutFloor.floor).toBeNull();
   });
 });

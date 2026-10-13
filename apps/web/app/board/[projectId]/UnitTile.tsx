@@ -8,7 +8,8 @@ import styles from "./board.module.css";
 export interface UnitTileProps {
   unitId: string;
   unitNumber: string;
-  floor: number;
+  /** Null for a plot in a block; omitted from the accessible name. */
+  floor: number | null;
   unitTypeCode: string;
   status: UnitStatus;
   /** mm:ss (or h:mm:ss) while a hold is live, null otherwise. */
@@ -41,7 +42,7 @@ function UnitTileComponent({
 
   const accessibleName = [
     `Unit ${unitNumber}`,
-    `floor ${floor}`,
+    floor === null ? null : `floor ${floor}`,
     unitTypeCode,
     presentation.long,
     remainingMinutes === null

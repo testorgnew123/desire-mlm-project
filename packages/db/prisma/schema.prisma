@@ -84,6 +84,14 @@ enum ProjectStatus {
   ON_HOLD
 }
 
+/// How a group of units within a project is organised. A project may contain
+/// both -- a township with apartment towers AND plotted land is the normal
+/// case in India, which is why this sits on the group and not on Project.
+enum UnitGroupKind {
+  TOWER // vertical: floors, units per floor
+  BLOCK // plotted: a named block/sector of land parcels, no floors
+}
+
 /// Unit lifecycle. Transitions and their guards: docs/06-INVENTORY-SPEC.md.
 enum UnitStatus {
   AVAILABLE
@@ -819,16 +827,25 @@ model Project {
   @@map("projects")
 }
 
+/// A group of units within a project. NOTE THE NAME IS HISTORICAL: this models
+/// a tower OR a plotted block, per `kind`. It was built before plotted
+/// developments existed and renaming it would touch Unit.towerId, every
+/// relation, both inventory boards, the stock statement and the importer for
+/// no behaviour change -- so the table keeps its name and the UI says
+/// "Tower / Block". See PROGRESS.md decision log, 2026-10-13.
 model Tower {
-  id            String  @id @default(cuid())
+  id            String        @id @default(cuid())
   orgId         String
   projectId     String
   code          String
   name          String
-  totalFloors   Int
+  kind          UnitGroupKind @default(TOWER)
+  /// Required for a TOWER, null for a BLOCK -- enforced in createTower, not by
+  /// the schema, since Prisma cannot express a conditional requirement.
+  totalFloors   Int?
   unitsPerFloor Int?
   phase         String?
-  displayOrder  Int     @default(0)
+  displayOrder  Int           @default(0)
 
   project Project @relation(fields: [projectId], references: [id])
   units   Unit[]
@@ -874,7 +891,10 @@ model Unit {
   unitTypeId String
 
   unitNumber String
-  floor      Int
+  /// Required for a unit in a TOWER, null for a plot in a BLOCK. A plot has no
+  /// floor, and storing 0 would put every plot in a phantom ground-floor row
+  /// on the inventory board. Enforced in the service layer.
+  floor      Int?
   facing     String?
   /// PLC tags priced by PriceListItem.plcCharges, e.g. ["CORNER","PARK_FACING"].
   plcTags    String[]

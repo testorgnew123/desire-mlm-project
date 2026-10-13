@@ -15,6 +15,7 @@
 // docs/07-API.md draws for every other endpoint -- handlers validate shape,
 // services hold the rules.
 import { Prisma } from "@desire/db";
+import type { UnitGroupKind } from "@desire/db";
 import type { PrismaClient } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPermission, ForbiddenError } from "./rbac";
@@ -71,7 +72,8 @@ export interface ParsedUnitRow {
   rowNumber: number;
   unitNumber: string;
   unitTypeCode: string;
-  floor: number;
+  /** Undefined for a plot in a BLOCK, which has no floor. */
+  floor?: number;
   facing?: UnitFacing;
   plcTags: string[];
   carpetAreaOverride?: Prisma.Decimal;
@@ -105,6 +107,11 @@ export interface UnitImportContext {
   /** Tower.totalFloors, when the batch targets one tower. Omitted means no
    *  floor ceiling can be checked. */
   towerTotalFloors?: number;
+  /** The kind of group this batch targets, when it targets one. TOWER demands
+   *  a floor on every row; BLOCK forbids one, because a plot has none.
+   *  Omitted means the batch targets no group, where floor stays optional --
+   *  that case predates blocks and is not retro-invalidated. */
+  targetGroupKind?: UnitGroupKind;
 }
 
 export interface UnitImportValidation {
@@ -133,6 +140,7 @@ interface ResolvedContext {
   unitTypeAreas: ReadonlyMap<string, UnitTypeAreas>;
   unitTypeHint: string;
   towerTotalFloors: number | undefined;
+  targetGroupKind: UnitGroupKind | undefined;
 }
 
 /** Validates every row and reports every problem found. Rows with no problems
@@ -148,6 +156,7 @@ export function validateUnitImportRows(
     unitTypeAreas,
     unitTypeHint: describeCodes(unitTypeAreas.keys()),
     towerTotalFloors: context.towerTotalFloors,
+    targetGroupKind: context.targetGroupKind,
   };
 
   // unitNumber -> the first row that claimed it, so the duplicate message can
@@ -226,15 +235,26 @@ function validateRow(
   }
 
   // ── floor
+  //
+  // Three cases, matching createUnit's assertUnitFloor: a TOWER demands a
+  // floor, a BLOCK forbids one (a plot has none, and storing 0 would put every
+  // plot in a phantom ground-floor row on the board), and a batch targeting no
+  // group at all keeps the old optional behaviour.
   const floor = readInteger(row.floor);
-  if (floor === undefined) {
-    fail(
-      "floor",
-      row.floor,
-      isAbsent(row.floor)
-        ? "floor is required"
-        : `floor must be an integer, got ${display(row.floor)}`,
-    );
+  if (ctx.targetGroupKind === "BLOCK") {
+    if (!isAbsent(row.floor)) {
+      fail("floor", row.floor, "floor must be empty for a plot in a block");
+    }
+  } else if (floor === undefined) {
+    if (ctx.targetGroupKind === "TOWER" || !isAbsent(row.floor)) {
+      fail(
+        "floor",
+        row.floor,
+        isAbsent(row.floor)
+          ? "floor is required for a unit in a tower"
+          : `floor must be an integer, got ${display(row.floor)}`,
+      );
+    }
   } else if (ctx.towerTotalFloors !== undefined) {
     // Ground is floor 0, so the tower spans 0..totalFloors. Basement levels are
     // not expressible this way; the schema models floor as a bare Int with no
@@ -550,17 +570,20 @@ export async function importUnits(
         }
 
         let towerTotalFloors: number | undefined;
+        let targetGroupKind: UnitGroupKind | undefined;
         if (params.towerId) {
           const tower = await tx.tower.findUnique({
             where: { id: params.towerId },
-            select: { projectId: true, totalFloors: true },
+            select: { projectId: true, totalFloors: true, kind: true },
           });
           if (!tower || tower.projectId !== params.projectId) {
             throw new UnitImportTargetError(
               `Tower ${params.towerId} does not belong to project ${params.projectId}.`,
             );
           }
-          towerTotalFloors = tower.totalFloors;
+          // Null for a BLOCK, which has no floors to bound against.
+          towerTotalFloors = tower.totalFloors ?? undefined;
+          targetGroupKind = tower.kind;
         }
 
         const existingUnits = await tx.unit.findMany({
@@ -591,6 +614,7 @@ export async function importUnits(
           existingUnitNumbers: existingUnits.map((unit) => unit.unitNumber),
           unitTypeAreas,
           towerTotalFloors,
+          targetGroupKind,
         });
 
         if (errors.length > 0 && mode === "ALL_OR_NOTHING") {
@@ -689,7 +713,7 @@ function toCreateInput(
     towerId: params.towerId ?? null,
     unitTypeId,
     unitNumber: row.unitNumber,
-    floor: row.floor,
+    floor: row.floor ?? null,
     facing: row.facing ?? null,
     plcTags: row.plcTags,
     carpetAreaOverride: row.carpetAreaOverride ?? null,
