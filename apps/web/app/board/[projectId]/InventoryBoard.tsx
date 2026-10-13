@@ -173,8 +173,12 @@ export function InventoryBoard({
     return [...byId.values()].sort((a, b) => a.code.localeCompare(b.code));
   }, [units]);
 
+  // Floorless plots contribute no option -- the filter is a tower question.
   const floorOptions = useMemo(
-    () => [...new Set(units.map((unit) => unit.floor))].sort((a, b) => a - b),
+    () =>
+      [...new Set(units.map((unit) => unit.floor).filter((f): f is number => f !== null))].sort(
+        (a, b) => a - b,
+      ),
     [units],
   );
 
@@ -246,18 +250,28 @@ export function InventoryBoard({
     [facetUnits, filters.statuses, liveOf, nowMs],
   );
 
+  // Towers read as a building elevation, highest floor at the top
+  // (docs/08-SCREENS.md). Plots in a block have no floor at all, so they
+  // collect into one floorless section rendered as a flat grid -- NOT as a
+  // "floor 0" row, which would invent a ground storey that does not exist.
   const floorSections = useMemo(() => {
     const byFloor = new Map<number, BoardUnit[]>();
+    const floorless: BoardUnit[] = [];
     for (const unit of visibleUnits) {
+      if (unit.floor === null) {
+        floorless.push(unit);
+        continue;
+      }
       const bucket = byFloor.get(unit.floor);
       if (bucket) bucket.push(unit);
       else byFloor.set(unit.floor, [unit]);
     }
-    // Highest floor at the top. The grid is read as a building elevation, not
-    // as a table (docs/08-SCREENS.md).
-    return [...byFloor.entries()]
+    const sections = [...byFloor.entries()]
       .sort((a, b) => b[0] - a[0])
-      .map(([floor, floorUnits]) => ({ floor, units: floorUnits }));
+      .map(([floor, floorUnits]) => ({ floor: floor as number | null, units: floorUnits }));
+    // Plots last: a mixed project reads towers top-down, then the land.
+    if (floorless.length > 0) sections.push({ floor: null, units: floorless });
+    return sections;
   }, [visibleUnits]);
 
   const handleSelect = useCallback((unitId: string, trigger: HTMLButtonElement) => {
@@ -487,10 +501,10 @@ export function InventoryBoard({
             // put forty landmarks in a screen reader's landmark list. The floor
             // is also in every tile's accessible name.
             <div
-              key={section.floor}
+              key={section.floor ?? "plots"}
               className={styles.floorRow}
               role="group"
-              aria-label={`Floor ${section.floor}`}
+              aria-label={section.floor === null ? "Plots" : `Floor ${section.floor}`}
             >
               <div className={styles.floorLabel} aria-hidden="true">
                 {section.floor}

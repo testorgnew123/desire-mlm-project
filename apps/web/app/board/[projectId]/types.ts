@@ -31,7 +31,9 @@ export interface BoardTower {
 export interface BoardUnit {
   id: string;
   unitNumber: string;
-  floor: number;
+  /** Null for a plot in a BLOCK -- plots have no floor, and the board groups
+   *  them by block instead of by elevation. */
+  floor: number | null;
   towerId: string | null;
   facing: string | null;
   plcTags: string[];
@@ -85,7 +87,7 @@ export interface DeltaResponse {
   units: Array<{
     id: string;
     unitNumber: string;
-    floor: number;
+    floor: number | null;
     status: UnitStatus;
     currentHoldExpiresAt: string | null;
     updatedAt: string;
