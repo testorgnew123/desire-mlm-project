@@ -127,6 +127,23 @@ describe("createProject", () => {
     expect(auditRow).not.toBeNull();
   });
 
+  // A project is usually created the day the land deal closes, before anyone
+  // has written the address down. Demanding a city at that moment got one
+  // typed in from memory, which is worse than an empty column.
+  it("creates a project with no city or state at all", async () => {
+    await seedOrg(ORG, "Projects Test Org");
+    const writer = await makeUser(ORG, "writer");
+
+    const project = await createProject(db, {
+      code: "GREEN",
+      name: "Greenfield Township",
+      audit: ctx(ORG, writer.id, "writer"),
+    });
+
+    expect(project.city).toBeNull();
+    expect(project.state).toBeNull();
+  });
+
   it("refuses a system actor", async () => {
     await seedOrg(ORG, "Projects Test Org");
     await expect(

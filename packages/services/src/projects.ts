@@ -379,8 +379,9 @@ export interface CreateProjectParams {
 
   addressLine1?: string | null;
   addressLine2?: string | null;
-  city: string;
-  state: string;
+  /** Display only -- nothing keys off either, so an unknown one is null. */
+  city?: string | null;
+  state?: string | null;
   pincode?: string | null;
   latitude?: DecimalInput | null;
   longitude?: DecimalInput | null;
@@ -460,8 +461,8 @@ export interface UpdateProjectParams {
 
   addressLine1?: string | null;
   addressLine2?: string | null;
-  city?: string;
-  state?: string;
+  city?: string | null;
+  state?: string | null;
   pincode?: string | null;
   latitude?: DecimalInput | null;
   longitude?: DecimalInput | null;
