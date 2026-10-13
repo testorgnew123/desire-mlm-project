@@ -13,10 +13,12 @@ import {
   createPaymentPlanAction,
   createSchemeAction,
   createTowerAction,
+  createUnitAction,
   createUnitTypeAction,
   publishPriceListAction,
   publishSchemeAction,
 } from "./actions";
+import { UnitImportForm } from "./UnitImportForm";
 
 export const metadata: Metadata = {
   title: "Project — Desire",
@@ -89,7 +91,10 @@ export default async function ProjectDetailPage({
         <Card>
           <CardHeader>
             <CardTitle>Towers</CardTitle>
-            <CardDescription>{towers.length} tower(s)</CardDescription>
+            <CardDescription>
+              {towers.filter((t) => t.kind === "TOWER").length} tower(s),{" "}
+              {towers.filter((t) => t.kind === "BLOCK").length} block(s)
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-col divide-y divide-border">
@@ -98,19 +103,42 @@ export default async function ProjectDetailPage({
                   <span>
                     {tower.code} — {tower.name}
                   </span>
-                  <span className="text-muted-foreground">{tower.totalFloors} floors</span>
+                  <span className="text-muted-foreground">
+                    {tower.kind === "BLOCK" ? "Plotted block" : `${tower.totalFloors} floors`}
+                  </span>
                 </div>
               ))}
             </div>
+            {/* One form for both kinds. A project may hold towers AND plotted
+                blocks -- a township is the normal case -- which is why `kind`
+                sits on the group rather than on the project. Total floors is
+                left optional here and enforced by createTower, so the rule
+                lives in one place rather than being duplicated in markup. */}
             <form action={createTowerAction} className="flex flex-col gap-2 border-t border-border pt-3">
               <input type="hidden" name="projectId" value={project.id} />
               <div className="flex gap-2">
                 <Input name="code" placeholder="Code (e.g. B)" required />
                 <Input name="name" placeholder="Name" required />
               </div>
-              <Input name="totalFloors" type="number" min="1" placeholder="Total floors" required />
+              <div className="flex gap-2">
+                <select
+                  name="kind"
+                  aria-label="Group kind"
+                  defaultValue="TOWER"
+                  className="h-9 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
+                >
+                  <option value="TOWER">Tower</option>
+                  <option value="BLOCK">Plotted block</option>
+                </select>
+                <Input
+                  name="totalFloors"
+                  type="number"
+                  min="1"
+                  placeholder="Total floors (towers only)"
+                />
+              </div>
               <Button type="submit" size="sm">
-                Add tower
+                Add tower or block
               </Button>
             </form>
           </CardContent>
@@ -150,6 +178,68 @@ export default async function ProjectDetailPage({
                 Add unit type
               </Button>
             </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Units and plots</CardTitle>
+            <CardDescription>
+              Bulk import is the realistic way to load a township; the single form is for
+              corrections afterwards.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {unitTypes.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Add a unit type first.</p>
+            ) : (
+              <>
+                <UnitImportForm projectId={project.id} towers={towers} />
+
+                {/* Single-unit entry. Floor is deliberately NOT marked required:
+                    a plot in a block must leave it empty, and createUnit
+                    enforces which way round it has to be. */}
+                <form
+                  action={createUnitAction}
+                  className="flex flex-col gap-2 border-t border-border pt-3"
+                >
+                  <input type="hidden" name="projectId" value={project.id} />
+                  <div className="flex gap-2">
+                    <Input name="unitNumber" placeholder="Unit / plot number" required />
+                    <Input name="floor" type="number" placeholder="Floor (towers only)" />
+                  </div>
+                  <div className="flex gap-2">
+                    <select
+                      name="towerId"
+                      aria-label="Tower or block"
+                      className="h-9 flex-1 rounded-md border border-border bg-background px-2 text-sm"
+                    >
+                      <option value="">No tower or block</option>
+                      {towers.map((tower) => (
+                        <option key={tower.id} value={tower.id}>
+                          {tower.code} — {tower.kind === "BLOCK" ? "block" : "tower"}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      name="unitTypeId"
+                      aria-label="Unit type"
+                      required
+                      className="h-9 flex-1 rounded-md border border-border bg-background px-2 text-sm"
+                    >
+                      {unitTypes.map((unitType) => (
+                        <option key={unitType.id} value={unitType.id}>
+                          {unitType.code}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button type="submit" size="sm">
+                    Add one unit or plot
+                  </Button>
+                </form>
+              </>
+            )}
           </CardContent>
         </Card>
 

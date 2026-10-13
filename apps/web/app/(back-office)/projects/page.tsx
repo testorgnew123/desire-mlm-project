@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Building2 } from "lucide-react";
+import { Building2, Plus } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { requireSession } from "@/lib/session";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
 
@@ -30,9 +31,17 @@ export default async function ProjectsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-lg font-semibold">Projects</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold">Projects</h1>
+        <Button size="sm" render={<Link href="/projects/new" />}>
+          <Plus className="size-4" />
+          New project
+        </Button>
+      </div>
       {projects.length === 0 ? (
-        <EmptyState icon={Building2} message="No projects yet." />
+        /* Until this button existed, an org with no seed data saw "No projects
+           yet." and had no way forward -- createProject had no caller at all. */
+        <EmptyState icon={Building2} message="No projects yet. Create the first one to begin." />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (

@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma, getPrismaClient } from "@desire/db";
-import { createTower, createUnitType } from "@desire/services/projects";
+import { createTower, createUnit, createUnitType } from "@desire/services/projects";
+import type { UnitGroupKind } from "@desire/db";
 import { createDraftPriceList, publishPriceList } from "@desire/services/price-lists";
 import { createPaymentPlan } from "@desire/services/payment-plans";
 import { createScheme, publishScheme } from "@desire/services/schemes";
@@ -40,13 +41,41 @@ export async function createTowerAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
+  const kind: UnitGroupKind = formData.get("kind") === "BLOCK" ? "BLOCK" : "TOWER";
 
   await runAction(projectId, () =>
     createTower(db, {
       projectId,
       code: String(formData.get("code") ?? ""),
       name: String(formData.get("name") ?? ""),
-      totalFloors: Number(formData.get("totalFloors") ?? 0),
+      kind,
+      // A block must send NOTHING here, not 0 -- createTower rejects a block
+      // that declares floors, which is the point of the rule.
+      totalFloors: kind === "TOWER" ? Number(formData.get("totalFloors") ?? 0) : undefined,
+      audit: auditFor(session.user.orgId, session.user.id, session.user.name),
+    }).then(() => undefined),
+  );
+}
+
+/** Single-unit entry. The bulk CSV import is the realistic path for a
+ *  township of 300 plots; this exists for the correction afterwards. */
+export async function createUnitAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const projectId = String(formData.get("projectId") ?? "");
+  const db = getPrismaClient();
+
+  const towerId = String(formData.get("towerId") ?? "") || null;
+  const rawFloor = String(formData.get("floor") ?? "").trim();
+
+  await runAction(projectId, () =>
+    createUnit(db, {
+      projectId,
+      towerId,
+      unitTypeId: String(formData.get("unitTypeId") ?? ""),
+      unitNumber: String(formData.get("unitNumber") ?? "").trim(),
+      // Empty means "no floor", which is what a plot in a block needs. Sending
+      // 0 instead would be rejected by assertUnitFloor -- correctly.
+      floor: rawFloor === "" ? null : Number(rawFloor),
       audit: auditFor(session.user.orgId, session.user.id, session.user.name),
     }).then(() => undefined),
   );
