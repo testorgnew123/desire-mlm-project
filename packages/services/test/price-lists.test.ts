@@ -15,6 +15,7 @@ import {
   publishPriceList,
   replacePriceListItems,
 } from "../src/price-lists";
+import { parsePlcCharges } from "../src/cost-sheet";
 import type { AuditContext } from "../src/audit";
 
 const db = getPrismaClient();
@@ -306,5 +307,77 @@ describe("tenancy", () => {
         audit: ctx(OTHER_ORG, outsider.id, "outsider"),
       }),
     ).rejects.toThrow(ForbiddenError);
+  });
+});
+
+// ── Percentage PLC charges ─────────────────────────────────────────────
+//
+// A corner plot's DLC uplift is a percentage the developer picks, not rupees
+// per square yard (client, 2026-10-13). What matters here is the ROUND TRIP:
+// the writer and the cost-sheet reader must agree on the stored shape, and
+// the older per-area shape must keep writing byte-identically so that every
+// price list already in the database still reads.
+describe("PLC charges round-trip through the Json column", () => {
+  it("writes a percentage as an object and a per-area rate as a bare string", async () => {
+    const { project, unitType, preparer } = await seed();
+
+    const draft = await createDraftPriceList(db, {
+      projectId: project.id,
+      name: "Plot launch",
+      validFrom: new Date("2026-01-01"),
+      items: [
+        {
+          unitTypeId: unitType.id,
+          baseRate: D(25_000),
+          plcCharges: {
+            CORNER: { basis: "PCT_OF_BASE", value: D(10) },
+            PARK_FACING: D(150),
+          },
+        },
+      ],
+      audit: ctx(ORG, preparer.id, "preparer"),
+    });
+
+    const stored = await db.priceListItem.findFirstOrThrow({
+      where: { priceListId: draft.priceListId },
+      select: { plcCharges: true },
+    });
+
+    // Money as strings, never JSON numbers -- a JSON number is an IEEE
+    // double. The per-area form is unchanged from before percentages
+    // existed, which is what keeps existing lists readable.
+    expect(stored.plcCharges).toEqual({
+      CORNER: { basis: "PCT_OF_BASE", value: "10" },
+      PARK_FACING: "150",
+    });
+
+    // And the cost sheet's own reader gets back what the writer meant.
+    const parsed = parsePlcCharges(stored.plcCharges);
+    expect(parsed.CORNER?.basis).toBe("PCT_OF_BASE");
+    expect(parsed.CORNER?.value.toString()).toBe("10");
+    expect(parsed.PARK_FACING?.basis).toBe("PER_AREA");
+    expect(parsed.PARK_FACING?.value.toString()).toBe("150");
+  });
+
+  // The reader rejects a negative charge too, but by then a customer is
+  // being quoted. Rejecting at write time puts it in front of the preparer.
+  it("refuses a negative charge when the list is prepared, not when it is quoted", async () => {
+    const { project, unitType, preparer } = await seed();
+
+    await expect(
+      createDraftPriceList(db, {
+        projectId: project.id,
+        name: "Bad",
+        validFrom: new Date("2026-01-01"),
+        items: [
+          {
+            unitTypeId: unitType.id,
+            baseRate: D(25_000),
+            plcCharges: { CORNER: { basis: "PCT_OF_BASE", value: D(-10) } },
+          },
+        ],
+        audit: ctx(ORG, preparer.id, "preparer"),
+      }),
+    ).rejects.toThrow(/cannot be negative/);
   });
 });

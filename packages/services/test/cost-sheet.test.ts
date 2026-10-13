@@ -211,3 +211,132 @@ describe("edge cases", () => {
     expect(r.commissionableValue.toString()).toBe("5000000");
   });
 });
+
+// ── Plotted land ───────────────────────────────────────────────────────
+//
+// A plot has no carpet area and its corner premium is quoted as a PERCENTAGE
+// of the land rate, not as rupees per square yard -- the DLC tables the rate
+// comes from are themselves written that way (client, 2026-10-13). Every
+// expected figure below is hand-computed, same rule as the block above.
+
+/** The plotted-land shape: a percentage of the base price. */
+const pctOfBase = (v: string | number) => ({ basis: "PCT_OF_BASE" as const, value: D(v) });
+
+/** 200 sq yd at Rs 25,000/sq yd. No carpet, no built-up: it is land. */
+function plotInput(overrides: Partial<CostSheetInput> = {}): CostSheetInput {
+  return {
+    saleableArea: D(200),
+    carpetArea: null,
+    baseRate: D(25_000),
+    plcTags: ["CORNER"],
+    plcChargesByTag: { CORNER: pctOfBase(10) },
+    otherCharges: [],
+    discount: D(0),
+    chargeHeads: HEADS,
+    ...overrides,
+  };
+}
+
+describe("a corner plot priced as a percentage uplift", () => {
+  const r = computeCostSheet(plotInput());
+
+  // Before Stage 2 this threw: the engine required carpetArea > 0 and
+  // rejected anything exceeding saleable. Land has no carpet at all, so a
+  // plot could not be quoted by this system in any way.
+  it("prices a unit with no carpet area at all", () => {
+    expect(r.carpetArea).toBeNull();
+    expect(r.baseAmount.toString()).toBe("5000000");
+  });
+
+  // 10% of 5,000,000
+  it("the corner uplift is a percentage of the BASE, not of gross", () => {
+    expect(r.plcAmount.toString()).toBe("500000");
+  });
+
+  // The whole point of "of base, not of gross": adding another charge must
+  // not change what the corner premium costs. Gross would compound, and the
+  // result would depend on the order the tags happened to be evaluated in.
+  it("another charge does not change the corner uplift", () => {
+    const withParking = computeCostSheet(
+      plotInput({ otherCharges: [{ chargeHeadCode: "PARKING", amount: D(300_000) }] }),
+    );
+    expect(withParking.plcAmount.toString()).toBe("500000");
+  });
+
+  // BSP 5,000,000 x 5% = 250,000
+  // PLC   500,000 x 5% =  25,000
+  //                      -------
+  //                      275,000
+  it("a percentage line is taxed like any other PLC line", () => {
+    expect(r.gstAmount.toString()).toBe("275000");
+  });
+
+  // gross = 5,000,000 + 500,000 = 5,500,000; + 275,000 GST
+  it("agreementValue = gross + gst", () => {
+    expect(r.agreementValue.toString()).toBe("5775000");
+  });
+
+  it("the uplift is commissionable, exactly as a per-area PLC line is", () => {
+    expect(r.commissionableValue.toString()).toBe("5500000");
+  });
+
+  // A buyer reading the sheet sees WHY the number is what it is. A bare "10"
+  // in the rate column beside an area quantity reads as Rs 10 per sq yd,
+  // which is the misreading this avoids.
+  it("the line says it is a percentage, and leaves quantity x rate empty", () => {
+    const line = r.lines.find((l) => l.chargeHeadCode === "PLC");
+    expect(line?.description).toBe("Preferential Location Charge - CORNER (10% of base)");
+    expect(line?.quantity).toBeNull();
+    expect(line?.rate).toBeNull();
+  });
+
+  it("header still reconciles to the printed lines", () => {
+    const summed = r.lines
+      .filter((l) => !["DISCOUNT", "STAMP", "REG"].includes(l.chargeHeadCode))
+      .reduce((s, l) => s.plus(l.amount), D(0));
+    expect(summed.toString()).toBe(r.baseAmount.plus(r.plcAmount).toString());
+  });
+});
+
+describe("percentage and per-area charges on the same sheet", () => {
+  // base          = 200 x 25,000      = 5,000,000
+  // CORNER        = 10% of base       =   500,000
+  // PARK_FACING   = 200 sq yd x Rs 50 =    10,000
+  //                                     ---------
+  // plcAmount                           =  510,000
+  it("each tag is computed on its own basis", () => {
+    const r = computeCostSheet(
+      plotInput({
+        plcTags: ["CORNER", "PARK_FACING"],
+        plcChargesByTag: { CORNER: pctOfBase(10), PARK_FACING: perArea(50) },
+      }),
+    );
+    expect(r.plcAmount.toString()).toBe("510000");
+    const amounts = r.lines
+      .filter((l) => l.chargeHeadCode === "PLC")
+      .map((l) => l.amount.toString())
+      .sort();
+    expect(amounts).toEqual(["10000", "500000"]);
+  });
+
+  // 250 x 2000.30 = 500,075.00 base; 2.1% = 10,501.575, which must round HALF
+  // UP to 10,501.58. Rounded down it is a paisa short and the header stops
+  // reconciling with the printed line.
+  it("rounds a fractional percentage half up, to the paisa", () => {
+    const r = computeCostSheet(
+      plotInput({
+        saleableArea: D("250"),
+        baseRate: D("2000.30"),
+        plcChargesByTag: { CORNER: pctOfBase("2.1") },
+      }),
+    );
+    expect(r.baseAmount.toString()).toBe("500075");
+    expect(r.plcAmount.toString()).toBe("10501.58");
+  });
+
+  it("still refuses a tag with no charge configured, percentage or not", () => {
+    expect(() =>
+      computeCostSheet(plotInput({ plcTags: ["CORNER", "EAST_FACING"] })),
+    ).toThrow(UnpricedPlcTagError);
+  });
+});

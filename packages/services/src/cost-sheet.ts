@@ -22,6 +22,7 @@ import {
   getActivePriceList,
   PriceListNotFoundError,
   type ActivePriceList,
+  type PlcCharge,
 } from "./price-lists";
 
 // ── Errors ─────────────────────────────────────────────────────────────
@@ -109,22 +110,10 @@ export interface FixedChargeInput {
   amount: Prisma.Decimal;
 }
 
-/** How a PLC tag's charge is computed.
- *
- *  PER_AREA is the original behaviour: rupees per unit of area, multiplied by
- *  saleable area. PCT_OF_BASE was added for plotted land, where a corner plot
- *  is quoted as a percentage uplift on the land rate rather than a rupee
- *  figure per square yard -- the DLC tables themselves list corner plots at a
- *  higher percentage.
- *
- *  Percentage is OF THE BASE PRICE, not of gross. Gross would compound with
- *  other PLC tags and make the result depend on evaluation order. */
-export type PlcChargeBasis = "PER_AREA" | "PCT_OF_BASE";
-
-export interface PlcCharge {
-  basis: PlcChargeBasis;
-  value: Prisma.Decimal;
-}
+// PlcCharge / PlcChargeBasis are declared in price-lists.ts -- the module that
+// WRITES them -- and imported above. Percentage is OF THE BASE PRICE, not of
+// gross: gross would compound with other PLC tags and make the result depend
+// on the order the tags happen to be evaluated in.
 
 export interface CostSheetInput {
   saleableArea: Prisma.Decimal;
