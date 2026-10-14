@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Building2, Plus } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { requireSession } from "@/lib/session";
+import { describeGroupCounts } from "@/lib/groups";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
@@ -24,7 +25,8 @@ export default async function ProjectsPage() {
       code: true,
       name: true,
       city: true,
-      _count: { select: { towers: true, units: true } },
+      towers: { select: { kind: true } },
+      _count: { select: { units: true } },
     },
     orderBy: { name: "asc" },
   });
@@ -33,7 +35,7 @@ export default async function ProjectsPage() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Projects</h1>
-        <Button size="sm" render={<Link href="/projects/new" />}>
+        <Button size="sm" nativeButton={false} render={<Link href="/projects/new" />}>
           <Plus className="size-4" />
           New project
         </Button>
@@ -44,7 +46,10 @@ export default async function ProjectsPage() {
         <EmptyState icon={Building2} message="No projects yet. Create the first one to begin." />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
+          {projects.map((project) => {
+            const towerCount = project.towers.filter((group) => group.kind === "TOWER").length;
+            const blockCount = project.towers.length - towerCount;
+            return (
             <Link key={project.id} href={`/projects/${project.id}`}>
               <Card>
                 <CardHeader>
@@ -54,12 +59,13 @@ export default async function ProjectsPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex gap-4 text-sm text-muted-foreground">
-                  <span>{project._count.towers} tower(s)</span>
+                  <span>{describeGroupCounts(towerCount, blockCount)}</span>
                   <span>{project._count.units} unit(s)</span>
                 </CardContent>
               </Card>
             </Link>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

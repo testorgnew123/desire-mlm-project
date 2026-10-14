@@ -82,7 +82,7 @@ export default async function StockStatementPage({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="py-1.5 pr-4">Tower</th>
+                  <th className="py-1.5 pr-4">Tower / block</th>
                   <th className="py-1.5 pr-4">Unit type</th>
                   <th className="py-1.5 pr-4">Status</th>
                   <th className="py-1.5 pr-4 text-right">Count</th>

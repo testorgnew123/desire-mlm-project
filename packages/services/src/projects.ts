@@ -318,7 +318,11 @@ function auditDiff(
 
 /** Turns the (parent, code) unique-constraint violation into DuplicateCodeError
  *  wherever a code or unit number is written. */
-async function withUniqueCode<T>(field: string, code: string, run: () => Promise<T>): Promise<T> {
+export async function withUniqueCode<T>(
+  field: string,
+  code: string,
+  run: () => Promise<T>,
+): Promise<T> {
   try {
     return await run();
   } catch (err) {
@@ -577,36 +581,48 @@ function assertTowerFloors(kind: UnitGroupKind, totalFloors: number | null | und
 
 export async function createTower(db: PrismaClient, params: CreateTowerParams): Promise<Tower> {
   const actorId = requireActor(params.audit);
+
+  return withUniqueCode("Tower code", params.code, () =>
+    db.$transaction((tx) => createTowerInTx(tx, params, actorId)),
+  );
+}
+
+/** createTower's transaction body, for a caller that already holds one.
+ *  createBlockWithPlots (blocks.ts) has to create a block and its plots as one
+ *  unit -- an empty block left behind by a failed plot insert is a state nobody
+ *  asked for -- and an interactive transaction cannot be nested. The caller
+ *  owns the actor check and the duplicate-code mapping; this does the writes. */
+export async function createTowerInTx(
+  tx: Prisma.TransactionClient,
+  params: CreateTowerParams,
+  actorId: string,
+): Promise<Tower> {
   const kind: UnitGroupKind = params.kind ?? "TOWER";
   assertTowerFloors(kind, params.totalFloors);
 
-  return withUniqueCode("Tower code", params.code, () =>
-    db.$transaction(async (tx) => {
-      const project = await loadProjectInOrg(tx, params.projectId, params.audit.orgId);
-      await assertPermission(tx, actorId, "project.write", { projectId: params.projectId });
+  const project = await loadProjectInOrg(tx, params.projectId, params.audit.orgId);
+  await assertPermission(tx, actorId, "project.write", { projectId: params.projectId });
 
-      const data = {
-        orgId: project.orgId,
-        projectId: params.projectId,
-        code: params.code,
-        name: params.name,
-        kind,
-        totalFloors: params.totalFloors ?? null,
-        unitsPerFloor: params.unitsPerFloor,
-        phase: params.phase,
-        displayOrder: params.displayOrder,
-      } satisfies Prisma.TowerUncheckedCreateInput;
+  const data = {
+    orgId: project.orgId,
+    projectId: params.projectId,
+    code: params.code,
+    name: params.name,
+    kind,
+    totalFloors: params.totalFloors ?? null,
+    unitsPerFloor: params.unitsPerFloor,
+    phase: params.phase,
+    displayOrder: params.displayOrder,
+  } satisfies Prisma.TowerUncheckedCreateInput;
 
-      const tower = await tx.tower.create({ data });
-      await writeAuditLog(tx, params.audit, {
-        action: "CREATE",
-        entity: "Tower",
-        entityId: tower.id,
-        after: auditSnapshot(data),
-      });
-      return tower;
-    }),
-  );
+  const tower = await tx.tower.create({ data });
+  await writeAuditLog(tx, params.audit, {
+    action: "CREATE",
+    entity: "Tower",
+    entityId: tower.id,
+    after: auditSnapshot(data),
+  });
+  return tower;
 }
 
 // ── Unit type ──────────────────────────────────────────────────────────

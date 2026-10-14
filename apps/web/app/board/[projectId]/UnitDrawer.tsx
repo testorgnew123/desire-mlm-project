@@ -5,6 +5,7 @@ import type { UnitStatus } from "@desire/db";
 import { STATUS_PRESENTATION } from "./status";
 import { formatIstDateTime } from "./format";
 import type { BoardUnit } from "./types";
+import { groupNoun, type GroupKind } from "@/lib/groups";
 import styles from "./board.module.css";
 
 export interface UnitDrawerProps {
@@ -12,6 +13,8 @@ export interface UnitDrawerProps {
   /** Live status, not the snapshot status on `unit`. */
   status: UnitStatus;
   towerLabel: string | null;
+  /** Null when the unit sits in no tower or block. */
+  towerKind: GroupKind | null;
   expiresAt: string | null;
   countdown: string | null;
   urgent: boolean;
@@ -44,6 +47,7 @@ export function UnitDrawer({
   unit,
   status,
   towerLabel,
+  towerKind,
   expiresAt,
   countdown,
   urgent,
@@ -206,13 +210,19 @@ export function UnitDrawer({
           <h3 className={styles.detailHeading}>Unit</h3>
           <dl className={styles.detailList}>
             <div className={styles.detailRow}>
-              <dt className={styles.detailTerm}>Tower</dt>
+              <dt className={styles.detailTerm}>
+                {towerKind === null ? "Tower / block" : groupNoun(towerKind)}
+              </dt>
               <dd className={styles.detailValue}>{towerLabel ?? "Not assigned"}</dd>
             </div>
-            <div className={styles.detailRow}>
-              <dt className={styles.detailTerm}>Floor</dt>
-              <dd className={styles.detailValue}>{unit.floor}</dd>
-            </div>
+            {/* A plot has no floor (floor is null). Printing it anyway left a
+                "Floor" row with an empty value. */}
+            {unit.floor !== null ? (
+              <div className={styles.detailRow}>
+                <dt className={styles.detailTerm}>Floor</dt>
+                <dd className={styles.detailValue}>{unit.floor}</dd>
+              </div>
+            ) : null}
             <div className={styles.detailRow}>
               <dt className={styles.detailTerm}>Type</dt>
               <dd className={styles.detailValue}>
@@ -240,16 +250,22 @@ export function UnitDrawer({
               customer-facing screen. */}
           <h3 className={styles.detailHeading}>Area</h3>
           <dl className={styles.detailList}>
-            <div className={styles.detailRow}>
-              <dt className={styles.detailTerm}>
-                Carpet <span className={styles.tag}>RERA</span>
-              </dt>
-              <dd className={styles.detailValue}>{unit.carpetArea}</dd>
-            </div>
-            <div className={styles.detailRow}>
-              <dt className={styles.detailTerm}>Built-up</dt>
-              <dd className={styles.detailValue}>{unit.builtUpArea}</dd>
-            </div>
+            {/* A plot has no carpet or built-up area (both are null), so those
+                rows are left out rather than shown with nothing in them. */}
+            {unit.carpetArea !== null ? (
+              <div className={styles.detailRow}>
+                <dt className={styles.detailTerm}>
+                  Carpet <span className={styles.tag}>RERA</span>
+                </dt>
+                <dd className={styles.detailValue}>{unit.carpetArea}</dd>
+              </div>
+            ) : null}
+            {unit.builtUpArea !== null ? (
+              <div className={styles.detailRow}>
+                <dt className={styles.detailTerm}>Built-up</dt>
+                <dd className={styles.detailValue}>{unit.builtUpArea}</dd>
+              </div>
+            ) : null}
             <div className={styles.detailRow}>
               <dt className={styles.detailTerm}>Saleable</dt>
               <dd className={styles.detailValue}>{unit.saleableArea}</dd>

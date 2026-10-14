@@ -18,6 +18,8 @@ export interface BoardTower {
   id: string;
   code: string;
   name: string;
+  /** A BLOCK is a plotted block of land; the labels say so rather than "tower". */
+  kind: "TOWER" | "BLOCK";
 }
 
 /** A unit as the board knows it: the static catalogue the Server Component

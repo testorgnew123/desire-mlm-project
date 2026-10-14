@@ -128,7 +128,12 @@ Versioned and immutable. A change publishes a new version and archives the old.
 
 - `PriceList` has `status` (`DRAFT → PENDING_APPROVAL → ACTIVE → ARCHIVED`) and
   `validFrom` / `validTo`.
-- **Maker-checker**: `preparedById != approvedById`.
+- **Approval is a permission, not a second person** (changed 2026-10-14; it was
+  maker-checker, `preparedById != approvedById`). A user holding
+  `pricelist.approve` may publish a list they prepared themselves, and the audit
+  reason on the approval row says so. Only the Super Admin holds both
+  permissions, and project creation and editing are admin-only, so the rule could
+  only ever have blocked the person running the project.
 - A `Booking` pins `priceListId`. "Why was this unit cheaper in January" is
   answered by a row, not by memory.
 - `PriceListItem` sets a rate per unit type, or per unit as an override.

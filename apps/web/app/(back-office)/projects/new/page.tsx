@@ -33,7 +33,12 @@ export default async function NewProjectPage({
   return (
     <div className="flex max-w-3xl flex-col gap-4">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" render={<Link href="/projects" aria-label="Back to projects" />}>
+        <Button
+          variant="ghost"
+          size="icon"
+          nativeButton={false}
+          render={<Link href="/projects" aria-label="Back to projects" />}
+        >
           <ArrowLeft className="size-4" />
         </Button>
         <h1 className="text-lg font-semibold">New project</h1>
@@ -145,7 +150,7 @@ export default async function NewProjectPage({
 
         <div className="flex gap-2">
           <Button type="submit">Create project</Button>
-          <Button variant="ghost" render={<Link href="/projects" />}>
+          <Button variant="ghost" nativeButton={false} render={<Link href="/projects" />}>
             Cancel
           </Button>
         </div>
