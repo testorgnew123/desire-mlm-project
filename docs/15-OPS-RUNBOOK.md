@@ -159,11 +159,27 @@ rather than waiting for a second occurrence.
 
 Trunk-based. `main` auto-deploys to staging; production on tag.
 
-Pre-deploy runs `prisma migrate deploy` against **`DATABASE_URL_UNPOOLED`**.
-Running migrations through the pooler is the classic deploy-day failure.
+Production builds run `prisma migrate deploy` before `next build`
+(`packages/db/scripts/migrate-on-deploy.sh`, called from `netlify.toml`).
+
+- It runs only when Netlify's `CONTEXT` is `production`. Deploy previews and
+  branch deploys never migrate: their base `DATABASE_URL` is the production
+  database until the per-PR Neon override replaces it, so migrating from them
+  would apply an unmerged PR's schema to production.
+- The target is the direct (non-pooler) host, derived from `DATABASE_URL` by
+  dropping `-pooler`, so it is always the database the app serves from.
+  Running migrations through the pooler is the classic deploy-day failure.
+- A failed migration fails the build and Netlify keeps serving the previous
+  deploy. Fix forward; never `migrate reset` (see the failure table above).
+- It runs while the previous code is still live, so every migration must be
+  safe for that code. A rollback to an older deploy does not roll the schema
+  back, so it is only safe across additive migrations.
 
 Breaking schema changes use expand–contract: add column → backfill → switch reads
 → drop in a later release. Never a destructive migration in a single release.
+With migrations in the build this is a hard rule, not a preference: a rename or
+drop applied in the same release as the code that stops using the old name takes
+the previous release down for as long as the build runs.
 
 ## Health check
 

@@ -1,0 +1,5 @@
+# Shell scripts run on Linux (Netlify's build image, GitHub Actions), but this
+# repo is edited on Windows, where core.autocrlf=true checks files out with CRLF.
+# bash chokes on a carriage return at the end of every line of a CRLF script, so
+# pin shell scripts to LF.
+*.sh text eol=lf
