@@ -15,10 +15,62 @@ interface ImportReport {
   imported: number;
   skipped: number;
   errors: RowError[];
+  /** Lines the importer skipped because they start with # (notes/examples). */
+  ignoredComments?: number;
 }
 
 const TEMPLATE_HEADER =
   "unitNumber,unitTypeCode,floor,facing,plcTags,carpetAreaOverride,saleableAreaOverride";
+
+/** Quoted only when it has to be, so each note stays ONE cell in a spreadsheet
+ *  even though it contains commas -- and so a round trip through Excel, which
+ *  quotes such cells itself, still parses to the same thing. */
+function csvCell(value: string): string {
+  return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+}
+
+/** The downloadable template: the header, then notes and two example rows that
+ *  the importer ignores because they start with #.
+ *
+ *  Ignored rather than real data on purpose. Units cannot be deleted from the
+ *  UI, so an example row that imported when the file was uploaded unchanged
+ *  would leave junk in live inventory. To use an example, delete the # in front
+ *  of its unit number. The examples use this project's own unit type codes when
+ *  it has them, so an uncommented row is close to valid as it stands. */
+function buildTemplate(
+  unitTypes: ReadonlyArray<{ code: string; basis: "SQFT" | "SQYD" }>,
+  facings: readonly string[],
+): string {
+  const flatCode = unitTypes.find((type) => type.basis === "SQFT")?.code ?? "3BHK";
+  const plotCode = unitTypes.find((type) => type.basis === "SQYD")?.code ?? "PLOT-200";
+  const typeList =
+    unitTypes.length > 0
+      ? unitTypes.map((type) => `${type.code} (${type.basis === "SQYD" ? "plot" : "flat"})`).join(", ")
+      : "none yet - add one first";
+
+  const note = (text: string) => csvCell(`# ${text}`);
+  const lines = [
+    TEMPLATE_HEADER,
+    note(
+      "Lines whose first cell starts with # are ignored, so these notes and examples import nothing. To use an example, delete the # in front of its unit number and edit the row.",
+    ),
+    note("unitNumber (required): unique across the whole project, e.g. A-101 for a flat or B-17 for a plot."),
+    note(`unitTypeCode (required): must match one of this project's unit types: ${typeList}.`),
+    note("floor: a whole number for a unit inside a TOWER. Leave it EMPTY for a plot inside a BLOCK (a plot has no floor)."),
+    note(`facing (optional): one of ${facings.join(", ")}.`),
+    note(
+      "plcTags (optional): preferred-location tags such as CORNER or PARK_FACING. Separate several with a pipe, e.g. CORNER|PARK_FACING. Each tag needs a charge in the price list before the unit can be priced.",
+    ),
+    note(
+      "carpetAreaOverride and saleableAreaOverride (optional): only when this unit differs from its unit type. Leave empty to use the type's area.",
+    ),
+    note("Example - a flat inside a tower (choose that tower as the import target):"),
+    `#A-1204,${csvCell(flatCode)},12,E,PARK_FACING,,`,
+    note("Example - a corner plot inside a block (choose that block as the import target):"),
+    `#B-17,${csvCell(plotCode)},,N,CORNER,,`,
+  ];
+  return `${lines.join("\r\n")}\r\n`;
+}
 
 /** CSV upload for bulk unit/plot entry.
  *
@@ -31,9 +83,13 @@ const TEMPLATE_HEADER =
 export function UnitImportForm({
   projectId,
   towers,
+  unitTypes,
+  facings,
 }: {
   projectId: string;
   towers: ReadonlyArray<{ id: string; code: string; kind: "TOWER" | "BLOCK" }>;
+  unitTypes: ReadonlyArray<{ code: string; basis: "SQFT" | "SQYD" }>;
+  facings: readonly string[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -58,7 +114,11 @@ export function UnitImportForm({
         | null;
 
       if (response.ok && body) {
-        setMessage(`Imported ${body.imported} unit(s).`);
+        const ignored = body.ignoredComments ?? 0;
+        setMessage(
+          `Imported ${body.imported} unit(s).` +
+            (ignored > 0 ? ` Ignored ${ignored} line(s) starting with #.` : ""),
+        );
         form.reset();
         // The units live on the board, not this page, so refresh rather than
         // trying to splice them into a list that is not rendered here.
@@ -75,7 +135,7 @@ export function UnitImportForm({
     }
   }
 
-  const templateHref = `data:text/csv;charset=utf-8,${encodeURIComponent(`${TEMPLATE_HEADER}\n`)}`;
+  const templateHref = `data:text/csv;charset=utf-8,${encodeURIComponent(buildTemplate(unitTypes, facings))}`;
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-2">
@@ -107,14 +167,14 @@ export function UnitImportForm({
           {busy ? "Importing…" : "Import CSV"}
         </Button>
         <a href={templateHref} download="units-template.csv" className="text-xs underline">
-          Download template
+          Download template (with examples)
         </a>
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Leave <code>floor</code> empty for plots in a block. Separate multiple{" "}
-        <code>plcTags</code> with a pipe, e.g. <code>CORNER|PARK_FACING</code>. Nothing is imported
-        unless every row is valid.
+        The template explains each column and has an example flat and an example plot. Lines
+        starting with <code>#</code> are notes and are ignored. Leave <code>floor</code> empty for
+        plots in a block. Nothing is imported unless every row is valid.
       </p>
 
       {message ? (

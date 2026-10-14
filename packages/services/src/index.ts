@@ -12,6 +12,8 @@ export * from "./cost-sheet";
 export * from "./projects";
 export * from "./charge-heads";
 export * from "./unit-import";
+export * from "./plot-numbering";
+export * from "./blocks";
 export * from "./bookings";
 export * from "./discounts";
 export * from "./leads";

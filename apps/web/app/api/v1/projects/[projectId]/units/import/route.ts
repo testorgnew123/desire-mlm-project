@@ -44,8 +44,18 @@ function problemResponse(status: number, type: string, title: string, detail: st
 
 /** Minimal RFC-4180-ish reader: quoted fields, embedded commas, doubled quotes
  *  and CRLF. Deliberately not a dependency -- the file is a handful of columns
- *  produced by Excel, and the service does every bit of real validation. */
-function parseCsv(text: string): string[][] {
+ *  produced by Excel, and the service does every bit of real validation.
+ *
+ *  Two things beyond the format, both for the downloadable template:
+ *  - a leading byte-order mark is dropped. Excel's "CSV UTF-8" adds one, and
+ *    left in it glues itself to the first header and turns unitNumber into
+ *    "\uFEFFunitNumber", failing every row;
+ *  - a row whose FIRST cell starts with # is a note, not data, and is skipped.
+ *    The template's explanations and examples use this. It is counted and
+ *    reported back rather than dropped silently, because a real unit number
+ *    that began with # would otherwise vanish without a trace. */
+function parseCsv(input: string): { rows: string[][]; comments: number } {
+  const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -87,7 +97,9 @@ function parseCsv(text: string): string[][] {
   }
   // Drop trailing blank lines, which every spreadsheet export produces and
   // which would otherwise each become an error row.
-  return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+  const nonBlank = rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+  const data = nonBlank.filter((r) => !(r[0] ?? "").trim().startsWith("#"));
+  return { rows: data, comments: nonBlank.length - data.length };
 }
 
 /** "CORNER|PARK_FACING" -> ["CORNER","PARK_FACING"]; empty -> []. Blank
@@ -134,13 +146,16 @@ export async function POST(
     return problemResponse(400, "bad-request", "Bad Request", "Attach a CSV file.");
   }
 
-  const table = parseCsv(await file.text());
+  const { rows: table, comments: ignoredComments } = parseCsv(await file.text());
   if (table.length < 2) {
     return problemResponse(
       400,
       "bad-request",
       "Bad Request",
-      "The file needs a header row and at least one data row.",
+      "The file needs a header row and at least one data row." +
+        (ignoredComments > 0
+          ? ` ${ignoredComments} line(s) starting with # were ignored -- notes and examples are not imported.`
+          : ""),
     );
   }
 
@@ -178,7 +193,7 @@ export async function POST(
         actorLabel: session.user.name,
       },
     });
-    return Response.json(report);
+    return Response.json({ ...report, ignoredComments });
   } catch (error) {
     // ALL_OR_NOTHING (the default) THROWS with the whole report attached
     // rather than returning it, specifically so the route can render every
@@ -193,6 +208,7 @@ export async function POST(
           detail: error.message,
           instance: INSTANCE,
           report: error.report,
+          ignoredComments,
         },
         { status: 422, headers: { "content-type": "application/problem+json" } },
       );

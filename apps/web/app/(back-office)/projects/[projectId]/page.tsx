@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
+import { UNIT_FACINGS } from "@desire/services/unit-import";
 import { requireSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
+import { describeGroupCounts, groupNoun } from "@/lib/groups";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,13 +14,13 @@ import {
   createDraftPriceListAction,
   createPaymentPlanAction,
   createSchemeAction,
-  createTowerAction,
   createUnitAction,
-  createUnitTypeAction,
   publishPriceListAction,
   publishSchemeAction,
 } from "./actions";
+import { GroupForm } from "./GroupForm";
 import { UnitImportForm } from "./UnitImportForm";
+import { UnitTypeForm } from "./UnitTypeForm";
 
 export const metadata: Metadata = {
   title: "Project — Desire",
@@ -47,13 +49,17 @@ export default async function ProjectDetailPage({
 
   const project = await db.project.findUnique({
     where: { id: projectId, orgId: session.user.orgId },
-    select: { id: true, code: true, name: true, city: true },
+    select: { id: true, code: true, name: true, city: true, reraRegNo: true, reraValidTill: true },
   });
   if (!project) notFound();
 
   const [towers, unitTypes, priceLists, paymentPlans, schemes, grades, plcTagRows] =
     await Promise.all([
-    db.tower.findMany({ where: { projectId }, orderBy: { displayOrder: "asc" } }),
+    db.tower.findMany({
+      where: { projectId },
+      orderBy: { displayOrder: "asc" },
+      include: { _count: { select: { units: true } } },
+    }),
     db.unitType.findMany({ where: { projectId }, orderBy: { code: "asc" } }),
     db.priceList.findMany({
       where: { projectId },
@@ -86,6 +92,25 @@ export default async function ProjectDetailPage({
 
   const plcTags = plcTagRows.map((row) => row.tag);
 
+  const towerCount = towers.filter((tower) => tower.kind === "TOWER").length;
+  const blockCount = towers.filter((tower) => tower.kind === "BLOCK").length;
+
+  // createUnit and importUnits both refuse a project without a live RERA
+  // registration, so plots cannot be created with a block until it has one. Said
+  // up front, in the form, rather than as an error after the fact.
+  const reraLive =
+    Boolean(project.reraRegNo) && project.reraValidTill !== null && project.reraValidTill >= new Date();
+  const plotsBlockedReason = reraLive
+    ? null
+    : "Plots can't be created until the project has a live RERA registration. You can still add the block on its own.";
+
+  const plotTypes = unitTypes
+    .filter((unitType) => unitType.areaBasis === "SQYD")
+    .map((unitType) => ({
+      id: unitType.id,
+      label: `${unitType.code} — ${formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}`,
+    }));
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -104,63 +129,42 @@ export default async function ProjectDetailPage({
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Towers</CardTitle>
-            <CardDescription>
-              {towers.filter((t) => t.kind === "TOWER").length} tower(s),{" "}
-              {towers.filter((t) => t.kind === "BLOCK").length} block(s)
-            </CardDescription>
+            <CardTitle>Towers &amp; blocks</CardTitle>
+            <CardDescription>{describeGroupCounts(towerCount, blockCount)}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-col divide-y divide-border">
-              {towers.map((tower) => (
-                <div key={tower.id} className="flex justify-between py-1.5 text-sm first:pt-0">
-                  <span>
-                    {tower.code} — {tower.name}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {tower.kind === "BLOCK" ? "Plotted block" : `${tower.totalFloors} floors`}
-                  </span>
-                </div>
-              ))}
+              {towers.map((tower) => {
+                const units = tower._count.units;
+                return (
+                  <div key={tower.id} className="flex justify-between gap-3 py-1.5 text-sm first:pt-0">
+                    <span>
+                      {tower.code} — {tower.name}
+                    </span>
+                    {/* The kind sits on the right, not in front of the name: a
+                        block usually IS named "Block A", and "Block A — Block A"
+                        reads as a mistake. */}
+                    <span className="shrink-0 text-muted-foreground">
+                      {groupNoun(tower.kind)} ·{" "}
+                      {tower.kind === "BLOCK"
+                        ? `${units} ${units === 1 ? "plot" : "plots"}`
+                        : `${tower.totalFloors} floors · ${units} ${units === 1 ? "unit" : "units"}`}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-            {/* One form for both kinds. A project may hold towers AND plotted
-                blocks -- a township is the normal case -- which is why `kind`
-                sits on the group rather than on the project. Total floors is
-                left optional here and enforced by createTower, so the rule
-                lives in one place rather than being duplicated in markup. */}
-            <form action={createTowerAction} className="flex flex-col gap-2 border-t border-border pt-3">
-              <input type="hidden" name="projectId" value={project.id} />
-              <div className="flex gap-2">
-                <Input name="code" placeholder="Code (e.g. B)" required />
-                <Input name="name" placeholder="Name" required />
-              </div>
-              <div className="flex gap-2">
-                <select
-                  name="kind"
-                  aria-label="Group kind"
-                  defaultValue="TOWER"
-                  className="h-9 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
-                >
-                  <option value="TOWER">Tower</option>
-                  <option value="BLOCK">Plotted block</option>
-                </select>
-                <Input
-                  name="totalFloors"
-                  type="number"
-                  min="1"
-                  placeholder="Total floors (towers only)"
-                />
-              </div>
-              <Button type="submit" size="sm">
-                Add tower or block
-              </Button>
-            </form>
+            <GroupForm
+              projectId={project.id}
+              plotTypes={plotTypes}
+              plotsBlockedReason={plotsBlockedReason}
+            />
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Unit types</CardTitle>
+            <CardTitle>Unit &amp; plot types</CardTitle>
             <CardDescription>{unitTypes.length} type(s)</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -168,45 +172,19 @@ export default async function ProjectDetailPage({
               {unitTypes.map((unitType) => (
                 <div key={unitType.id} className="py-1.5 text-sm first:pt-0">
                   <p>
-                    {unitType.code} — {unitType.name} ({unitType.bedrooms ?? "?"} BHK)
+                    {unitType.code} — {unitType.name}
+                    {unitType.areaBasis === "SQFT" && unitType.bedrooms !== null
+                      ? ` (${unitType.bedrooms} BHK)`
+                      : ""}
                   </p>
                   <p className="text-xs text-muted-foreground">
+                    {unitType.areaBasis === "SQYD" ? "Plot" : "Flat"} ·{" "}
                     {formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}
                   </p>
                 </div>
               ))}
             </div>
-            <form action={createUnitTypeAction} className="flex flex-col gap-2 border-t border-border pt-3">
-              <input type="hidden" name="projectId" value={project.id} />
-              <div className="flex gap-2">
-                <Input name="code" placeholder="Code (e.g. 3BHK)" required />
-                <Input name="name" placeholder="Name" required />
-              </div>
-              {/* Same shape as the tower/block form above: one form for both,
-                  nothing hidden by script, and createUnitType owns which basis
-                  may carry which areas. Carpet and built-up are NOT marked
-                  required -- a plot has neither, and SQYD rejects them. */}
-              <div className="flex gap-2">
-                <Input name="bedrooms" type="number" min="0" placeholder="Bedrooms" />
-                <select
-                  name="areaBasis"
-                  aria-label="Area basis"
-                  defaultValue="SQFT"
-                  className="h-9 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
-                >
-                  <option value="SQFT">Built: sq ft</option>
-                  <option value="SQYD">Plot: sq yd</option>
-                </select>
-              </div>
-              <div className="flex gap-2">
-                <Input name="carpetArea" placeholder="Carpet (built only)" />
-                <Input name="builtUpArea" placeholder="Built-up (built only)" />
-              </div>
-              <Input name="saleableArea" placeholder="Saleable / plot area" required />
-              <Button type="submit" size="sm">
-                Add unit type
-              </Button>
-            </form>
+            <UnitTypeForm projectId={project.id} />
           </CardContent>
         </Card>
 
@@ -223,7 +201,15 @@ export default async function ProjectDetailPage({
               <p className="text-xs text-muted-foreground">Add a unit type first.</p>
             ) : (
               <>
-                <UnitImportForm projectId={project.id} towers={towers} />
+                <UnitImportForm
+                  projectId={project.id}
+                  towers={towers}
+                  unitTypes={unitTypes.map((unitType) => ({
+                    code: unitType.code,
+                    basis: unitType.areaBasis,
+                  }))}
+                  facings={[...UNIT_FACINGS]}
+                />
 
                 {/* Single-unit entry. Floor is deliberately NOT marked required:
                     a plot in a block must leave it empty, and createUnit
@@ -258,7 +244,7 @@ export default async function ProjectDetailPage({
                     >
                       {unitTypes.map((unitType) => (
                         <option key={unitType.id} value={unitType.id}>
-                          {unitType.code}
+                          {unitType.code} ({unitType.areaBasis === "SQYD" ? "plot" : "flat"})
                         </option>
                       ))}
                     </select>

@@ -4,6 +4,7 @@ import { getPrismaClient } from "@desire/db";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
 import { effectiveUnitStatus } from "@desire/services/holds";
 import { formatArea } from "@/lib/money";
+import type { GroupKind } from "@/lib/groups";
 import { getSession } from "@/lib/session";
 import { InventoryGrid } from "./InventoryGrid";
 import type { BoardUnit } from "@/app/board/[projectId]/types";
@@ -49,9 +50,10 @@ export default async function PwaInventoryProjectPage({
 
   const towers = await db.tower.findMany({
     where: { projectId, orgId },
-    select: { id: true, code: true },
+    select: { id: true, code: true, kind: true },
   });
   const towerCodeById = new Map(towers.map((tower) => [tower.id, tower.code]));
+  const towerKindById = new Map(towers.map((tower) => [tower.id, tower.kind]));
 
   const rows = await db.unit.findMany({
     where: { orgId, projectId },
@@ -91,7 +93,11 @@ export default async function PwaInventoryProjectPage({
 
   const myAssociate = await db.associate.findUnique({ where: { userId: session.user.id }, select: { id: true } });
 
-  const units: (BoardUnit & { towerCode: string | null; isMine: boolean })[] = rows.map((row) => {
+  const units: (BoardUnit & {
+    towerCode: string | null;
+    towerKind: GroupKind | null;
+    isMine: boolean;
+  })[] = rows.map((row) => {
     const hold = row.currentHoldId ? (holdById.get(row.currentHoldId) ?? null) : null;
     const status = effectiveUnitStatus({ status: row.status }, hold, readStartedAt);
     const liveHold = status === "HELD" ? hold : null;
@@ -102,6 +108,7 @@ export default async function PwaInventoryProjectPage({
       floor: row.floor,
       towerId: row.towerId,
       towerCode: row.towerId ? (towerCodeById.get(row.towerId) ?? null) : null,
+      towerKind: row.towerId ? (towerKindById.get(row.towerId) ?? null) : null,
       facing: row.facing,
       plcTags: row.plcTags,
       unitTypeId: row.unitType.id,

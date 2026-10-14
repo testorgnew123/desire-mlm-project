@@ -49,7 +49,7 @@ export default async function InventoryHubPage() {
           <Card>
             <CardHeader>
               <CardTitle>Stock statement</CardTitle>
-              <CardDescription>Units by tower, type and status</CardDescription>
+              <CardDescription>Units by tower or block, type and status</CardDescription>
             </CardHeader>
           </Card>
         </Link>

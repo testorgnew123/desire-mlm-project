@@ -26,6 +26,7 @@ import { STATUS_PRESENTATION, displayStatus } from "@/app/board/[projectId]/stat
 import { UnitTile } from "@/app/board/[projectId]/UnitTile";
 import { EXPIRY_WARNING_MS, formatCountdown } from "@/app/board/[projectId]/format";
 import { formatDateTime } from "@/lib/format";
+import { groupNoun, type GroupKind } from "@/lib/groups";
 import type { BoardUnit } from "@/app/board/[projectId]/types";
 import styles from "./grid.module.css";
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 
-type PwaUnit = BoardUnit & { towerCode: string | null; isMine: boolean };
+type PwaUnit = BoardUnit & { towerCode: string | null; towerKind: GroupKind | null; isMine: boolean };
 
 // A local 3-of-7 status->text-colour map used to live here. It is gone: the
 // tiles carry status via board.module.css's tone classes now, which cover all
@@ -108,12 +109,15 @@ export function InventoryGrid({
   // one scrolling list with a sticky tower heading suits a phone better and
   // keeps every plot reachable by thumb.
   const towerSections = useMemo(() => {
-    const byTower = new Map<string, { towerCode: string | null; units: typeof merged }>();
+    const byTower = new Map<
+      string,
+      { towerCode: string | null; towerKind: GroupKind | null; units: typeof merged }
+    >();
     for (const unit of merged) {
       const key = unit.towerCode ?? "";
       let section = byTower.get(key);
       if (!section) {
-        section = { towerCode: unit.towerCode, units: [] };
+        section = { towerCode: unit.towerCode, towerKind: unit.towerKind, units: [] };
         byTower.set(key, section);
       }
       section.units.push(unit);
@@ -149,7 +153,7 @@ export function InventoryGrid({
             units: [...floorless].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)),
           });
         }
-        return { towerCode: section.towerCode, floors };
+        return { towerCode: section.towerCode, towerKind: section.towerKind, floors };
       });
   }, [merged]);
 
@@ -189,7 +193,9 @@ export function InventoryGrid({
         {towerSections.map((section) => (
           <section key={section.towerCode ?? "_"} className={styles.tower}>
             {section.towerCode ? (
-              <h2 className={styles.towerLabel}>Tower {section.towerCode}</h2>
+              <h2 className={styles.towerLabel}>
+                {groupNoun(section.towerKind)} {section.towerCode}
+              </h2>
             ) : null}
             {section.floors.map(({ floor, units: floorUnits }) => (
               <div key={floor ?? "plots"} className={styles.floorRow}>
@@ -241,7 +247,10 @@ export function InventoryGrid({
                 <SheetTitle>{selected.unitNumber}</SheetTitle>
                 <SheetDescription>
                   {selected.unitTypeName}
-                  {selected.towerCode ? ` · Tower ${selected.towerCode}` : ""} · Floor {selected.floor}
+                  {selected.towerCode
+                    ? ` · ${groupNoun(selected.towerKind)} ${selected.towerCode}`
+                    : ""}
+                  {selected.floor !== null ? ` · Floor ${selected.floor}` : ""}
                 </SheetDescription>
               </SheetHeader>
               <div className="flex flex-col gap-2 px-4 text-sm">
@@ -249,10 +258,13 @@ export function InventoryGrid({
                   <span className="text-muted-foreground">Status</span>
                   <span>{STATUS_PRESENTATION[selectedStatus ?? selected.status].long}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Carpet</span>
-                  <span>{selected.carpetArea}</span>
-                </div>
+                {/* A plot has no carpet area (null), so the row is omitted. */}
+                {selected.carpetArea !== null ? (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Carpet</span>
+                    <span>{selected.carpetArea}</span>
+                  </div>
+                ) : null}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Saleable</span>
                   <span>{selected.saleableArea}</span>

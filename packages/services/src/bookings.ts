@@ -46,8 +46,8 @@ export class UnitNotHeldError extends Error {
   }
 }
 
-/** Carries both ids -- same reason MakerCheckerViolationError does in
- *  price-lists.ts -- so the caller can say who actually holds it, not just
+/** Carries both ids -- same reason SchemeMakerCheckerViolationError does in
+ *  schemes.ts -- so the caller can say who actually holds it, not just
  *  "not you". */
 export class HeldByAnotherAssociateError extends Error {
   constructor(

@@ -44,8 +44,8 @@ export class DiscountRequestNotFoundError extends Error {
   }
 }
 
-/** Carries both ids, same reason MakerCheckerViolationError does in
- *  price-lists.ts -- the requester can never be their own approver
+/** Carries both ids, same reason SchemeMakerCheckerViolationError does in
+ *  schemes.ts -- the requester can never be their own approver
  *  (docs/09-RBAC-MATRIX.md separation-of-duties: "Approve a discount / The
  *  requesting associate / Self-approval"). */
 export class SelfApprovalError extends Error {

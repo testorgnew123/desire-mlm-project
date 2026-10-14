@@ -6,14 +6,17 @@
 // Two rules here carry real money risk, so they live in the service and not in
 // a handler (docs/07-API.md: no business logic in route handlers or actions):
 //
-//   1. Maker-checker -- the preparer may not approve their own list
-//      (docs/09-RBAC-MATRIX.md, separation of duties: "Publish a price list /
-//      may not be performed by the requester"). One person repricing an entire
-//      project unilaterally is exactly what this stops. It is a hard assertion,
-//      not a UI convention. Both identities come from the audit context and
-//      never from a parameter: a caller-supplied approver id would let the
-//      preparer publish their own list by naming a colleague, and the row
-//      would then assert an approval that never happened.
+//   1. Approval is a permission, not a second person. A user who holds
+//      pricelist.approve may publish a list they prepared themselves. This was
+//      maker-checker until 2026-10-14 (docs/09-RBAC-MATRIX.md separation of
+//      duties) and was relaxed at the client's instruction: creating and
+//      editing projects is admin-only, and the only role holding BOTH
+//      pricelist.prepare and pricelist.approve is SUPER_ADMIN, so the rule
+//      could only ever block the one admin who runs the project. What
+//      survives: the approver is still read from the audit context and never
+//      from a parameter, so the row asserts an approval by a real, authorised
+//      user; and publishing your own list is written into the audit reason, so
+//      it stays visible rather than silent.
 //   2. Exactly one ACTIVE list per project. Publishing archives the incumbent
 //      inside the SAME transaction, so no reader can ever observe two -- and
 //      holds.ts refuses to hold a unit when there is no active list at all.
@@ -35,21 +38,6 @@ export class PriceListProjectNotFoundError extends Error {
   constructor(projectId: string) {
     super(`Project ${projectId} not found.`);
     this.name = "PriceListProjectNotFoundError";
-  }
-}
-
-/** The separation-of-duties rejection. Carries both ids so the API can say who
- *  prepared it rather than a bare 403 (docs/09-RBAC-MATRIX.md). */
-export class MakerCheckerViolationError extends Error {
-  constructor(
-    public readonly priceListId: string,
-    public readonly preparedById: string,
-  ) {
-    super(
-      `Price list ${priceListId} was prepared by ${preparedById}; the same user cannot approve it. ` +
-        `A second person must publish it.`,
-    );
-    this.name = "MakerCheckerViolationError";
   }
 }
 
@@ -417,16 +405,13 @@ export async function publishPriceList(
       });
 
       // Authorization first: an actor who is not allowed to approve this list
-      // should be told that, not told it is in the wrong state. "May you
-      // approve price lists for this project at all" (the matrix grants
-      // pricelist.approve to SUPER_ADMIN and SALES_HEAD), then "may you
-      // approve THIS one" (the separation-of-duties rule).
+      // should be told that, not told it is in the wrong state. The matrix
+      // grants pricelist.approve to SUPER_ADMIN and SALES_HEAD. There is no
+      // further "not your own list" rule -- see the header.
       await assertPermission(tx, approvedById, "pricelist.approve", {
         projectId: list.projectId,
       });
-      if (list.preparedById === approvedById) {
-        throw new MakerCheckerViolationError(list.id, list.preparedById);
-      }
+      const selfApproved = list.preparedById === approvedById;
       if (list.status !== "DRAFT" && list.status !== "PENDING_APPROVAL") {
         throw new PriceListNotPublishableError(list.id, list.status);
       }
@@ -467,7 +452,9 @@ export async function publishPriceList(
         entityId: list.id,
         before: { status: list.status, approvedById: null, publishedAt: null },
         after: { status: "ACTIVE", approvedById, publishedAt: now },
-        reason: `published version ${list.version}`,
+        reason:
+          `published version ${list.version}` +
+          (selfApproved ? " (approved by the user who prepared it)" : ""),
       });
 
       return {

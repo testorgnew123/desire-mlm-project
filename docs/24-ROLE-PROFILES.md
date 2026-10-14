@@ -165,10 +165,14 @@ coded and tested individually (full list in [09-RBAC-MATRIX](09-RBAC-MATRIX.md))
 | Verify a receipt | Whoever entered it |
 | Verify a receipt | The selling associate **and their entire upline** |
 | Approve a payout batch | Whoever prepared it |
-| Publish a price list | Whoever requested it |
 | Approve a discount | The requesting associate |
 | Change a commission scheme | Anyone holding `payout.prepare` |
 | Move a tree node | Anyone, while a payout period is open |
+
+Publishing a price list is not on this list: a Super Admin, who holds both
+`pricelist.prepare` and `pricelist.approve`, can publish a list they prepared
+(decision of 2026-10-14; the audit log records it). A Project Manager still cannot
+publish, because they lack `pricelist.approve`.
 
 **Why the receipt rule is doubled.** Commission releases pro-rata on collection,
 so anyone who can mark money as received can unlock their own or their team's

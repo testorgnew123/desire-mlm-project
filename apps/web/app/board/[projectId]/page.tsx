@@ -92,7 +92,7 @@ export default async function InventoryBoardPage({
         name: true,
         city: true,
         towers: {
-          select: { id: true, code: true, name: true },
+          select: { id: true, code: true, name: true, kind: true },
           orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
         },
       },
@@ -197,6 +197,7 @@ export default async function InventoryBoardPage({
     id: tower.id,
     code: tower.code,
     name: tower.name,
+    kind: tower.kind,
   }));
 
   return (

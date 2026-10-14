@@ -537,10 +537,6 @@ export async function importUnits(
   db: PrismaClient,
   params: ImportUnitsParams,
 ): Promise<UnitImportReport> {
-  const mode = params.mode ?? "ALL_OR_NOTHING";
-  const submitted = params.rows.length;
-  const now = params.now ?? new Date();
-
   // AuditContext.actorId is null for job actors (the hold-expiry sweep), and a
   // job holds no roles to check against, so a null actor here is an
   // authorization failure rather than a missing argument -- the same rule
@@ -552,134 +548,7 @@ export async function importUnits(
 
   try {
     return await db.$transaction(
-      async (tx) => {
-        const project = await tx.project.findUnique({
-          where: { id: params.projectId },
-          select: { id: true, orgId: true, reraRegNo: true, reraValidTill: true },
-        });
-        // Org mismatch is treated as "not found": a caller from another org
-        // must not learn that this project id exists.
-        if (!project || project.orgId !== params.orgId) {
-          throw new UnitImportTargetError(
-            `Project ${params.projectId} was not found in this organisation.`,
-          );
-        }
-        await assertPermission(tx, actorId, "project.write", { projectId: params.projectId });
-
-        // Same guard, same reason as createUnit in projects.ts and acquireHold
-        // in holds.ts: without a live RERA registration the units may not be
-        // marketed, so loading a tower's worth of them into inventory is
-        // premature at best and a compliance breach at worst
-        // (docs/11-COMPLIANCE-INDIA.md).
-        if (!project.reraRegNo || !project.reraValidTill || project.reraValidTill < now) {
-          throw new ProjectReraInvalidError(project.id);
-        }
-
-        let towerTotalFloors: number | undefined;
-        let targetGroupKind: UnitGroupKind | undefined;
-        if (params.towerId) {
-          const tower = await tx.tower.findUnique({
-            where: { id: params.towerId },
-            select: { projectId: true, totalFloors: true, kind: true },
-          });
-          if (!tower || tower.projectId !== params.projectId) {
-            throw new UnitImportTargetError(
-              `Tower ${params.towerId} does not belong to project ${params.projectId}.`,
-            );
-          }
-          // Null for a BLOCK, which has no floors to bound against.
-          towerTotalFloors = tower.totalFloors ?? undefined;
-          targetGroupKind = tower.kind;
-        }
-
-        const existingUnits = await tx.unit.findMany({
-          where: { projectId: params.projectId },
-          select: { unitNumber: true },
-        });
-        const unitTypes = await tx.unitType.findMany({
-          where: { projectId: params.projectId },
-          select: {
-            id: true,
-            code: true,
-            carpetArea: true,
-            builtUpArea: true,
-            saleableArea: true,
-          },
-        });
-        const unitTypeIdByCode = new Map(unitTypes.map((type) => [type.code, type.id]));
-        const unitTypeAreas: [string, UnitTypeAreas][] = unitTypes.map((type) => [
-          type.code,
-          {
-            carpetArea: type.carpetArea,
-            builtUpArea: type.builtUpArea,
-            saleableArea: type.saleableArea,
-          },
-        ]);
-
-        const { valid, errors } = validateUnitImportRows(params.rows, {
-          existingUnitNumbers: existingUnits.map((unit) => unit.unitNumber),
-          unitTypeAreas,
-          towerTotalFloors,
-          targetGroupKind,
-        });
-
-        if (errors.length > 0 && mode === "ALL_OR_NOTHING") {
-          // Thrown before anything is written, so the rollback has nothing to
-          // undo. No audit row either: the project is unchanged, and a log that
-          // records non-changes stops being a record of changes.
-          throw new UnitImportRejectedError({ imported: 0, skipped: submitted, errors });
-        }
-
-        // Nothing valid to insert (SKIP_INVALID over a wholly bad file) leaves
-        // the project untouched, so there is no mutation to audit -- the caller
-        // gets the report instead.
-        if (valid.length > 0) {
-          const data = valid.map((row) => toCreateInput(row, params, unitTypeIdByCode));
-          // createManyAndReturn rather than createMany: the genesis history rows
-          // below need the generated ids, and re-reading the units by unit
-          // number would be a second round trip for something the INSERT can
-          // return (Postgres INSERT ... RETURNING).
-          const created = await tx.unit.createManyAndReturn({ data, select: { id: true } });
-
-          // Genesis history row per unit, exactly as createUnit writes for a
-          // single unit. UnitStatusHistory.fromStatus is nullable precisely for
-          // this, and unblockUnit in units.ts reads history to find a unit's
-          // prior status -- an imported unit with no history at all has a hole
-          // in that trail.
-          const genesis: Prisma.UnitStatusHistoryCreateManyInput[] = created.map((unit) => ({
-            unitId: unit.id,
-            fromStatus: null,
-            toStatus: "AVAILABLE",
-            reason: "unit imported",
-            actorId,
-            actorLabel: params.audit.actorLabel,
-          }));
-          await tx.unitStatusHistory.createMany({ data: genesis });
-
-          // ONE audit row for the batch. Per-unit rows would bury the signal: a
-          // 900-unit import is one administrative act, and "who loaded this
-          // inventory, when, and how much of it was rejected" is the question
-          // the log has to answer. AuditAction has no IMPORT member (the schema
-          // is authoritative) and the entity is the batch rather than any one
-          // unit, so this is a CREATE recorded against the project it filled.
-          await writeAuditLog(tx, params.audit, {
-            action: "CREATE",
-            entity: "UnitImport",
-            entityId: params.projectId,
-            after: {
-              projectId: params.projectId,
-              towerId: params.towerId ?? null,
-              mode,
-              rowsSubmitted: submitted,
-              imported: valid.length,
-              skipped: submitted - valid.length,
-              errorCount: errors.length,
-            },
-          });
-        }
-
-        return { imported: valid.length, skipped: submitted - valid.length, errors };
-      },
+      (tx) => importUnitsInTx(tx, params, actorId),
       // Prisma's 5s default is tight for a few thousand rows. 10s and no more:
       // that is the platform's synchronous ceiling
       // (docs/adr/0005-netlify-native-jobs-no-redis.md), so a longer budget
@@ -698,6 +567,147 @@ export async function importUnits(
     }
     throw err;
   }
+}
+
+/** importUnits' transaction body, for a caller that already holds one.
+ *  createBlockWithPlots (blocks.ts) creates a block and its plots in one
+ *  transaction, and an interactive transaction cannot be nested. The caller owns
+ *  the actor check, the transaction (and its timeout) and the P2002 mapping. */
+export async function importUnitsInTx(
+  tx: Prisma.TransactionClient,
+  params: ImportUnitsParams,
+  actorId: string,
+): Promise<UnitImportReport> {
+  const mode = params.mode ?? "ALL_OR_NOTHING";
+  const submitted = params.rows.length;
+  const now = params.now ?? new Date();
+
+  const project = await tx.project.findUnique({
+    where: { id: params.projectId },
+    select: { id: true, orgId: true, reraRegNo: true, reraValidTill: true },
+  });
+  // Org mismatch is treated as "not found": a caller from another org
+  // must not learn that this project id exists.
+  if (!project || project.orgId !== params.orgId) {
+    throw new UnitImportTargetError(
+      `Project ${params.projectId} was not found in this organisation.`,
+    );
+  }
+  await assertPermission(tx, actorId, "project.write", { projectId: params.projectId });
+
+  // Same guard, same reason as createUnit in projects.ts and acquireHold
+  // in holds.ts: without a live RERA registration the units may not be
+  // marketed, so loading a tower's worth of them into inventory is
+  // premature at best and a compliance breach at worst
+  // (docs/11-COMPLIANCE-INDIA.md).
+  if (!project.reraRegNo || !project.reraValidTill || project.reraValidTill < now) {
+    throw new ProjectReraInvalidError(project.id);
+  }
+
+  let towerTotalFloors: number | undefined;
+  let targetGroupKind: UnitGroupKind | undefined;
+  if (params.towerId) {
+    const tower = await tx.tower.findUnique({
+      where: { id: params.towerId },
+      select: { projectId: true, totalFloors: true, kind: true },
+    });
+    if (!tower || tower.projectId !== params.projectId) {
+      throw new UnitImportTargetError(
+        `Tower ${params.towerId} does not belong to project ${params.projectId}.`,
+      );
+    }
+    // Null for a BLOCK, which has no floors to bound against.
+    towerTotalFloors = tower.totalFloors ?? undefined;
+    targetGroupKind = tower.kind;
+  }
+
+  const existingUnits = await tx.unit.findMany({
+    where: { projectId: params.projectId },
+    select: { unitNumber: true },
+  });
+  const unitTypes = await tx.unitType.findMany({
+    where: { projectId: params.projectId },
+    select: {
+      id: true,
+      code: true,
+      carpetArea: true,
+      builtUpArea: true,
+      saleableArea: true,
+    },
+  });
+  const unitTypeIdByCode = new Map(unitTypes.map((type) => [type.code, type.id]));
+  const unitTypeAreas: [string, UnitTypeAreas][] = unitTypes.map((type) => [
+    type.code,
+    {
+      carpetArea: type.carpetArea,
+      builtUpArea: type.builtUpArea,
+      saleableArea: type.saleableArea,
+    },
+  ]);
+
+  const { valid, errors } = validateUnitImportRows(params.rows, {
+    existingUnitNumbers: existingUnits.map((unit) => unit.unitNumber),
+    unitTypeAreas,
+    towerTotalFloors,
+    targetGroupKind,
+  });
+
+  if (errors.length > 0 && mode === "ALL_OR_NOTHING") {
+    // Thrown before anything is written, so the rollback has nothing to
+    // undo. No audit row either: the project is unchanged, and a log that
+    // records non-changes stops being a record of changes.
+    throw new UnitImportRejectedError({ imported: 0, skipped: submitted, errors });
+  }
+
+  // Nothing valid to insert (SKIP_INVALID over a wholly bad file) leaves
+  // the project untouched, so there is no mutation to audit -- the caller
+  // gets the report instead.
+  if (valid.length > 0) {
+    const data = valid.map((row) => toCreateInput(row, params, unitTypeIdByCode));
+    // createManyAndReturn rather than createMany: the genesis history rows
+    // below need the generated ids, and re-reading the units by unit
+    // number would be a second round trip for something the INSERT can
+    // return (Postgres INSERT ... RETURNING).
+    const created = await tx.unit.createManyAndReturn({ data, select: { id: true } });
+
+    // Genesis history row per unit, exactly as createUnit writes for a
+    // single unit. UnitStatusHistory.fromStatus is nullable precisely for
+    // this, and unblockUnit in units.ts reads history to find a unit's
+    // prior status -- an imported unit with no history at all has a hole
+    // in that trail.
+    const genesis: Prisma.UnitStatusHistoryCreateManyInput[] = created.map((unit) => ({
+      unitId: unit.id,
+      fromStatus: null,
+      toStatus: "AVAILABLE",
+      reason: "unit imported",
+      actorId,
+      actorLabel: params.audit.actorLabel,
+    }));
+    await tx.unitStatusHistory.createMany({ data: genesis });
+
+    // ONE audit row for the batch. Per-unit rows would bury the signal: a
+    // 900-unit import is one administrative act, and "who loaded this
+    // inventory, when, and how much of it was rejected" is the question
+    // the log has to answer. AuditAction has no IMPORT member (the schema
+    // is authoritative) and the entity is the batch rather than any one
+    // unit, so this is a CREATE recorded against the project it filled.
+    await writeAuditLog(tx, params.audit, {
+      action: "CREATE",
+      entity: "UnitImport",
+      entityId: params.projectId,
+      after: {
+        projectId: params.projectId,
+        towerId: params.towerId ?? null,
+        mode,
+        rowsSubmitted: submitted,
+        imported: valid.length,
+        skipped: submitted - valid.length,
+        errorCount: errors.length,
+      },
+    });
+  }
+
+  return { imported: valid.length, skipped: submitted - valid.length, errors };
 }
 
 function toCreateInput(

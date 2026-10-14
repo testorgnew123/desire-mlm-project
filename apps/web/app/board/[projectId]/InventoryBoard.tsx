@@ -148,7 +148,7 @@ export function InventoryBoard({
       if (count !== undefined) groups.push({ key: tower.id, label: tower.code, count });
     }
     const loose = counts.get(NO_TOWER);
-    if (loose !== undefined) groups.push({ key: NO_TOWER, label: "No tower", count: loose });
+    if (loose !== undefined) groups.push({ key: NO_TOWER, label: "No tower or block", count: loose });
     return groups;
   }, [towers, units]);
 
@@ -361,10 +361,11 @@ export function InventoryBoard({
 
   const activeFilterCount = countActiveFilters(filters);
   const syncedClock = formatIstClock(lastSyncedAt);
-  const selectedTowerLabel =
+  const selectedTower =
     selectedUnit === null || selectedUnit.towerId === null
       ? null
-      : (towers.find((tower) => tower.id === selectedUnit.towerId)?.name ?? null);
+      : (towers.find((tower) => tower.id === selectedUnit.towerId) ?? null);
+  const selectedTowerLabel = selectedTower?.name ?? null;
 
   return (
     <div className={styles.board}>
@@ -408,7 +409,7 @@ export function InventoryBoard({
       </header>
 
       {towerGroups.length > 1 ? (
-        <div className={styles.towerBar} role="group" aria-label="Tower">
+        <div className={styles.towerBar} role="group" aria-label="Tower or block">
           {towerGroups.map((group) => (
             <button
               key={group.key}
@@ -547,6 +548,7 @@ export function InventoryBoard({
           unit={selectedUnit}
           status={selectedStatus}
           towerLabel={selectedTowerLabel}
+          towerKind={selectedTower?.kind ?? null}
           expiresAt={selectedExpiresAt}
           countdown={
             selectedRemainingMs === null ? null : formatCountdown(selectedRemainingMs)

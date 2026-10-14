@@ -3,7 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma, getPrismaClient } from "@desire/db";
-import { createTower, createUnit, createUnitType } from "@desire/services/projects";
+import {
+  ProjectReraInvalidError,
+  createTower,
+  createUnit,
+  createUnitType,
+} from "@desire/services/projects";
+import { createBlockWithPlots } from "@desire/services/blocks";
+import { UnitImportRejectedError } from "@desire/services/unit-import";
 import type { UnitGroupKind } from "@desire/db";
 import { createDraftPriceList, publishPriceList } from "@desire/services/price-lists";
 import type { PlcCharge } from "@desire/services/price-lists";
@@ -39,24 +46,77 @@ async function runAction(projectId: string, run: () => Promise<void>): Promise<v
   redirect(`/projects/${projectId}`);
 }
 
+/** The service errors are accurate but written for logs. This says what happened
+ *  in terms of what the person did -- and, since a block and its plots are
+ *  created in one transaction, that nothing was created. */
+function describePlotFailure(error: unknown): unknown {
+  if (error instanceof ProjectReraInvalidError) {
+    return new Error(
+      "Plots can't be created until the project has a live RERA registration. Nothing was " +
+        "created. Add the block without a plot count to create it on its own.",
+    );
+  }
+  if (error instanceof UnitImportRejectedError) {
+    const shown = error.report.errors.slice(0, 3).map((problem) => problem.message);
+    const more = error.report.errors.length - shown.length;
+    return new Error(
+      `The block was not created, because its plots could not be: ${shown.join("; ")}` +
+        `${more > 0 ? ` (and ${more} more)` : ""}.`,
+    );
+  }
+  return error;
+}
+
 export async function createTowerAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
   const kind: UnitGroupKind = formData.get("kind") === "BLOCK" ? "BLOCK" : "TOWER";
+  const audit = auditFor(session.user.orgId, session.user.id, session.user.name);
+  // Trimmed: a block's plots are numbered from its code, and "A " would give
+  // "A -01".
+  const code = String(formData.get("code") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
 
-  await runAction(projectId, () =>
-    createTower(db, {
-      projectId,
-      code: String(formData.get("code") ?? ""),
-      name: String(formData.get("name") ?? ""),
-      kind,
-      // A block must send NOTHING here, not 0 -- createTower rejects a block
-      // that declares floors, which is the point of the rule.
-      totalFloors: kind === "TOWER" ? Number(formData.get("totalFloors") ?? 0) : undefined,
-      audit: auditFor(session.user.orgId, session.user.id, session.user.name),
-    }).then(() => undefined),
-  );
+  await runAction(projectId, async () => {
+    if (kind === "TOWER") {
+      await createTower(db, {
+        projectId,
+        code,
+        name,
+        kind,
+        totalFloors: Number(formData.get("totalFloors") ?? 0),
+        audit,
+      });
+      return;
+    }
+
+    // A block sends NO floor count -- createTower rejects a block that declares
+    // floors, which is the point of the rule. It sends a plot count instead.
+    const rawCount = String(formData.get("plotCount") ?? "").trim();
+    let plotUnitTypeCode: string | undefined;
+    if (rawCount !== "") {
+      const plotType = await db.unitType.findFirst({
+        where: { id: String(formData.get("plotUnitTypeId") ?? ""), projectId },
+        select: { code: true },
+      });
+      if (!plotType) throw new Error("Choose a plot type for the plots.");
+      plotUnitTypeCode = plotType.code;
+    }
+
+    try {
+      await createBlockWithPlots(db, {
+        projectId,
+        code,
+        name,
+        plotCount: rawCount === "" ? undefined : Number(rawCount),
+        plotUnitTypeCode,
+        audit,
+      });
+    } catch (error) {
+      throw describePlotFailure(error);
+    }
+  });
 }
 
 /** Single-unit entry. The bulk CSV import is the realistic path for a

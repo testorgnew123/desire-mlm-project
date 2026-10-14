@@ -8,7 +8,6 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Prisma, getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import {
-  MakerCheckerViolationError,
   PriceListNotEditableError,
   createDraftPriceList,
   getActivePriceList,
@@ -112,8 +111,12 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-describe("maker-checker on publish", () => {
-  it("REFUSES to let the preparer publish their own list, even holding both permissions", async () => {
+// Until 2026-10-14 the preparer could never publish their own list. That was
+// relaxed at the client's instruction (see the header of price-lists.ts): the
+// only role holding both permissions is the admin who runs the project. The
+// control that remains is the permission itself, plus a visible audit trail.
+describe("who may publish a price list", () => {
+  it("lets a user holding both permissions publish the list they prepared, and says so in the audit log", async () => {
     const { project, unitType, both } = await seed();
     const draft = await createDraftPriceList(db, {
       projectId: project.id,
@@ -123,15 +126,22 @@ describe("maker-checker on publish", () => {
       audit: ctx(ORG, both.id, "both"),
     });
 
-    // Same human, and they DO hold pricelist.approve. Permission is not the
-    // control here -- separation of duties is.
-    await expect(
-      publishPriceList(db, { priceListId: draft.priceListId, audit: ctx(ORG, both.id, "both") }),
-    ).rejects.toThrow(MakerCheckerViolationError);
+    await publishPriceList(db, {
+      priceListId: draft.priceListId,
+      audit: ctx(ORG, both.id, "both"),
+    });
 
     const after = await db.priceList.findUniqueOrThrow({ where: { id: draft.priceListId } });
-    expect(after.status).toBe("DRAFT");
-    expect(after.publishedAt).toBeNull();
+    expect(after.status).toBe("ACTIVE");
+    expect(after.preparedById).toBe(both.id);
+    expect(after.approvedById).toBe(both.id);
+    expect(after.publishedAt).not.toBeNull();
+
+    // Allowed, but never silent: the approval row carries the fact.
+    const approval = await db.auditLog.findFirstOrThrow({
+      where: { entity: "PriceList", entityId: draft.priceListId, action: "APPROVE" },
+    });
+    expect(approval.reason).toContain("approved by the user who prepared it");
   });
 
   it("allows a DIFFERENT approver to publish", async () => {
@@ -155,6 +165,12 @@ describe("maker-checker on publish", () => {
     expect(after.approvedById).toBe(approver.id);
     expect(after.preparedById).toBe(preparer.id);
     expect(after.approvedById).not.toBe(after.preparedById);
+
+    // No self-approval note when two different people were involved.
+    const approval = await db.auditLog.findFirstOrThrow({
+      where: { entity: "PriceList", entityId: draft.priceListId, action: "APPROVE" },
+    });
+    expect(approval.reason).not.toContain("prepared it");
   });
 
   it("refuses an approver who lacks pricelist.approve", async () => {

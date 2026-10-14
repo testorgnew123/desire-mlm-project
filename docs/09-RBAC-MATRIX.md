@@ -82,11 +82,19 @@ tested individually.
 | Verify a receipt | Whoever entered it | Maker-checker |
 | Verify a receipt | The booking's selling associate, **or anyone in their upline** | Commission releases on collection — otherwise they unlock their own pay |
 | Approve a payout batch | The preparer | Maker-checker |
-| Publish a price list | The requester | Prevents unilateral repricing |
 | Approve a discount | The requesting associate | Self-approval |
 | Change a commission scheme | Anyone holding `payout.prepare` | Prevents writing the rule and running it |
 | Move a tree node | Anyone, while a payout period is open | The batch would compute against a shifting tree |
 | Approve a grade change | Self | |
+
+**Publishing a price list is deliberately not on this list.** It was until
+2026-10-14 ("the requester may not publish"), and was relaxed at the client's
+instruction: project creation and editing are admin-only, and the only role
+holding both `pricelist.prepare` and `pricelist.approve` is the Super Admin, so
+the rule could only ever block the one admin who runs the project. Holding
+`pricelist.approve` is now the only gate; a self-approved publish is written into
+the audit reason. The Project Manager (prepares) and Sales Head (approves) split
+is unchanged, because it comes from the permissions, not from this rule.
 
 ### The one worth restating
 
