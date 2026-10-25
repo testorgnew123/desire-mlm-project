@@ -203,16 +203,19 @@ async function buildCostSheetInput(
 
   // Exactly one of unitTypeId/unitId is set on a PriceListItem (schema
   // comment). Prefer a per-unit override item; fall back to the
-  // unit-type-wide item. Two queries rather than one OR, so "prefer" is
-  // explicit rather than left to whatever row order Postgres happens to
-  // return for an OR match.
+  // unit-type-wide item. One read fetches both candidates and the preference
+  // is applied here, in code, so it is explicit rather than left to whatever
+  // row order Postgres happens to return for an OR match. (It used to be two
+  // reads in a row, on every draft and every confirm.)
+  const candidates = await tx.priceListItem.findMany({
+    where: {
+      priceListId: params.priceListId,
+      OR: [{ unitId: params.unitId }, { unitTypeId: unit.unitTypeId }],
+    },
+  });
   const item =
-    (await tx.priceListItem.findFirst({
-      where: { priceListId: params.priceListId, unitId: params.unitId },
-    })) ??
-    (await tx.priceListItem.findFirst({
-      where: { priceListId: params.priceListId, unitTypeId: unit.unitTypeId },
-    }));
+    candidates.find((candidate) => candidate.unitId === params.unitId) ??
+    candidates.find((candidate) => candidate.unitTypeId === unit.unitTypeId);
   if (!item) throw new InvalidPriceListError(params.priceListId);
 
   const otherChargesRaw = (item.otherCharges ?? []) as Array<{ chargeHeadCode: string; amount: number | string }>;
@@ -487,24 +490,23 @@ export async function confirmBooking(
     // misconfigured scheme rolls back the whole confirm.
     await accrueCommission(tx, { bookingId: confirmed.id, audit: params.audit, now });
 
-    const costSheetLines = await Promise.all(
-      final.lines.map((line: CostSheetLineResult) =>
-        tx.costSheetLine.create({
-          data: {
-            bookingId: booking.id,
-            chargeHeadCode: line.chargeHeadCode,
-            description: line.description,
-            quantity: line.quantity,
-            rate: line.rate,
-            amount: line.amount,
-            gstRatePct: line.gstRatePct,
-            gstAmount: line.gstAmount,
-            countsTowardCommission: line.countsTowardCommission,
-            displayOrder: line.displayOrder,
-          },
-        }),
-      ),
-    );
+    // One statement for all the lines. They used to be created one by one --
+    // Promise.all on a transaction is still a single connection, so that was a
+    // round trip per line, made while the booking and unit rows are locked.
+    const costSheetLines = await tx.costSheetLine.createManyAndReturn({
+      data: final.lines.map((line: CostSheetLineResult) => ({
+        bookingId: booking.id,
+        chargeHeadCode: line.chargeHeadCode,
+        description: line.description,
+        quantity: line.quantity,
+        rate: line.rate,
+        amount: line.amount,
+        gstRatePct: line.gstRatePct,
+        gstAmount: line.gstAmount,
+        countsTowardCommission: line.countsTowardCommission,
+        displayOrder: line.displayOrder,
+      })),
+    });
 
     // Inlined rather than calling holds.ts's releaseHold: that function
     // unconditionally sets Unit.status back to AVAILABLE (correct for a
@@ -809,6 +811,12 @@ export interface ListBookingsParams {
   actorId: string;
   status?: Booking["status"];
   projectId?: string;
+  /** DRAFT first (Postgres orders an enum by declaration order, and DRAFT is
+   *  declared first), newest within each status. For the screens where a draft
+   *  is waiting on somebody. */
+  draftsFirst?: boolean;
+  /** At most this many rows. Left out, every booking comes back, as before. */
+  take?: number;
 }
 
 /** Phase 3.5 Slice 10 -- confirmed gap, no list existed (only a single-row
@@ -834,7 +842,11 @@ export async function listBookings(db: PrismaClient, params: ListBookingsParams)
     where.sellingAssociateId = { in: accessible };
   }
 
-  return db.booking.findMany({ where, orderBy: { bookingDate: "desc" } });
+  return db.booking.findMany({
+    where,
+    orderBy: params.draftsFirst ? [{ status: "asc" }, { bookingDate: "desc" }] : { bookingDate: "desc" },
+    take: params.take,
+  });
 }
 
 /** Same row-level scope as listBookings, for a single booking -- the

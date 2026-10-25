@@ -23,14 +23,20 @@
 #   · Each trigger consumes one Netlify function invocation — the free-tier
 #     budget in docs/21-TIER-LIMITS.md section 1 is unchanged by moving the
 #     trigger off-platform.
+#
+# ONLY TWO JOBS ARE TRIGGERED while the product is cut down to plots, booking and
+# user admin (apps/web/lib/features.ts): the hold sweep and the nightly backup.
+# The collections sweep, grade qualification, invariant monitor and scheduled
+# report emails belong to switched-off features -- their routes now answer 404, so
+# triggering them would turn this workflow red every night. Add them back here
+# when their feature is switched back on.
 
 name: Scheduled jobs
 
 on:
   schedule:
     - cron: '*/5 * * * *'   # hold expiry sweep
-    - cron: '30 2 * * *'    # collections escalation sweep + grade qualification -- both 08:00 IST
-    - cron: '30 18 * * *'   # invariant monitor + nightly backup + scheduled report emails -- all 00:00 IST
+    - cron: '30 18 * * *'   # nightly backup -- 00:00 IST
   workflow_dispatch:
     inputs:
       job:
@@ -39,11 +45,7 @@ on:
         type: choice
         options:
           - holds/expire
-          - collections/sweep
-          - grades/qualify
-          - monitor/invariants
           - backup/dump
-          - reports/send-scheduled
 
 concurrency:
   group: scheduled-jobs-${{ github.event.schedule || inputs.job }}
@@ -58,8 +60,7 @@ jobs:
         run: |
           case "${{ github.event.schedule }}" in
             '*/5 * * * *')  echo 'jobs=holds/expire' >> "$GITHUB_OUTPUT" ;;
-            '30 2 * * *')   echo 'jobs=collections/sweep grades/qualify' >> "$GITHUB_OUTPUT" ;;
-            '30 18 * * *')  echo 'jobs=monitor/invariants backup/dump reports/send-scheduled' >> "$GITHUB_OUTPUT" ;;
+            '30 18 * * *')  echo 'jobs=backup/dump' >> "$GITHUB_OUTPUT" ;;
             *)              echo 'jobs=${{ inputs.job }}' >> "$GITHUB_OUTPUT" ;;
           esac
 

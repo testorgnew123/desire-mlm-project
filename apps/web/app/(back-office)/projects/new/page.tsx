@@ -18,10 +18,12 @@ export const dynamic = "force-dynamic";
  *  fields and squeezing them into a sidebar form is how the payment-plan UI
  *  ended up able to express only one hardcoded milestone.
  *
- *  Only code and name are required -- matching createProject. Everything
- *  else can be filled in later from the project's own edit form, which
- *  matters because a project in planning has neither a RERA number nor,
- *  often, a written-down address yet. */
+ *  Only code and name are required -- matching createProject, because a
+ *  project in planning has neither a RERA number nor, often, a written-down
+ *  address yet. There is NO edit screen for a project yet (updateProject exists
+ *  in the service with no caller), so what is left blank here cannot be added
+ *  later from the UI; the RERA card says so, because it is the one that blocks
+ *  work. */
 export default async function NewProjectPage({
   searchParams,
 }: {
@@ -105,8 +107,9 @@ export default async function NewProjectPage({
           <CardHeader>
             <CardTitle>RERA</CardTitle>
             <CardDescription>
-              Optional here — a project in planning has no registration yet. It is required before
-              any unit in this project can be held.
+              Enter it now if you have it. Plots can&rsquo;t be created, and nothing can be held,
+              until the project has a live registration — and there is no screen yet to add one
+              afterwards.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">

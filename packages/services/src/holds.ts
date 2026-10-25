@@ -253,12 +253,14 @@ async function assertQuotaAvailable(
   associateId: string,
   now: Date,
 ): Promise<void> {
-  const grade = await tx.associateGrade.findFirst({
-    where: { associateId, validTo: null },
-    include: { grade: { select: { holdQuota: true } } },
+  // The associate's current grade, through the relation filter: one statement,
+  // where reading the assignment and then its grade was two.
+  const grade = await tx.grade.findFirst({
+    where: { associateGrades: { some: { associateId, validTo: null } } },
+    select: { holdQuota: true },
   });
   // No grade assignment = no quota. Safer than defaulting to "some".
-  const quota = grade?.grade.holdQuota ?? 0;
+  const quota = grade?.holdQuota ?? 0;
 
   const liveHolds = await tx.unitHold.count({
     where: { associateId, releasedAt: null, expiresAt: { gt: now } },

@@ -3,20 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma, getPrismaClient } from "@desire/db";
-import {
-  ProjectReraInvalidError,
-  createTower,
-  createUnit,
-  createUnitType,
-} from "@desire/services/projects";
+import { ProjectReraInvalidError, createUnit, createUnitType } from "@desire/services/projects";
 import { createBlockWithPlots } from "@desire/services/blocks";
 import { UnitImportRejectedError } from "@desire/services/unit-import";
-import type { UnitGroupKind } from "@desire/db";
 import { createDraftPriceList, publishPriceList } from "@desire/services/price-lists";
 import type { PlcCharge } from "@desire/services/price-lists";
-import type { AreaBasis } from "@desire/db";
-import { createPaymentPlan } from "@desire/services/payment-plans";
-import { createScheme, publishScheme } from "@desire/services/schemes";
 import { requireSession } from "@/lib/session";
 
 function auditFor(orgId: string, actorId: string, actorLabel: string) {
@@ -67,11 +58,13 @@ function describePlotFailure(error: unknown): unknown {
   return error;
 }
 
+/** Adds a plotted block, with its plots when a count is given. Only blocks can be
+ *  created (SCOPE.plotsOnly): createBlockWithPlots always makes a BLOCK, so there
+ *  is no kind to read from the form and nothing a hand-made POST could change. */
 export async function createTowerAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
-  const kind: UnitGroupKind = formData.get("kind") === "BLOCK" ? "BLOCK" : "TOWER";
   const audit = auditFor(session.user.orgId, session.user.id, session.user.name);
   // Trimmed: a block's plots are numbered from its code, and "A " would give
   // "A -01".
@@ -79,18 +72,6 @@ export async function createTowerAction(formData: FormData): Promise<void> {
   const name = String(formData.get("name") ?? "").trim();
 
   await runAction(projectId, async () => {
-    if (kind === "TOWER") {
-      await createTower(db, {
-        projectId,
-        code,
-        name,
-        kind,
-        totalFloors: Number(formData.get("totalFloors") ?? 0),
-        audit,
-      });
-      return;
-    }
-
     // A block sends NO floor count -- createTower rejects a block that declares
     // floors, which is the point of the rule. It sends a plot count instead.
     const rawCount = String(formData.get("plotCount") ?? "").trim();
@@ -127,7 +108,6 @@ export async function createUnitAction(formData: FormData): Promise<void> {
   const db = getPrismaClient();
 
   const towerId = String(formData.get("towerId") ?? "") || null;
-  const rawFloor = String(formData.get("floor") ?? "").trim();
 
   await runAction(projectId, () =>
     createUnit(db, {
@@ -135,38 +115,27 @@ export async function createUnitAction(formData: FormData): Promise<void> {
       towerId,
       unitTypeId: String(formData.get("unitTypeId") ?? ""),
       unitNumber: String(formData.get("unitNumber") ?? "").trim(),
-      // Empty means "no floor", which is what a plot in a block needs. Sending
-      // 0 instead would be rejected by assertUnitFloor -- correctly.
-      floor: rawFloor === "" ? null : Number(rawFloor),
+      // A plot has no floor; the form no longer offers one.
+      floor: null,
       audit: auditFor(session.user.orgId, session.user.id, session.user.name),
     }).then(() => undefined),
   );
 }
 
-/** A blank area field means "this type has none", not zero. Zero carpet would
- *  sail past a `> 0` check and then fail the carpet < built-up rule with a
- *  baffling "0.00 must be less than 0.00"; null is the honest value for a plot,
- *  and createUnitType decides which basis may carry which areas. */
-function optionalArea(formData: FormData, field: string): string | null {
-  const raw = String(formData.get(field) ?? "").trim();
-  return raw === "" ? null : raw;
-}
-
+/** Adds a plot type. The basis is fixed to square yards here rather than read
+ *  from the form: only plot types can be created (SCOPE.plotsOnly), and a plot
+ *  has one area -- no bedrooms, carpet or built-up. */
 export async function createUnitTypeAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
-  const areaBasis: AreaBasis = formData.get("areaBasis") === "SQYD" ? "SQYD" : "SQFT";
 
   await runAction(projectId, () =>
     createUnitType(db, {
       projectId,
       code: String(formData.get("code") ?? ""),
       name: String(formData.get("name") ?? ""),
-      bedrooms: formData.get("bedrooms") ? Number(formData.get("bedrooms")) : undefined,
-      areaBasis,
-      carpetArea: optionalArea(formData, "carpetArea"),
-      builtUpArea: optionalArea(formData, "builtUpArea"),
+      areaBasis: "SQYD",
       saleableArea: String(formData.get("saleableArea") ?? "0"),
       audit: auditFor(session.user.orgId, session.user.id, session.user.name),
     }).then(() => undefined),
@@ -260,68 +229,6 @@ export async function publishPriceListAction(formData: FormData): Promise<void> 
   await runAction(projectId, () =>
     publishPriceList(db, {
       priceListId,
-      audit: auditFor(session.user.orgId, session.user.id, session.user.name),
-    }).then(() => undefined),
-  );
-}
-
-export async function createPaymentPlanAction(formData: FormData): Promise<void> {
-  const session = await requireSession();
-  const projectId = String(formData.get("projectId") ?? "");
-  const db = getPrismaClient();
-
-  await runAction(projectId, () =>
-    createPaymentPlan(db, {
-      code: String(formData.get("code") ?? ""),
-      name: String(formData.get("name") ?? ""),
-      projectId,
-      milestones: [{ sequence: 1, label: "On booking", pctOfAgreementValue: "100", dueDaysOffset: 0 }],
-      audit: auditFor(session.user.orgId, session.user.id, session.user.name),
-    }).then(() => undefined),
-  );
-}
-
-export async function createSchemeAction(formData: FormData): Promise<void> {
-  const session = await requireSession();
-  const projectId = String(formData.get("projectId") ?? "");
-  const db = getPrismaClient();
-
-  const gradeIds = formData.getAll("gradeId").map(String);
-  const gradeRates = gradeIds
-    .map((gradeId) => ({ gradeId, rateValue: String(formData.get(`gradeRate_${gradeId}`) ?? "") }))
-    .filter((rate) => rate.rateValue !== "");
-
-  if (gradeRates.length === 0) {
-    redirect(`/projects/${projectId}?error=${encodeURIComponent("Enter at least one grade's rate.")}`);
-  }
-
-  const levelRates = [1, 2, 3]
-    .map((level) => ({ level, pctOfSellerCommission: String(formData.get(`levelRate_${level}`) ?? "") }))
-    .filter((rate) => rate.pctOfSellerCommission !== "");
-
-  await runAction(projectId, () =>
-    createScheme(db, {
-      projectId,
-      name: String(formData.get("name") ?? ""),
-      validFrom: new Date(),
-      baseDefinition: { chargeHeadCodes: ["BSP"], netOfDiscount: true, netOfGst: true },
-      maxTotalPct: String(formData.get("maxTotalPct") ?? "3"),
-      gradeRates,
-      levelRates,
-      audit: auditFor(session.user.orgId, session.user.id, session.user.name),
-    }).then(() => undefined),
-  );
-}
-
-export async function publishSchemeAction(formData: FormData): Promise<void> {
-  const session = await requireSession();
-  const projectId = String(formData.get("projectId") ?? "");
-  const schemeId = String(formData.get("schemeId") ?? "");
-  const db = getPrismaClient();
-
-  await runAction(projectId, () =>
-    publishScheme(db, {
-      schemeId,
       audit: auditFor(session.user.orgId, session.user.id, session.user.name),
     }).then(() => undefined),
   );

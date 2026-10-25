@@ -10,14 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  createDraftPriceListAction,
-  createPaymentPlanAction,
-  createSchemeAction,
-  createUnitAction,
-  publishPriceListAction,
-  publishSchemeAction,
-} from "./actions";
+import { createDraftPriceListAction, createUnitAction, publishPriceListAction } from "./actions";
 import { GroupForm } from "./GroupForm";
 import { UnitImportForm } from "./UnitImportForm";
 import { UnitTypeForm } from "./UnitTypeForm";
@@ -26,15 +19,17 @@ export const metadata: Metadata = {
   title: "Project — Desire",
 };
 
-const FIELD_CLASS =
-  "h-9 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
-
-/** Detail, plus Towers / Unit types ("Units") / Price lists / Payment
- *  plans / Commission scheme, all on one page rather than six separate
- *  routes (docs/08-SCREENS.md lists them as one "Projects" section). Live
- *  unit browsing itself stays on the board (Slice 8 links it in) -- "Units"
- *  here is the unit-TYPE catalogue a price list prices against, a project-
- *  configuration concern, not day-to-day inventory monitoring. */
+/** Detail, plus Blocks / Plot types / Plots / Price lists, all on one page rather
+ *  than separate routes (docs/08-SCREENS.md lists them as one "Projects"
+ *  section). Live unit browsing itself stays on the board -- "Plot types" here
+ *  is the catalogue a price list prices against, a project-configuration
+ *  concern, not day-to-day inventory monitoring.
+ *
+ *  Payment plans and the commission scheme used to be cards here; both belong to
+ *  features that are switched off (apps/web/lib/features.ts), so their queries
+ *  went too. Only plots can be created (SCOPE.plotsOnly): blocks, plot types and
+ *  plots. Existing apartment data is still listed, but nothing new is made in
+ *  that shape. */
 export default async function ProjectDetailPage({
   params,
   searchParams,
@@ -53,7 +48,7 @@ export default async function ProjectDetailPage({
   });
   if (!project) notFound();
 
-  const [towers, unitTypes, priceLists, paymentPlans, schemes, grades, plcTagRows] =
+  const [towers, unitTypes, priceLists, plcTagRows] =
     await Promise.all([
     db.tower.findMany({
       where: { projectId },
@@ -66,17 +61,6 @@ export default async function ProjectDetailPage({
       orderBy: { version: "desc" },
       select: { id: true, name: true, version: true, status: true, validFrom: true, _count: { select: { items: true } } },
     }),
-    db.paymentPlan.findMany({
-      where: { projectId },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true, _count: { select: { milestones: true } } },
-    }),
-    db.commissionScheme.findMany({
-      where: { projectId },
-      orderBy: { version: "desc" },
-      select: { id: true, name: true, version: true, status: true, preparedById: true },
-    }),
-    db.grade.findMany({ where: { orgId: session.user.orgId }, orderBy: { rank: "asc" } }),
     // The price list must price every tag its units carry, or the cost sheet
     // throws UnpricedPlcTagError at quoting time. So the form offers exactly
     // the tags in use rather than a free-text box -- a typo'd "CORNOR" would
@@ -110,6 +94,9 @@ export default async function ProjectDetailPage({
       id: unitType.id,
       label: `${unitType.code} — ${formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}`,
     }));
+  // What a plot can be loaded into or typed as: blocks and plot types only.
+  const blocks = towers.filter((tower) => tower.kind === "BLOCK");
+  const plotTypeRows = unitTypes.filter((unitType) => unitType.areaBasis === "SQYD");
 
   return (
     <div className="flex flex-col gap-4">
@@ -129,7 +116,7 @@ export default async function ProjectDetailPage({
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Towers &amp; blocks</CardTitle>
+            <CardTitle>Blocks</CardTitle>
             <CardDescription>{describeGroupCounts(towerCount, blockCount)}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -164,7 +151,7 @@ export default async function ProjectDetailPage({
 
         <Card>
           <CardHeader>
-            <CardTitle>Unit &amp; plot types</CardTitle>
+            <CardTitle>Plot types</CardTitle>
             <CardDescription>{unitTypes.length} type(s)</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -190,67 +177,58 @@ export default async function ProjectDetailPage({
 
         <Card>
           <CardHeader>
-            <CardTitle>Units and plots</CardTitle>
+            <CardTitle>Plots</CardTitle>
             <CardDescription>
               Bulk import is the realistic way to load a township; the single form is for
               corrections afterwards.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            {unitTypes.length === 0 ? (
-              <p className="text-xs text-muted-foreground">Add a unit type first.</p>
+            {plotTypeRows.length === 0 || blocks.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Add a block and a plot type first.</p>
             ) : (
               <>
                 <UnitImportForm
                   projectId={project.id}
-                  towers={towers}
-                  unitTypes={unitTypes.map((unitType) => ({
-                    code: unitType.code,
-                    basis: unitType.areaBasis,
-                  }))}
+                  towers={blocks.map((block) => ({ id: block.id, code: block.code }))}
+                  unitTypes={plotTypeRows.map((unitType) => ({ code: unitType.code }))}
                   facings={[...UNIT_FACINGS]}
                 />
 
-                {/* Single-unit entry. Floor is deliberately NOT marked required:
-                    a plot in a block must leave it empty, and createUnit
-                    enforces which way round it has to be. */}
                 <form
                   action={createUnitAction}
                   className="flex flex-col gap-2 border-t border-border pt-3"
                 >
                   <input type="hidden" name="projectId" value={project.id} />
-                  <div className="flex gap-2">
-                    <Input name="unitNumber" placeholder="Unit / plot number" required />
-                    <Input name="floor" type="number" placeholder="Floor (towers only)" />
-                  </div>
+                  <Input name="unitNumber" placeholder="Plot number" required />
                   <div className="flex gap-2">
                     <select
                       name="towerId"
-                      aria-label="Tower or block"
+                      aria-label="Block"
+                      required
                       className="h-9 flex-1 rounded-md border border-border bg-background px-2 text-sm"
                     >
-                      <option value="">No tower or block</option>
-                      {towers.map((tower) => (
-                        <option key={tower.id} value={tower.id}>
-                          {tower.code} — {tower.kind === "BLOCK" ? "block" : "tower"}
+                      {blocks.map((block) => (
+                        <option key={block.id} value={block.id}>
+                          {block.code} — block
                         </option>
                       ))}
                     </select>
                     <select
                       name="unitTypeId"
-                      aria-label="Unit type"
+                      aria-label="Plot type"
                       required
                       className="h-9 flex-1 rounded-md border border-border bg-background px-2 text-sm"
                     >
-                      {unitTypes.map((unitType) => (
+                      {plotTypeRows.map((unitType) => (
                         <option key={unitType.id} value={unitType.id}>
-                          {unitType.code} ({unitType.areaBasis === "SQYD" ? "plot" : "flat"})
+                          {unitType.code}
                         </option>
                       ))}
                     </select>
                   </div>
                   <Button type="submit" size="sm">
-                    Add one unit or plot
+                    Add one plot
                   </Button>
                 </form>
               </>
@@ -355,94 +333,8 @@ export default async function ProjectDetailPage({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Payment plans</CardTitle>
-            <CardDescription>{paymentPlans.length} plan(s)</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="flex flex-col divide-y divide-border">
-              {paymentPlans.map((plan) => (
-                <div key={plan.id} className="flex justify-between py-1.5 text-sm first:pt-0">
-                  <span>
-                    {plan.code} — {plan.name}
-                  </span>
-                  <span className="text-muted-foreground">{plan._count.milestones} milestone(s)</span>
-                </div>
-              ))}
-            </div>
-            <form action={createPaymentPlanAction} className="flex flex-col gap-2 border-t border-border pt-3">
-              <input type="hidden" name="projectId" value={project.id} />
-              <div className="flex gap-2">
-                <Input name="code" placeholder="Code (e.g. FULL-PAY)" required />
-                <Input name="name" placeholder="Name" required />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Created with a single 100% "on booking" milestone -- editing milestones lands in a later slice.
-              </p>
-              <Button type="submit" size="sm">
-                Add payment plan
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Commission scheme</CardTitle>
-          <CardDescription>{schemes.length} version(s)</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <div className="flex flex-col divide-y divide-border">
-            {schemes.map((scheme) => (
-              <div key={scheme.id} className="flex items-center justify-between py-1.5 text-sm first:pt-0">
-                <span>
-                  v{scheme.version} — {scheme.name} (<Badge variant="secondary">{scheme.status.replaceAll("_", " ")}</Badge>)
-                </span>
-                {scheme.status === "DRAFT" || scheme.status === "PENDING_APPROVAL" ? (
-                  <form action={publishSchemeAction}>
-                    <input type="hidden" name="projectId" value={project.id} />
-                    <input type="hidden" name="schemeId" value={scheme.id} />
-                    <Button type="submit" size="xs" variant="outline">
-                      Publish
-                    </Button>
-                  </form>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <form action={createSchemeAction} className="flex flex-col gap-3 border-t border-border pt-3">
-            <input type="hidden" name="projectId" value={project.id} />
-            <div className="flex gap-2">
-              <Input name="name" placeholder="Scheme name (e.g. Skyline Phase 2)" required />
-              <Input name="maxTotalPct" placeholder="Max total % (e.g. 3)" defaultValue="3" />
-            </div>
-            <p className="text-xs font-medium">Grade rates (% of base, self commission)</p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {grades.map((grade) => (
-                <div key={grade.id} className="flex items-center gap-2">
-                  <Label className="w-10 shrink-0 text-xs">{grade.code}</Label>
-                  <input type="hidden" name="gradeId" value={grade.id} />
-                  <Input name={`gradeRate_${grade.id}`} placeholder="%" className={FIELD_CLASS} />
-                </div>
-              ))}
-            </div>
-            <p className="text-xs font-medium">Override level rates (% of seller commission, levels 1-3)</p>
-            <div className="grid grid-cols-3 gap-2">
-              {[1, 2, 3].map((level) => (
-                <div key={level} className="flex items-center gap-2">
-                  <Label className="w-6 shrink-0 text-xs">L{level}</Label>
-                  <Input name={`levelRate_${level}`} placeholder="%" />
-                </div>
-              ))}
-            </div>
-            <Button type="submit" size="sm" className="self-start">
-              Create draft scheme
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
     </div>
   );
 }

@@ -26,6 +26,14 @@ function getTransporter(): Transporter {
     port: Number(port),
     secure: Number(port) === 465,
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } : undefined,
+    // nodemailer's defaults wait two minutes to connect and thirty seconds for the
+    // greeting. A mail server that accepts the connection and then says nothing
+    // (seen with a localhost sink that resolved to the wrong address family) would
+    // hold every request that sends mail open that long -- longer than a Netlify
+    // function lives. Short and explicit instead.
+    connectionTimeout: 5_000,
+    greetingTimeout: 5_000,
+    socketTimeout: 10_000,
   });
   return cachedTransporter;
 }

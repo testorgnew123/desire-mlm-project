@@ -711,6 +711,62 @@ describe("getBooking", () => {
   });
 });
 
+describe("what a booking is priced from", () => {
+  it("prefers a unit's own price-list item to its type's, and falls back to the type's", async () => {
+    const { unit, unitType, priceList, customer, seller } = await seedFixture();
+    const plain = await db.unit.create({
+      data: { orgId: ORG, projectId: unit.projectId, unitTypeId: unitType.id, unitNumber: "A-2", floor: 1 },
+    });
+    await db.priceListItem.create({
+      data: { priceListId: priceList.id, unitId: unit.id, baseRate: "6000.00", plcCharges: {}, otherCharges: [] },
+    });
+
+    const draftFor = async (unitId: string) => {
+      await acquireHold(db, {
+        orgId: ORG,
+        unitId,
+        associateId: seller.associate!.id,
+        audit: ctx(ORG, seller.user.id, "seller"),
+      });
+      return createDraftBooking(db, {
+        unitId,
+        priceListId: priceList.id,
+        customerId: customer.id,
+        audit: ctx(ORG, seller.user.id, "seller"),
+      });
+    };
+
+    // 975.00 sq ft at the unit's own 6000 against the type's 5000.
+    expect((await draftFor(unit.id)).baseAmount.equals(D("5850000"))).toBe(true);
+    expect((await draftFor(plain.id)).baseAmount.equals(D("4875000"))).toBe(true);
+  });
+
+  it("confirm stores one line for every charge it computes, in the computed order", async () => {
+    const { unit, priceList, customer, seller, admin } = await seedFixture();
+    await acquireHold(db, {
+      orgId: ORG,
+      unitId: unit.id,
+      associateId: seller.associate!.id,
+      audit: ctx(ORG, seller.user.id, "seller"),
+    });
+    const draft = await createDraftBooking(db, {
+      unitId: unit.id,
+      priceListId: priceList.id,
+      customerId: customer.id,
+      audit: ctx(ORG, seller.user.id, "seller"),
+    });
+    const confirmed = await confirmBooking(db, { bookingId: draft.id, audit: ctx(ORG, admin.user.id, "admin") });
+
+    const expected = expectedCostSheet().lines;
+    const stored = await db.costSheetLine.findMany({ where: { bookingId: draft.id }, orderBy: { displayOrder: "asc" } });
+    expect(expected.length).toBeGreaterThan(1);
+    expect(stored.map((line) => line.chargeHeadCode)).toEqual(expected.map((line) => line.chargeHeadCode));
+    expect(stored.map((line) => line.amount.toFixed(2))).toEqual(expected.map((line) => line.amount.toFixed(2)));
+    // The call hands back the same rows it stored.
+    expect(confirmed.costSheetLines.map((line) => line.id).sort()).toEqual(stored.map((line) => line.id).sort());
+  });
+});
+
 describe("listBookings: scope (Phase 3.5 Slice 10 -- confirmed gap, no list existed)", () => {
   it("an admin-shaped role sees every booking in the org", async () => {
     const f = await seedScopeFixture();

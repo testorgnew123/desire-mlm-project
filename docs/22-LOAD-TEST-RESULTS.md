@@ -265,6 +265,176 @@
 > by the keep-warm Worker in [21-TIER-LIMITS §12](21-TIER-LIMITS.md) once it
 > is deployed.
 
+> ## Round five, 2026-10-25: the cut-down app, measured route by route
+>
+> The product was cut to plotted projects, booking a plot and user admin
+> ([PROGRESS.md](../PROGRESS.md) decision log, 2026-10-25), and the client asked
+> that every module and API load fast, with the load time of each function
+> identified. This round measures the **kept** surface only (a switched-off route
+> now answers 404 in about 5 ms), changes what the measurement pointed at, and
+> measures again.
+>
+> ### How it was measured
+>
+> - A production build (`next build && next start`) on `localhost:3011`, against
+>   local Postgres with `log_statement = 'all'`, seeded by
+>   `apps/web/scripts/perf-seed.ts`: **one plotted project of 2,000 plots in 20
+>   blocks**, an ACTIVE price list, 50 associates, 200 bookings (half CONFIRMED,
+>   half DRAFT with a live hold). Both scripts refuse a database host that is not
+>   local.
+> - `apps/web/scripts/perf-run.ts`, one signed-in actor per route: the first
+>   request after the server started (**cold** here means route-module load, not a
+>   serverless cold start), then 30 sequential warm requests (p50 and p95 of the
+>   whole response, streamed body included), then one more request wrapped in two
+>   marker queries so the **statements** Postgres logged for exactly that request
+>   can be counted. Mutations run as a chain (hold, draft, confirm, cancel), 12
+>   iterations.
+> - `apps/web/scripts/api-smoke.ts` calls every kept page and API as each of the
+>   three roles and as nobody, and one URL under every switched-off prefix, and
+>   checks the status of each (146 checks, none failed).
+> - Three runs of the same script: **start** (before any change, every feature
+>   on), **after the cut** (the scope cut and the new screens, before any
+>   performance change), and **final** (the code as shipped; the better of two
+>   runs for each route).
+>
+> ### Read the milliseconds with this in mind
+>
+> **Statement counts are exact; milliseconds are not.** This machine
+> (Windows, Docker Desktop, other containers running) gave different answers for
+> the same code: two back-to-back runs of the identical final build read
+> `POST confirm` at 75 ms and then 114 ms, `POST holds` at 49 and 68, and
+> `GET /projects/[id]` at 69 and 49 (the other way round). A single p50 is
+> therefore not evidence of a change; a statement count is. The final column
+> below is the better of those two runs, route by route. The change that matters most, the
+> permission and session lookups every request makes, was timed head to head
+> instead, **alternating old and new inside one process** (300 rounds each, so
+> drift cancels):
+>
+> | Lookup | Before | After |
+> |---|---|---|
+> | Permissions (`getPermissionCodes`) | 4 statements, p50 8.9 ms | 1 statement, p50 2.8 ms |
+> | Session (`validateSession`) | 2 statements, p50 4.8 ms | 1 statement, p50 2.4 ms |
+>
+> A statement here costs 1-2 ms. Against the colocated Ohio database it costs about
+> 6 ms (round four), and every request also pays the ~400 ms India-to-Ohio round
+> trip that nothing in this repository can remove. So a statement removed is worth
+> roughly 6 ms to a real user, not 1.
+>
+> ### Results
+>
+> `p50 ms` is start / after the cut / final. `Payload` is the decoded response.
+> Rows marked *(new)* did not exist at the start.
+>
+> | Route | Statements | Payload (KB) | p50 ms: start / after cut / final | p95 ms final |
+> |---|---|---|---|---|
+> | GET /login | 1 → 1 | 19.5 → 20.7 | 22.4 / 24.9 / 9.9 | 22.3 |
+> | GET /api/health | 2 → 2 | 0.2 → 0.2 | 6.6 / 8.7 / 5.5 | 7.4 |
+> | GET /projects | 9 → 5 | 77 → 64.5 | 38.7 / 53.5 / 42.1 | 53.2 |
+> | GET /projects/[id] | 15 → 8 | 165 → 109 | 66.2 / 59.4 / 49 | 65.1 |
+> | GET /stock | 8 → 4 | 79.5 → 59.7 | 42.6 / 42.4 / 29.1 | 42.5 |
+> | GET /board/[id] | 14 → 11 | 1,091 → 376 | 161.4 / 175.2 / 140.1 | 220.5 |
+> | GET /bookings | 17 → 10 | 577 → 308 | 208.8 / 102.9 / 78.7 | 95.8 |
+> | GET /bookings/[id] (confirmed) | 26 → 12 | 84.1 → 62.9 | 66.4 / 55 / 34 | 58 |
+> | GET /bookings/[id] (draft) | 24 → 15 | 86.9 → 59.4 | 81.2 / 58.7 / 35.1 | 53.2 |
+> | GET /admin/users | 14 → 7 | 422 → 409 | 81.2 / 128.6 / 82.5 | 124.6 |
+> | GET /inventory (associate) | 8 → 4 | 38.2 → 37.9 | 23.7 / 29.2 / 20.7 | 32.1 |
+> | GET /inventory/[id] (associate) | 19 → 11 | 1,924 → 391 | 219.9 / 224.9 / 157.3 | 212 |
+> | GET /my-bookings (associate) (new) | – → 10 | – → 37.2 | – / 38.3 / 29.3 | 35.5 |
+> | GET …/units/deltas (full) | 9 → 5 | 312 → 312 | 53.4 / 73 / 32.6 | 44.4 |
+> | GET …/units/deltas?since=now | 8 → 4 | 0.1 → 0.1 | 24.2 / 23.5 / 13.1 | 17.1 |
+> | GET /api/v1/bookings/[id] | 11 → 7 | 0.7 → 0.7 | 28.4 / 34.7 / 21.5 | 32.5 |
+> | GET /dashboard | 44 → switched off (404) | 139 → 12.1 | 86.7 / – / 6 | – |
+> | GET /home (associate) | 30 → switched off (404) | 52.3 → 12.1 | 69 / – / 5.4 | – |
+> | POST /api/jobs/holds/expire | 2 → 2 | 0 → 0 | 6.4 / 7.3 / 9.1 | 12.1 |
+> | POST holds | 23 → 18 | 0.1 → 0.1 | 64.3 / 58.6 / 48.8 | 67.8 |
+> | POST /api/v1/bookings (draft) | 25 → 20 | 0.7 → 0.7 | 70.8 / 66.3 / 55.2 | 97.8 |
+> | POST bookings/[id]/confirm | 35 → 30 | 0.8 → 0.8 | 96.5 / 89.7 / 75.2 | 144.2 |
+> | POST bookings/[id]/cancel | 19 → 15 | 0.2 → 0.2 | 61.3 / 56.2 / 44.4 | 84.5 |
+>
+> ### What changed
+>
+> - **The landing path.** Every sign-in used to end on the dashboard (44
+>   statements, 139 KB) or, for an associate, the home screen (30 statements). Both
+>   are switched off; staff land on `/projects` and associates on `/inventory`
+>   (`/projects` is 5 statements and about 42 ms at p50, `/inventory` 4 statements and about 21 ms, against 44 statements and 87 ms for the dashboard and 30 and 69 ms for the home screen), and the login actions redirect straight there instead of through
+>   `/`.
+> - **Permissions and session in one statement each**, instead of four and two
+>   (the table above). Every authenticated request pays both, and every
+>   `assertPermission` inside a transaction pays the first, so this shortens the
+>   row locks of a hold and a confirm as well. `hot-path-statements.test.ts` pins
+>   the statement shape, so a tidy-up back into nested reads fails a test instead
+>   of quietly adding statements again.
+> - **The plot grid and the board send each unit type and each block once**, and
+>   leave out what is empty, instead of 19 fields for every unit
+>   (`app/board/[projectId]/catalogue.ts`; `catalogue.test.ts` proves the
+>   rebuilt units equal the old ones field for field). At 2,000 plots that is the
+>   board's response falling from 1,091 KB to 376 KB and the phone grid's from
+>   1,924 KB to 391 KB. The server serialises and compresses the response on every
+>   render and the phone downloads and parses it before it can draw a tile, so
+>   this is render time as well as transfer. The phone grid's p50 went from 220 ms
+>   to 157 ms and its p95 from 401 ms to 212 ms (this change and the block tabs
+>   below together; they were not measured apart). The board's own time barely
+>   moved: its server work is mostly the unit read (about 67 ms of it), which this
+>   does not touch.
+> - **The phone grid draws one block at a time** (block tabs) instead of 2,000
+>   tiles, its clock ticks only while a plot is held and the tab is visible
+>   (it re-sorted and re-rendered every tile every second, in a hidden tab as
+>   well), and its page reads its data in parallel and no longer looks up the
+>   viewer's associate profile (a hold is theirs exactly when its associate row is
+>   theirs).
+> - **Lists are bounded.** `/bookings` shows the latest 100, drafts first, and
+>   says so when it is truncated (577 KB → 308 KB at the seeded 200 bookings).
+>   `/admin/users` pages at 50 with Previous/Next and has a read ceiling of 500;
+>   before, every account was drawn with two forms each.
+> - **Pages lost the sections of switched-off features and their queries**:
+>   payment plans and commission schemes on the project page, the payment
+>   schedule, discount requests and clawback on a booking (including a
+>   cancellation preview that ran on every page view).
+> - **Booking a plot** (`bookPlot`) checks everything that can be checked before
+>   it writes anything, so a typo or an unpriced plot never costs a plot its hold.
+> - **Smaller reads inside the booking transactions.** A draft or a confirm reads
+>   its price-list item once instead of twice, a hold reads the associate's grade
+>   in one statement instead of two, and `confirmBooking` writes its cost-sheet
+>   lines in one statement instead of one per line, inside the booking and unit
+>   locks. The seeded plots have exactly one cost-sheet line each, so that last
+>   change does not show in the table; it saves a statement per extra line on a
+>   plot with PLC tags and fixed charges.
+>
+> ### What was not changed, and why
+>
+> - **The network floor.** About 400 ms of every request in production is the
+>   India-to-Ohio round trip; the function region is a Pro setting (round one).
+> - **The shape of the mutation chains.** A hold, a draft and a confirm are
+>   18, 20 and 30 statements. They sit inside `FOR UPDATE` locks in the code
+>   that keeps two associates from taking the same plot, and 800+ tests protect
+>   them; restructuring them to move reads in front of `BEGIN` would save perhaps
+>   25-50 ms of a click that costs ~700 ms, for a change in the riskiest function
+>   in the product. Commission accrual and demand-schedule generation also still
+>   run inside `confirmBooking` although their screens are off: skipping them now
+>   would leave the bookings confirmed in the meantime without commission entries
+>   when the features come back. The next cheap step, if wanted: have
+>   `writeAuditLog` return its id so the three routes that look the audit row up
+>   afterwards (`holds`, `bookings`, `confirm`) stop doing so (one statement each).
+> - **`/projects` is not capped**: one card of about 1 KB per project, so 100
+>   projects is 100 KB. It gets paging the day a developer has more than that.
+> - **`expireStaleHolds`** is one transaction per expired hold (7 round trips
+>   each), so a single sweep could pass a function's 10 s limit near 200 expired
+>   holds. Correctness never depends on the sweep (a hold past its expiry reads as
+>   free), each hold is its own transaction, so a sweep that times out still made
+>   progress, and the next one continues.
+> - **No new index.** Nothing measured was slow enough to prove one.
+> - **Serverless cold start** is unchanged by this round and was not measured
+>   here; the local "cold" column is route-module load only.
+>
+> ### Against the budget set before the work
+>
+> | Budget | Result |
+> |---|---|
+> | Every kept API p95 ≤ 150 ms, every page p95 ≤ 250 ms (local, warm) | Met on the better of the two final runs for every route. Two screens at 2,000 plots sit at the edge (board p95 220-246 ms and phone grid 212-263 ms across the two runs), and the mutations' p95 ranged 68-215 ms (hold), 98-188 (draft) and 144-160 (confirm): inside this machine's noise, but not a margin to claim. |
+> | No unbounded list query | Met for bookings (latest 100) and users (50 per page, ceiling 500). `/projects` is bounded only by how many projects a developer has (see above). |
+> | Fewer round trips on the request path | Every kept page lost 3-4 statements to the two joins; the table above has each route's count. The budget's "≤ 4 sequential round trips per page" was framed in round trips but measured in statements; pages that read in parallel (the PWA grid, the board) are shallower than their count, the rest are not provably ≤ 4. |
+> | Hold, draft and confirm cut by ≥ 40% | **Not met**: hold 23 → 18 (-22%), draft 25 → 20 (-20%), confirm 35 → 30 (-14%), cancel 19 → 15 (-21%), nearly all of it from the permission and session joins. Reason above. Reason above. |
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the

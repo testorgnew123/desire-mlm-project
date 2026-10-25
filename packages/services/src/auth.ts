@@ -11,7 +11,7 @@
 // 12h idle / 7d absolute timeout, per-account lockout after 5 failed
 // attempts, server-side revocation on demand.
 import { randomBytes, createHash } from "node:crypto";
-import type { PrismaClient, Prisma } from "@desire/db";
+import type { PrismaClient, Prisma, Session } from "@desire/db";
 
 const SESSION_TOKEN_BYTES = 32;
 const SESSION_IDLE_TIMEOUT_MINUTES = 12 * 60;
@@ -66,14 +66,14 @@ export async function createSession(
 }
 
 /** The only User columns any caller reads off a validated session, verified
- *  across every route and page: id, orgId, name, email. Selected explicitly
- *  rather than taken with `include: { user: true }`, which pulled the WHOLE
- *  row -- passwordHash (argon2id) and mfaSecret (TOTP) included -- into the
- *  render context of every authenticated request. Nothing leaked to the
- *  client, but there is no reason for the hottest path in the app to carry
- *  the two most sensitive columns in the schema. Widening this is a
- *  deliberate act: add the field here and it starts travelling everywhere
- *  again. */
+ *  across every route and page: id, orgId, name, email. They are named in
+ *  validateSession's SQL (and in SessionUser below) rather than taken with
+ *  `include: { user: true }`, which pulled the WHOLE row -- passwordHash
+ *  (argon2id) and mfaSecret (TOTP) included -- into the render context of every
+ *  authenticated request. Nothing leaked to the client, but there is no reason
+ *  for the hottest path in the app to carry the two most sensitive columns in
+ *  the schema. Widening this is a deliberate act: add the column to that SQL
+ *  and to SessionUser, and it starts travelling everywhere again. */
 export const SESSION_USER_SELECT = {
   id: true,
   orgId: true,
@@ -90,15 +90,37 @@ export interface SessionUser {
 }
 
 /** Validates a raw session token from the cookie. Checks, in order: exists,
- *  not revoked, not past absolute expiry, not idle-timed-out. Touches
- *  lastActiveAt on success -- callers should not call this more than once
- *  per request. */
-export async function validateSession(db: PrismaClient, rawToken: string) {
+ *  not revoked, not past absolute expiry, not idle-timed-out. Writes
+ *  lastActiveAt back only once it has gone stale (see below), not on every
+ *  call -- callers should still not call this more than once per request. */
+export async function validateSession(db: PrismaClient, rawToken: string): Promise<Session & { user: SessionUser }> {
   const tokenHash = hashToken(rawToken);
-  const session = await db.session.findUnique({
-    where: { tokenHash },
-    include: { user: { select: SESSION_USER_SELECT } },
-  });
+
+  // ONE statement: the session and the four user columns anything reads. This was
+  // a Prisma findUnique with a nested user select, which (relationJoins being off)
+  // is two sequential round trips on the hottest path in the app.
+  const rows = await db.$queryRaw<(Session & { user_id: string; user_orgId: string; user_name: string; user_email: string })[]>`
+    SELECT s.*, u."id" AS "user_id", u."orgId" AS "user_orgId", u."name" AS "user_name", u."email" AS "user_email"
+    FROM "sessions" s
+    JOIN "users" u ON u."id" = s."userId"
+    WHERE s."tokenHash" = ${tokenHash}
+    LIMIT 1
+  `;
+  const row = rows[0];
+  const session: (Session & { user: SessionUser }) | null = row
+    ? {
+        id: row.id,
+        userId: row.userId,
+        tokenHash: row.tokenHash,
+        ipAddress: row.ipAddress,
+        userAgent: row.userAgent,
+        createdAt: row.createdAt,
+        lastActiveAt: row.lastActiveAt,
+        expiresAt: row.expiresAt,
+        revokedAt: row.revokedAt,
+        user: { id: row.user_id, orgId: row.user_orgId, name: row.user_name, email: row.user_email },
+      }
+    : null;
 
   if (!session) throw new SessionInvalidError("no such session");
   if (session.revokedAt) throw new SessionInvalidError("revoked");

@@ -3,7 +3,7 @@
 // exactly what is under test, so a mock would prove nothing.
 import "dotenv/config";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { Prisma, getPrismaClient } from "@desire/db";
+import { Prisma, SCOPE, getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import { UnitNotFoundError } from "../src/holds";
 import {
@@ -25,6 +25,13 @@ import {
   updateUnit,
 } from "../src/projects";
 import type { AuditContext } from "../src/audit";
+
+// This file exercises the apartment rules (towers, floors, square-foot area
+// hierarchy). They are still in the code; the product just cannot CREATE that
+// shape while SCOPE.plotsOnly is on. Vitest gives every file its own module
+// graph, so turning it off here reaches no other file. The guard itself is
+// tested in plots-only.test.ts.
+SCOPE.plotsOnly = false;
 
 const db = getPrismaClient();
 const ORG = "org_test_projects";

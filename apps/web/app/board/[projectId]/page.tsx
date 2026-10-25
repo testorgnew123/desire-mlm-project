@@ -36,11 +36,9 @@ import { getPrismaClient } from "@desire/db";
 // Narrow subpath imports -- see the note in the deltas route: the barrel drags
 // a native .node addon into the build graph via auth.ts.
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
-import { effectiveUnitStatus } from "@desire/services/holds";
 import { getSession } from "@/lib/session";
-import { formatArea } from "@/lib/money";
 import { InventoryBoard } from "./InventoryBoard";
-import type { BoardTower, BoardUnit } from "./types";
+import { buildCatalogue } from "./build-catalogue";
 
 // Inventory that is cached is inventory that is wrong, which is the one thing
 // this screen exists to prevent.
@@ -83,7 +81,7 @@ export default async function InventoryBoardPage({
   // Independent reads -- neither depends on the other's result, unlike the
   // holds lookup below (which needs holdIds out of `rows`) -- so they run
   // concurrently instead of paying two sequential round trips.
-  const [project, rows] = await Promise.all([
+  const [project, rows, myAssociate] = await Promise.all([
     db.project.findUnique({
       where: { id: projectId, orgId },
       select: {
@@ -127,6 +125,9 @@ export default async function InventoryBoardPage({
       },
       orderBy: [{ floor: "desc" }, { unitNumber: "asc" }],
     }),
+    // Holding needs an associate profile; an admin looking at this board has
+    // none, and a Hold button that can only answer 403 is worse than no button.
+    db.associate.findUnique({ where: { userId: session.user.id }, select: { id: true } }),
   ]);
   if (!project) notFound();
 
@@ -152,53 +153,22 @@ export default async function InventoryBoardPage({
     : [];
   const holdById = new Map(holds.map((hold) => [hold.id, hold]));
 
-  const units: BoardUnit[] = rows.map((row) => {
-    const hold = row.currentHoldId ? (holdById.get(row.currentHoldId) ?? null) : null;
-    // The same lazy-expiry rule the delta endpoint applies, from the same
-    // function: a hold past expiresAt reads as AVAILABLE even before the
-    // five-minute sweep materialises the release (docs/06-INVENTORY-SPEC.md
-    // section 3). Re-implementing it here would let the first paint disagree
-    // with the first poll a minute later.
-    const status = effectiveUnitStatus({ status: row.status }, hold, readStartedAt);
-    const liveHold = status === "HELD" ? hold : null;
-
-    return {
-      id: row.id,
-      unitNumber: row.unitNumber,
-      floor: row.floor,
-      towerId: row.towerId,
-      facing: row.facing,
-      plcTags: row.plcTags,
-      unitTypeId: row.unitType.id,
-      unitTypeCode: row.unitType.code,
-      unitTypeName: row.unitType.name,
-      bedrooms: row.unitType.bedrooms,
-      carpetArea: formatArea(
-        row.carpetAreaOverride ?? row.unitType.carpetArea,
-        "carpet",
-        row.unitType.areaBasis,
-      ),
-      builtUpArea: formatArea(row.unitType.builtUpArea, "builtUp", row.unitType.areaBasis),
-      saleableArea: formatArea(
-        row.saleableAreaOverride ?? row.unitType.saleableArea,
-        "saleable",
-        row.unitType.areaBasis,
-      )!,
-      blockReason: row.blockReason,
-      status,
-      currentHoldExpiresAt: liveHold ? liveHold.expiresAt.toISOString() : null,
-      heldByName: liveHold ? liveHold.associate.user.name : null,
-      heldByCode: liveHold ? liveHold.associate.code : null,
-      updatedAt: row.updatedAt.toISOString(),
-    };
+  // The same lazy-expiry rule the delta endpoint applies, from the same
+  // function (buildCatalogue calls effectiveUnitStatus): a hold past expiresAt
+  // reads as AVAILABLE even before the five-minute sweep materialises the
+  // release (docs/06-INVENTORY-SPEC.md section 3). Re-implementing it here
+  // would let the first paint disagree with the first poll a minute later.
+  const catalogue = buildCatalogue({
+    rows,
+    holds: holdById,
+    towers: project.towers.map((tower) => ({
+      id: tower.id,
+      code: tower.code,
+      name: tower.name,
+      kind: tower.kind,
+    })),
+    now: readStartedAt,
   });
-
-  const towers: BoardTower[] = project.towers.map((tower) => ({
-    id: tower.id,
-    code: tower.code,
-    name: tower.name,
-    kind: tower.kind,
-  }));
 
   return (
     <InventoryBoard
@@ -206,9 +176,9 @@ export default async function InventoryBoardPage({
       projectName={project.name}
       projectCode={project.code}
       city={project.city}
-      towers={towers}
-      units={units}
+      catalogue={catalogue}
       serverTime={readStartedAt.toISOString()}
+      canHold={myAssociate !== null}
     />
   );
 }

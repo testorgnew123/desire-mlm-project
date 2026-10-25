@@ -1,20 +1,15 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ClipboardList, Percent, Wallet } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
-import { getBookingForActor, previewCancellation } from "@desire/services/bookings";
-import { getDemandsForBooking } from "@desire/services/payment-plans";
-import { requireSession } from "@/lib/session";
-import { formatDate } from "@/lib/format";
+import { getBookingForActor } from "@desire/services/bookings";
+import { getCachedSessionPermissions, requireSession } from "@/lib/session";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { formatArea, formatMoney } from "@/lib/money";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { EmptyState } from "@/components/empty-state";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { StatusBadge } from "@/components/status-badge";
-import { approvalStatusTone, bookingStatusTone } from "@/lib/status-tone";
-import { requestDiscountAction, cancelBookingAction, raiseDemandAction, waiveDemandAction } from "./actions";
+import { bookingStatusTone } from "@/lib/status-tone";
+import { cancelBookingAction, confirmBookingAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +20,10 @@ export const metadata: Metadata = {
 const FIELD_CLASS =
   "h-9 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
-/** Detail + discount request (DRAFT only) + cancellation with a clawback
- *  preview (CONFIRMED only) -- docs/08-SCREENS.md's "Detail / Discount
- *  approvals / Cancellations" folded onto one page the way CRM's lead detail
- *  folded reassign + activity together in Slice 9, rather than three routes
- *  for what is really one booking's lifecycle. */
+/** One booking's whole lifecycle on one page: a draft an associate made is
+ *  confirmed here by an admin, and a confirmed one can be cancelled with a
+ *  reason. The discount request, payment schedule and clawback preview that used
+ *  to sit here belong to switched-off features (apps/web/lib/features.ts). */
 export default async function BookingDetailPage({
   params,
   searchParams,
@@ -42,26 +36,60 @@ export default async function BookingDetailPage({
   const session = await requireSession();
   const db = getPrismaClient();
 
-  const booking = await getBookingForActor(db, { orgId: session.user.orgId, actorId: session.user.id, bookingId });
+  const [booking, permissions] = await Promise.all([
+    getBookingForActor(db, { orgId: session.user.orgId, actorId: session.user.id, bookingId }),
+    getCachedSessionPermissions(db, session.user.id),
+  ]);
   if (!booking) notFound();
 
-  const [project, unit, customer, discountRequests, clawbackPreview, demands] = await Promise.all([
+  const [project, unit, customer, hold] = await Promise.all([
     db.project.findUnique({ where: { id: booking.projectId }, select: { name: true, code: true } }),
-    db.unit.findUnique({ where: { id: booking.unitId }, select: { unitNumber: true } }),
-    db.customer.findUnique({ where: { id: booking.customerId }, select: { name: true, phone: true } }),
-    db.discountRequest.findMany({ where: { bookingId }, orderBy: { createdAt: "desc" } }),
-    booking.status === "CONFIRMED" ? previewCancellation(db, { orgId: session.user.orgId, bookingId }) : Promise.resolve(null),
-    getDemandsForBooking(db, { bookingId, orgId: session.user.orgId, actorId: session.user.id }),
+    db.unit.findUnique({
+      where: { id: booking.unitId },
+      select: { unitNumber: true, unitType: { select: { areaBasis: true } } },
+    }),
+    db.customer.findUnique({ where: { id: booking.customerId }, select: { name: true, phone: true, email: true } }),
+    // The draft's reservation: if it has lapsed, the plot is no longer held for
+    // this sale and confirming will be refused. Only a draft has one to show.
+    booking.status === "DRAFT"
+      ? db.unitHold.findFirst({
+          where: { unitId: booking.unitId, releasedAt: null },
+          select: { expiresAt: true, associate: { select: { code: true, user: { select: { name: true } } } } },
+        })
+      : Promise.resolve(null),
   ]);
+
+  // Areas are labelled with their unit: a plot is priced in square yards, and
+  // reading one as square feet is a ninefold mistake.
+  const basis = unit?.unitType.areaBasis ?? "SQFT";
+  const holdLive = !!hold && hold.expiresAt > new Date();
+  const canConfirm = booking.status === "DRAFT" && permissions.has("booking.confirm");
+  const canCancel = booking.status === "CONFIRMED" && permissions.has("booking.cancel");
+
+  const priceRows: [label: string, amount: typeof booking.baseAmount, show: boolean][] = [
+    ["Base price", booking.baseAmount, true],
+    ["Preferential location charge", booking.plcAmount, booking.plcAmount.gt(0)],
+    ["Other charges", booking.otherChargesAmount, booking.otherChargesAmount.gt(0)],
+    ["Discount", booking.discountAmount, booking.discountAmount.gt(0)],
+    ["GST", booking.gstAmount, booking.gstAmount.gt(0)],
+    ["Stamp duty", booking.stampDutyAmount, booking.stampDutyAmount.gt(0)],
+    ["Registration", booking.registrationAmount, booking.registrationAmount.gt(0)],
+  ];
 
   return (
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">{booking.bookingNumber}</h1>
         <p className="text-sm text-muted-foreground">
-          {project?.name} ({project?.code}) · Unit {unit?.unitNumber} · {customer?.name} ·{" "}
+          {project?.name} ({project?.code}) · Plot {unit?.unitNumber} · {customer?.name} ·{" "}
           <StatusBadge status={booking.status} tone={bookingStatusTone(booking.status)} />
         </p>
+        {customer ? (
+          <p className="text-sm text-muted-foreground">
+            {customer.phone}
+            {customer.email ? ` · ${customer.email}` : ""}
+          </p>
+        ) : null}
       </div>
 
       {error ? (
@@ -70,194 +98,124 @@ export default async function BookingDetailPage({
         </p>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Cost sheet</CardTitle>
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                <th className="py-1.5 pr-4">Charge</th>
-                <th className="py-1.5 pr-4 text-right">Amount</th>
-                <th className="py-1.5 pr-4 text-right">GST</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {booking.costSheetLines.map((line) => (
-                <tr key={line.chargeHeadCode}>
-                  <td className="py-1.5 pr-4">{line.description}</td>
-                  <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.amount)}</td>
-                  <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.gstAmount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mt-3 flex flex-col gap-1 text-sm">
-            <p>
-              Saleable area: {formatArea(booking.saleableAreaAtBooking, "saleable")} · Carpet area:{" "}
-              {formatArea(booking.carpetAreaAtBooking, "carpet")}
-            </p>
-            <p className="font-medium">Agreement value: {formatMoney(booking.agreementValue)}</p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Payment schedule</CardTitle>
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          {demands.length === 0 ? (
-            <EmptyState icon={ClipboardList} message="No payment plan attached to this booking." />
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="py-1.5 pr-4">#</th>
-                  <th className="py-1.5 pr-4">Description</th>
-                  <th className="py-1.5 pr-4 text-right">Amount</th>
-                  <th className="py-1.5 pr-4">Due date</th>
-                  <th className="py-1.5 pr-4">Status</th>
-                  <th className="py-1.5 pr-4">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {demands.map((demand) => (
-                  <tr key={demand.id}>
-                    <td className="py-1.5 pr-4">{demand.sequence}</td>
-                    <td className="py-1.5 pr-4">{demand.description}</td>
-                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(demand.amount)}</td>
-                    <td className="py-1.5 pr-4 tabular-nums">{formatDate(demand.dueDate)}</td>
-                    <td className="py-1.5 pr-4">
-                      <Badge variant="secondary">{demand.status.replaceAll("_", " ")}</Badge>
-                    </td>
-                    <td className="py-1.5 pr-4">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {demand.status === "SCHEDULED" ? (
-                          <form action={raiseDemandAction}>
-                            <input type="hidden" name="bookingId" value={booking.id} />
-                            <input type="hidden" name="demandId" value={demand.id} />
-                            <Button type="submit" size="xs">
-                              Raise
-                            </Button>
-                          </form>
-                        ) : null}
-                        {demand.status !== "WAIVED" ? (
-                          <form action={waiveDemandAction} className="flex items-center gap-1">
-                            <input type="hidden" name="bookingId" value={booking.id} />
-                            <input type="hidden" name="demandId" value={demand.id} />
-                            <Input name="reason" placeholder="Waive reason" className="h-7 w-28 text-xs" required />
-                            <Button type="submit" size="xs" variant="destructive">
-                              Waive
-                            </Button>
-                          </form>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 lg:grid-cols-2">
+      {booking.status === "DRAFT" ? (
         <Card>
           <CardHeader>
-            <CardTitle>Discount requests</CardTitle>
+            <CardTitle>Waiting for confirmation</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {discountRequests.length === 0 ? (
-              <EmptyState icon={Percent} message="None requested." />
-            ) : (
-              discountRequests.map((request) => (
-                <div key={request.id} className="flex flex-col gap-0.5 border-b border-border pb-2 text-sm last:border-0">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {formatMoney(request.amount)} ({request.pctOfBase.toString()}%)
-                    </span>
-                    <StatusBadge status={request.status} tone={approvalStatusTone(request.status)} />
-                  </div>
-                  <p className="text-xs text-muted-foreground">{request.justification}</p>
-                  {request.decisionNote ? (
-                    <p className="text-xs text-muted-foreground">Decision note: {request.decisionNote}</p>
-                  ) : null}
-                </div>
-              ))
-            )}
-
-            {booking.status === "DRAFT" ? (
-              <form action={requestDiscountAction} className="flex flex-col gap-2 border-t border-border pt-3">
+          <CardContent className="flex flex-col gap-3 text-sm">
+            <p className="text-muted-foreground">
+              {holdLive && hold
+                ? `Held for ${hold.associate.user.name} (${hold.associate.code}) until ${formatDateTime(hold.expiresAt)}. Confirming books the plot and fixes the price below.`
+                : "The associate's hold on this plot has lapsed, so it can no longer be confirmed. They need to book it again."}
+            </p>
+            {canConfirm ? (
+              <form action={confirmBookingAction}>
                 <input type="hidden" name="bookingId" value={booking.id} />
-                <Input name="amount" placeholder="Discount amount (₹)" required />
-                <Input name="pctOfBase" placeholder="% of base price" required />
-                <Input name="justification" placeholder="Justification (required)" required />
-                <Button type="submit" size="sm" className="self-start">
-                  Request discount
-                </Button>
+                <ConfirmSubmitButton
+                  size="sm"
+                  disabled={!holdLive}
+                  message={`Confirm booking ${booking.bookingNumber}? The plot is booked and the price is fixed.`}
+                >
+                  Confirm booking
+                </ConfirmSubmitButton>
               </form>
             ) : null}
           </CardContent>
         </Card>
+      ) : null}
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Price</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <dl className="flex flex-col divide-y divide-border text-sm">
+            {priceRows
+              .filter(([, , show]) => show)
+              .map(([label, amount]) => (
+                <div key={label} className="flex justify-between py-1.5">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="tabular-nums">{formatMoney(amount)}</dd>
+                </div>
+              ))}
+            <div className="flex justify-between py-1.5 font-medium">
+              <dt>Agreement value</dt>
+              <dd className="tabular-nums">{formatMoney(booking.agreementValue)}</dd>
+            </div>
+          </dl>
+          <p className="text-sm text-muted-foreground">
+            {[
+              formatArea(booking.saleableAreaAtBooking, "saleable", basis),
+              formatArea(booking.carpetAreaAtBooking, "carpet", basis),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+          {booking.status === "DRAFT" ? (
+            <p className="text-xs text-muted-foreground">
+              A draft&rsquo;s price is a preview. It is worked out again, from the price list as it stands, when the booking is
+              confirmed.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {booking.costSheetLines.length > 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>Cancellation</CardTitle>
+            <CardTitle>Cost sheet</CardTitle>
           </CardHeader>
-          <CardContent>
-            {booking.status !== "CONFIRMED" ? (
-              <p className="text-sm text-muted-foreground">
-                Only a CONFIRMED booking can be cancelled from here.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <div>
-                  <p className="mb-2 text-sm font-medium">Clawback preview</p>
-                  {!clawbackPreview || clawbackPreview.length === 0 ? (
-                    <EmptyState icon={Wallet} message="No commission entries to claw back." />
-                  ) : (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                          <th className="py-1.5 pr-4">Beneficiary</th>
-                          <th className="py-1.5 pr-4">Role / Level</th>
-                          <th className="py-1.5 pr-4 text-right">Recovery</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {clawbackPreview.map((line) => (
-                          <tr key={line.commissionEntryId}>
-                            <td className="py-1.5 pr-4">{line.beneficiaryAssociateId}</td>
-                            <td className="py-1.5 pr-4">
-                              {line.role} / L{line.level}
-                            </td>
-                            <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.recoveryAmount)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-                <form action={cancelBookingAction} className="flex flex-col gap-2 border-t border-border pt-3">
-                  <input type="hidden" name="bookingId" value={booking.id} />
-                  <textarea
-                    name="reason"
-                    placeholder="Cancellation reason (required)"
-                    required
-                    rows={2}
-                    className={FIELD_CLASS}
-                  />
-                  <Button type="submit" size="sm" variant="destructive" className="self-start">
-                    Cancel booking
-                  </Button>
-                </form>
-              </div>
-            )}
+          <CardContent className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="py-1.5 pr-4">Charge</th>
+                  <th className="py-1.5 pr-4 text-right">Amount</th>
+                  <th className="py-1.5 pr-4 text-right">GST</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {booking.costSheetLines.map((line) => (
+                  <tr key={line.chargeHeadCode}>
+                    <td className="py-1.5 pr-4">{line.description}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.amount)}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.gstAmount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </CardContent>
         </Card>
-      </div>
+      ) : null}
+
+      {canCancel ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Cancel this booking</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form action={cancelBookingAction} className="flex flex-col gap-2">
+              <input type="hidden" name="bookingId" value={booking.id} />
+              <textarea
+                name="reason"
+                placeholder="Cancellation reason (required)"
+                required
+                rows={2}
+                className={FIELD_CLASS}
+              />
+              <ConfirmSubmitButton
+                size="sm"
+                variant="destructive"
+                className="self-start"
+                message={`Cancel booking ${booking.bookingNumber}? The plot goes back on sale.`}
+              >
+                Cancel booking
+              </ConfirmSubmitButton>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <p className="text-xs text-muted-foreground">Booked on {formatDate(booking.bookingDate)}</p>
     </div>

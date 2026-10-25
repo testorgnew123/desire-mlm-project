@@ -6,7 +6,13 @@
 // including Next.js Server Actions, which POST to the page's own URL) is
 // untouched and always goes straight to the network, so a write can never
 // be silently served from -- or trapped in -- this cache.
-const CACHE_NAME = "desire-offline-reads-v1";
+//
+// v2: the name changed so every copy cached by v1 -- including pages of features
+// that are now switched off -- is purged on activate. /api/ is no longer cached
+// at all: the board polls units/deltas?since=<timestamp>, and caching each of
+// those URLs grew Cache Storage without bound and left signed-in data behind
+// after sign-out.
+const CACHE_NAME = "desire-offline-reads-v2";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -25,6 +31,7 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/")) return;
 
   event.respondWith(
     fetch(request)

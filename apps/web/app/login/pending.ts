@@ -53,10 +53,74 @@ export async function readPendingMfaUserId(): Promise<string | null> {
   }
 
   if (typeof payload.userId !== "string" || payload.exp < Date.now()) return null;
+  // A pending password-change payload carries a `purpose`; one must never be
+  // accepted here, or the cookie that only allows "choose a new password" could
+  // be copied under this name to skip choosing one.
+  if ((payload as { purpose?: unknown }).purpose !== undefined) return null;
   return payload.userId;
 }
 
 export async function clearPendingMfaCookie(): Promise<void> {
   const store = await cookies();
   store.delete(PENDING_MFA_COOKIE);
+}
+
+// ── Pending password change ────────────────────────────────────────────
+//
+// The same idea one step earlier: someone signing in with a temporary password
+// (a new account, an admin reset) has proved they know it, and must now choose
+// their own before any session exists. Same encrypted-cookie box, its own cookie
+// name and a `purpose` so the two can never stand in for each other.
+
+export const PENDING_PASSWORD_CHANGE_COOKIE = "desire_pending_pwchange";
+
+/** Ten minutes: time to think of a password and type it twice. */
+const PENDING_PASSWORD_CHANGE_TTL_MS = 10 * 60_000;
+
+interface PendingPasswordChangePayload {
+  userId: string;
+  exp: number;
+  purpose: "change-password";
+}
+
+export async function setPendingPasswordChangeCookie(userId: string): Promise<void> {
+  const payload: PendingPasswordChangePayload = {
+    userId,
+    exp: Date.now() + PENDING_PASSWORD_CHANGE_TTL_MS,
+    purpose: "change-password",
+  };
+  const store = await cookies();
+  store.set(PENDING_PASSWORD_CHANGE_COOKIE, encryptField(JSON.stringify(payload)), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/login",
+    maxAge: PENDING_PASSWORD_CHANGE_TTL_MS / 1000,
+  });
+}
+
+/** The user waiting to choose a password, or null if there is no cookie, it has
+ *  expired, it fails to decrypt, or it is not a password-change cookie. */
+export async function readPendingPasswordChangeUserId(): Promise<string | null> {
+  const store = await cookies();
+  const token = store.get(PENDING_PASSWORD_CHANGE_COOKIE)?.value;
+  if (!token) return null;
+
+  let payload: PendingPasswordChangePayload;
+  try {
+    payload = JSON.parse(decryptField(token)) as PendingPasswordChangePayload;
+  } catch (error) {
+    if (error instanceof DecryptionError || error instanceof SyntaxError) return null;
+    throw error;
+  }
+
+  if (payload.purpose !== "change-password" || typeof payload.userId !== "string" || payload.exp < Date.now()) {
+    return null;
+  }
+  return payload.userId;
+}
+
+export async function clearPendingPasswordChangeCookie(): Promise<void> {
+  const store = await cookies();
+  store.delete(PENDING_PASSWORD_CHANGE_COOKIE);
 }

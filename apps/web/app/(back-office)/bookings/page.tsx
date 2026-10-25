@@ -4,7 +4,7 @@ import { ClipboardList } from "lucide-react";
 import type { BookingStatus } from "@desire/db";
 import { getPrismaClient } from "@desire/db";
 import { listBookings } from "@desire/services/bookings";
-import { getCachedSessionPermissions, requireSession } from "@/lib/session";
+import { requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,20 +18,18 @@ export const metadata: Metadata = {
   title: "Bookings — Desire",
 };
 
-const STATUSES: BookingStatus[] = [
-  "DRAFT",
-  "PENDING_APPROVAL",
-  "CONFIRMED",
-  "AGREEMENT_SIGNED",
-  "REGISTERED",
-  "POSSESSION_GIVEN",
-  "CANCELLED",
-];
+// The three statuses that are ever written. The other four BookingStatus values
+// exist in the schema for later stages and no code sets them, so a filter chip for
+// one would always be empty.
+const STATUSES: BookingStatus[] = ["DRAFT", "CONFIRMED", "CANCELLED"];
+
+/** The most bookings one screen loads. Newest first within a status, so the cap
+ *  only ever cuts off the oldest; narrow with a status chip to reach past it. */
+const LIST_LIMIT = 100;
 
 /** List, scoped exactly as listBookings resolves booking.read (ASSOCIATE own,
- *  TEAM_LEAD own+downline, everyone else with the permission sees the whole
- *  org) -- backend ready per the plan except this list itself, which was a
- *  confirmed gap closed in bookings.ts this slice. */
+ *  everyone else with the permission sees the whole org). Drafts come first: a
+ *  draft is an associate waiting for an admin to confirm it. */
 export default async function BookingsPage({
   searchParams,
 }: {
@@ -42,10 +40,13 @@ export default async function BookingsPage({
   const { status } = await searchParams;
   const selectedStatus = STATUSES.includes(status as BookingStatus) ? (status as BookingStatus) : undefined;
 
-  const [bookings, permissions] = await Promise.all([
-    listBookings(db, { orgId: session.user.orgId, actorId: session.user.id, status: selectedStatus }),
-    getCachedSessionPermissions(db, session.user.id),
-  ]);
+  const bookings = await listBookings(db, {
+    orgId: session.user.orgId,
+    actorId: session.user.id,
+    status: selectedStatus,
+    draftsFirst: true,
+    take: LIST_LIMIT,
+  });
 
   const projectIds = [...new Set(bookings.map((b) => b.projectId))];
   const unitIds = [...new Set(bookings.map((b) => b.unitId))];
@@ -62,14 +63,7 @@ export default async function BookingsPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Bookings</h1>
-        {permissions.has("discount.approve") ? (
-          <Link href="/bookings/discount-approvals" className="text-sm text-primary hover:underline">
-            Discount approvals
-          </Link>
-        ) : null}
-      </div>
+      <h1 className="text-lg font-semibold">Bookings</h1>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         <Link
@@ -100,6 +94,7 @@ export default async function BookingsPage({
           {bookings.length === 0 ? (
             <EmptyState icon={ClipboardList} message="No bookings." />
           ) : (
+            <>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-muted-foreground">
@@ -132,6 +127,12 @@ export default async function BookingsPage({
                 ))}
               </tbody>
             </table>
+            {bookings.length === LIST_LIMIT ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Showing the latest {LIST_LIMIT}. Pick a status above to narrow the list.
+              </p>
+            ) : null}
+            </>
           )}
         </CardContent>
       </Card>

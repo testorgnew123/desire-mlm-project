@@ -15,7 +15,8 @@ import {
   type BoardFilters,
 } from "./filters";
 import { useUnitDeltas } from "./useUnitDeltas";
-import type { BoardTower, BoardUnit, HoldResponse, LiveUnitState } from "./types";
+import { expandCatalogue, type Catalogue } from "./catalogue";
+import type { BoardUnit, HoldResponse, LiveUnitState } from "./types";
 import styles from "./board.module.css";
 
 /** Unit.towerId is nullable in the schema, so "no tower" is a real group. */
@@ -46,10 +47,13 @@ export interface InventoryBoardProps {
   projectCode: string;
   /** Null when the project has no city recorded. */
   city: string | null;
-  towers: BoardTower[];
-  units: BoardUnit[];
-  /** serverTime of the snapshot in `units`. */
+  /** The units and blocks, in the compact form that crosses the wire (catalogue.ts). */
+  catalogue: Catalogue;
+  /** serverTime of the snapshot in `catalogue`. */
   serverTime: string;
+  /** Whether this viewer can hold a plot (has an associate profile). The board
+   *  is read-only for everyone else. */
+  canHold: boolean;
 }
 
 // displayStatus (the client-side lazy-expiry rule) moved to ./status so the
@@ -72,11 +76,15 @@ export function InventoryBoard({
   projectName,
   projectCode,
   city,
-  towers,
-  units,
+  catalogue,
   serverTime,
+  canHold,
 }: InventoryBoardProps) {
   const router = useRouter();
+
+  // Rebuilt once per snapshot, not per render: everything below depends on the
+  // identity of `units`.
+  const { towers, units } = useMemo(() => expandCatalogue(catalogue), [catalogue]);
 
   const knownUnitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
   const { live, skewMs, lastSyncedAt, isFetching, isPaused, error, unknownUnitIds, refreshNow } =
@@ -562,6 +570,7 @@ export function InventoryBoard({
           onClose={handleCloseDrawer}
           isHolding={isHolding}
           holdError={holdError}
+          canHold={canHold}
           onHold={handleTakeHold}
         />
       ) : null}

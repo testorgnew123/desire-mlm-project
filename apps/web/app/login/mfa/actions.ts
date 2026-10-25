@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { verifyMfaToken } from "@desire/services/mfa";
+import { getLandingPath } from "@/lib/landing";
 import { readPendingMfaUserId } from "../pending";
 import { establishSession } from "../session";
 
@@ -20,5 +21,5 @@ export async function verifyMfaAction(formData: FormData): Promise<void> {
   }
 
   await establishSession(db, userId);
-  redirect("/");
+  redirect(await getLandingPath(db, userId));
 }

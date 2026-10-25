@@ -27,6 +27,7 @@ import type {
   Unit,
 } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
+import { assertPlotsOnlyBasis, assertPlotsOnlyGroup } from "./plots-only";
 import { assertPermission, ForbiddenError } from "./rbac";
 import { UnitNotFoundError } from "./holds";
 
@@ -597,6 +598,7 @@ export async function createTowerInTx(
   params: CreateTowerParams,
   actorId: string,
 ): Promise<Tower> {
+  assertPlotsOnlyGroup(params.kind);
   const kind: UnitGroupKind = params.kind ?? "TOWER";
   assertTowerFloors(kind, params.totalFloors);
 
@@ -650,6 +652,7 @@ export async function createUnitType(
 ): Promise<UnitType> {
   const actorId = requireActor(params.audit);
 
+  assertPlotsOnlyBasis(params.areaBasis);
   const basis: AreaBasis = params.areaBasis ?? "SQFT";
   const areas: UnitTypeAreas = {
     carpetArea: params.carpetArea == null ? null : toArea(params.carpetArea),
@@ -729,6 +732,8 @@ export async function createUnit(db: PrismaClient, params: CreateUnitParams): Pr
       const group = params.towerId
         ? await assertTowerInProject(tx, params.towerId, params.projectId)
         : null;
+      assertPlotsOnlyBasis(unitTypeBasis(unitType));
+      if (group) assertPlotsOnlyGroup(group.kind);
       assertUnitFloor(group?.kind ?? null, params.floor);
 
       const overrides: UnitAreaOverrides = {

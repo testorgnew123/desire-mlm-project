@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
+import { disabledRewrites } from "./lib/features";
 
 const nextConfig: NextConfig = {
+  // Every page and API prefix of a switched-off feature (lib/features.ts) is
+  // rewritten to a 404 before the filesystem is consulted. A rewrite rather than
+  // middleware: it needs no edge function, costs enabled paths nothing, and
+  // still catches typed URLs, prefetches and server-action POSTs.
+  async rewrites() {
+    return { beforeFiles: disabledRewrites(), afterFiles: [], fallback: [] };
+  },
+
   // packages/db and packages/services are workspace SOURCE packages -- their
   // package.json main points at .ts, so Next has to transpile them.
   transpilePackages: ["@desire/services", "@desire/db"],
