@@ -33,6 +33,8 @@ export interface UnitDrawerProps {
    *  verbatim (docs/08-SCREENS.md: "never a generic error"). Cleared by the
    *  parent whenever the selected unit changes. */
   holdError: string | null;
+  /** False for a viewer with no associate profile: no Hold button is drawn. */
+  canHold: boolean;
   onHold: () => void;
 }
 
@@ -59,6 +61,7 @@ export function UnitDrawer({
   onClose,
   isHolding,
   holdError,
+  canHold,
   onHold,
 }: UnitDrawerProps) {
   const headingId = useId();
@@ -186,7 +189,7 @@ export function UnitDrawer({
             </section>
           ) : null}
 
-          {status === "AVAILABLE" ? (
+          {status === "AVAILABLE" && canHold ? (
             <section>
               <button
                 type="button"

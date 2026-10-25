@@ -62,3 +62,4 @@ export function getPrismaClient(): PrismaClient {
 
 export * from "./generated/prisma/client";
 export * from "./permission-matrix";
+export * from "./scope";

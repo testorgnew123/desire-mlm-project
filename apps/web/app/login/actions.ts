@@ -7,9 +7,8 @@
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { AccountLockedError, InvalidCredentialsError, attemptLogin } from "@desire/services/password";
-import { userRequiresMfa } from "@desire/services/auth";
-import { setPendingMfaCookie } from "./pending";
-import { establishSession } from "./session";
+import { continueAfterPassword } from "./continue";
+import { setPendingPasswordChangeCookie } from "./pending";
 
 export async function loginAction(formData: FormData): Promise<void> {
   const email = String(formData.get("email") ?? "")
@@ -33,10 +32,12 @@ export async function loginAction(formData: FormData): Promise<void> {
 
   let userId: string;
   let mfaEnabled: boolean;
+  let mustChangePassword: boolean;
   try {
     const { user } = await attemptLogin(db, email, org.id, password);
     userId = user.id;
     mfaEnabled = user.mfaEnabled;
+    mustChangePassword = user.mustChangePassword;
   } catch (error) {
     if (error instanceof AccountLockedError) {
       redirect(`/login?error=account_locked&until=${encodeURIComponent(error.lockedUntil.toISOString())}`);
@@ -47,16 +48,12 @@ export async function loginAction(formData: FormData): Promise<void> {
     throw error;
   }
 
-  if (mfaEnabled) {
-    await setPendingMfaCookie(userId);
-    redirect("/login/mfa");
+  // A temporary password (new account, admin reset) is good for exactly one
+  // thing: choosing a real one. No session exists until that is done.
+  if (mustChangePassword) {
+    await setPendingPasswordChangeCookie(userId);
+    redirect("/login/change-password");
   }
 
-  if (await userRequiresMfa(db, userId)) {
-    await setPendingMfaCookie(userId);
-    redirect("/login/mfa-enroll");
-  }
-
-  await establishSession(db, userId);
-  redirect("/");
+  await continueAfterPassword(db, userId, mfaEnabled);
 }

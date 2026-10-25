@@ -37,16 +37,9 @@ function csvCell(value: string): string {
  *  would leave junk in live inventory. To use an example, delete the # in front
  *  of its unit number. The examples use this project's own unit type codes when
  *  it has them, so an uncommented row is close to valid as it stands. */
-function buildTemplate(
-  unitTypes: ReadonlyArray<{ code: string; basis: "SQFT" | "SQYD" }>,
-  facings: readonly string[],
-): string {
-  const flatCode = unitTypes.find((type) => type.basis === "SQFT")?.code ?? "3BHK";
-  const plotCode = unitTypes.find((type) => type.basis === "SQYD")?.code ?? "PLOT-200";
-  const typeList =
-    unitTypes.length > 0
-      ? unitTypes.map((type) => `${type.code} (${type.basis === "SQYD" ? "plot" : "flat"})`).join(", ")
-      : "none yet - add one first";
+function buildTemplate(unitTypes: ReadonlyArray<{ code: string }>, facings: readonly string[]): string {
+  const plotCode = unitTypes[0]?.code ?? "PLOT-200";
+  const typeList = unitTypes.length > 0 ? unitTypes.map((type) => type.code).join(", ") : "none yet - add one first";
 
   const note = (text: string) => csvCell(`# ${text}`);
   const lines = [
@@ -54,19 +47,17 @@ function buildTemplate(
     note(
       "Lines whose first cell starts with # are ignored, so these notes and examples import nothing. To use an example, delete the # in front of its unit number and edit the row.",
     ),
-    note("unitNumber (required): unique across the whole project, e.g. A-101 for a flat or B-17 for a plot."),
-    note(`unitTypeCode (required): must match one of this project's unit types: ${typeList}.`),
-    note("floor: a whole number for a unit inside a TOWER. Leave it EMPTY for a plot inside a BLOCK (a plot has no floor)."),
+    note("unitNumber (required): unique across the whole project, e.g. B-17."),
+    note(`unitTypeCode (required): must match one of this project's plot types: ${typeList}.`),
+    note("floor: leave it EMPTY. A plot has no floor."),
     note(`facing (optional): one of ${facings.join(", ")}.`),
     note(
-      "plcTags (optional): preferred-location tags such as CORNER or PARK_FACING. Separate several with a pipe, e.g. CORNER|PARK_FACING. Each tag needs a charge in the price list before the unit can be priced.",
+      "plcTags (optional): preferred-location tags such as CORNER or PARK_FACING. Separate several with a pipe, e.g. CORNER|PARK_FACING. Each tag needs a charge in the price list before the plot can be priced.",
     ),
     note(
-      "carpetAreaOverride and saleableAreaOverride (optional): only when this unit differs from its unit type. Leave empty to use the type's area.",
+      "carpetAreaOverride and saleableAreaOverride (optional): only when this plot differs from its plot type. Leave empty to use the type's area.",
     ),
-    note("Example - a flat inside a tower (choose that tower as the import target):"),
-    `#A-1204,${csvCell(flatCode)},12,E,PARK_FACING,,`,
-    note("Example - a corner plot inside a block (choose that block as the import target):"),
+    note("Example - a corner plot (choose its block as the import target):"),
     `#B-17,${csvCell(plotCode)},,N,CORNER,,`,
   ];
   return `${lines.join("\r\n")}\r\n`;
@@ -87,8 +78,10 @@ export function UnitImportForm({
   facings,
 }: {
   projectId: string;
-  towers: ReadonlyArray<{ id: string; code: string; kind: "TOWER" | "BLOCK" }>;
-  unitTypes: ReadonlyArray<{ code: string; basis: "SQFT" | "SQYD" }>;
+  /** Blocks only: nothing but plotted blocks can be loaded with units now. */
+  towers: ReadonlyArray<{ id: string; code: string }>;
+  /** Plot types only. */
+  unitTypes: ReadonlyArray<{ code: string }>;
   facings: readonly string[];
 }) {
   const router = useRouter();
@@ -143,12 +136,12 @@ export function UnitImportForm({
         <select
           name="towerId"
           aria-label="Import into"
+          required
           className="h-9 flex-1 rounded-md border border-border bg-background px-2 text-sm"
         >
-          <option value="">No tower or block</option>
           {towers.map((tower) => (
             <option key={tower.id} value={tower.id}>
-              {tower.code} — {tower.kind === "BLOCK" ? "block" : "tower"}
+              {tower.code} — block
             </option>
           ))}
         </select>
@@ -172,9 +165,9 @@ export function UnitImportForm({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        The template explains each column and has an example flat and an example plot. Lines
-        starting with <code>#</code> are notes and are ignored. Leave <code>floor</code> empty for
-        plots in a block. Nothing is imported unless every row is valid.
+        The template explains each column and has an example plot. Lines starting with{" "}
+        <code>#</code> are notes and are ignored. Leave <code>floor</code> empty. Nothing is
+        imported unless every row is valid.
       </p>
 
       {message ? (

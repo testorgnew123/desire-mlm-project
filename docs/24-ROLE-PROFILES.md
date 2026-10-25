@@ -1,5 +1,12 @@
 # 24 — Role Profiles: who does what
 
+> **Active scope (2026-10-25).** Only three profiles are in use today:
+> **Super Admin**, **Admin** and **Associate** (see the note at the top of
+> [09-RBAC-MATRIX](09-RBAC-MATRIX.md)). The Admin profile is new and is not
+> described below; it covers projects, plots, price lists, confirming bookings and
+> managing associate accounts. The other five profiles below are the design for
+> when their features return, and no account can be given them.
+
 A plain-language guide to the eight profiles: what each one is for, what it can
 do, what it deliberately cannot, and what it sees when it signs in.
 

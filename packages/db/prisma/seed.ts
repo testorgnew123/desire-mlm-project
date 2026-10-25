@@ -202,14 +202,15 @@ async function seedPricing() {
     return;
   }
 
-  // Maker-checker (docs/09-RBAC-MATRIX.md): pricelist.prepare belongs to
-  // PROJECT_MANAGER, pricelist.approve to SALES_HEAD. Two distinct seeded
-  // users, so the row asserts an approval that genuinely happened.
+  // ADMIN prepares, SUPER_ADMIN approves. Two distinct seeded users, so the row
+  // asserts an approval that genuinely happened (ADMIN holds both permissions
+  // today, so a real list may be published by one person -- see
+  // permission-matrix.ts).
   const preparer = await prisma.user.findUniqueOrThrow({
-    where: { orgId_email: { orgId: ORG_ID, email: "project_manager@demo.test" } },
+    where: { orgId_email: { orgId: ORG_ID, email: "admin@demo.test" } },
   });
   const approver = await prisma.user.findUniqueOrThrow({
-    where: { orgId_email: { orgId: ORG_ID, email: "sales_head@demo.test" } },
+    where: { orgId_email: { orgId: ORG_ID, email: "super_admin@demo.test" } },
   });
 
   const publishedAt = new Date("2024-01-01");
@@ -304,7 +305,7 @@ async function seedDemoPayoutBatch() {
     where: { orgId_code: { orgId: ORG_ID, code: "A-DEMO-ASSOCIATE" } },
   });
   const preparer = await prisma.user.findUniqueOrThrow({
-    where: { orgId_email: { orgId: ORG_ID, email: "finance_admin@demo.test" } },
+    where: { orgId_email: { orgId: ORG_ID, email: "admin@demo.test" } },
   });
   const approver = await prisma.user.findUniqueOrThrow({
     where: { orgId_email: { orgId: ORG_ID, email: "super_admin@demo.test" } },
@@ -383,11 +384,10 @@ async function seedTestUsers() {
       await prisma.userRole.create({ data: { userId: user.id, roleId: role.id, projectId: null } });
     }
 
-    // ASSOCIATE and TEAM_LEAD map to real sales associates -- give them an
-    // Associate record so hold/booking/commission flows have something to
-    // reference. The admin-shaped roles (finance, project manager, etc.)
+    // ASSOCIATE maps to a real sales associate -- give it an Associate record
+    // so hold/booking flows have something to reference. SUPER_ADMIN and ADMIN
     // deliberately do not get one -- they are not sellers.
-    if (roleCode === "ASSOCIATE" || roleCode === "TEAM_LEAD") {
+    if (roleCode === "ASSOCIATE") {
       const associate = await prisma.associate.upsert({
         where: { userId: user.id },
         update: {},
@@ -401,9 +401,8 @@ async function seedTestUsers() {
         },
       });
 
-      const gradeCode = roleCode === "TEAM_LEAD" ? "G3" : "G1";
       const grade = await prisma.grade.findUniqueOrThrow({
-        where: { orgId_code: { orgId: ORG_ID, code: gradeCode } },
+        where: { orgId_code: { orgId: ORG_ID, code: "G1" } },
       });
 
       const hasGrade = await prisma.associateGrade.findFirst({ where: { associateId: associate.id } });

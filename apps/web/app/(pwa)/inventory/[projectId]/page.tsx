@@ -2,12 +2,9 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
-import { effectiveUnitStatus } from "@desire/services/holds";
-import { formatArea } from "@/lib/money";
-import type { GroupKind } from "@/lib/groups";
 import { getSession } from "@/lib/session";
 import { InventoryGrid } from "./InventoryGrid";
-import type { BoardUnit } from "@/app/board/[projectId]/types";
+import { buildCatalogue } from "@/app/board/[projectId]/build-catalogue";
 
 // Same reasoning as the desktop board: inventory that is cached is
 // inventory that is wrong.
@@ -19,9 +16,9 @@ export const metadata: Metadata = {
 
 /** Mobile, single-column unit list for one project -- the PWA's version of
  *  the desktop board (docs/08-SCREENS.md). Reuses the exact same catalogue
- *  shape (BoardUnit) and delta-poll hook (useUnitDeltas, via InventoryGrid)
+ *  (build-catalogue.ts) and delta-poll hook (useUnitDeltas, via InventoryGrid)
  *  as the desktop screen rather than a second implementation; only the
- *  layout differs (flat list, not a tower/floor grid). */
+ *  layout differs (one block at a time, not a tower/floor grid). */
 export default async function PwaInventoryProjectPage({
   params,
 }: {
@@ -32,50 +29,64 @@ export default async function PwaInventoryProjectPage({
 
   const session = await getSession();
   if (!session) notFound();
-  try {
-    await assertPermission(db, session.user.id, "unit.read", { projectId });
-  } catch (error) {
-    if (error instanceof ForbiddenError) notFound();
-    throw error;
-  }
   const orgId = session.user.orgId;
 
   const readStartedAt = new Date();
 
-  const project = await db.project.findUnique({
-    where: { id: projectId, orgId },
-    select: { id: true, code: true, name: true },
-  });
-  if (!project) notFound();
-
-  const towers = await db.tower.findMany({
-    where: { projectId, orgId },
-    select: { id: true, code: true, kind: true },
-  });
-  const towerCodeById = new Map(towers.map((tower) => [tower.id, tower.code]));
-  const towerKindById = new Map(towers.map((tower) => [tower.id, tower.kind]));
-
-  const rows = await db.unit.findMany({
-    where: { orgId, projectId },
-    select: {
-      id: true,
-      unitNumber: true,
-      floor: true,
-      towerId: true,
-      facing: true,
-      plcTags: true,
-      status: true,
-      blockReason: true,
-      currentHoldId: true,
-      updatedAt: true,
-      carpetAreaOverride: true,
-      saleableAreaOverride: true,
-      unitType: {
-        select: { id: true, code: true, name: true, bedrooms: true, areaBasis: true, carpetArea: true, builtUpArea: true, saleableArea: true },
+  // Four independent reads, started together. This page used to run them one
+  // after another (permission, project, towers, units, associate), and each is a
+  // round trip to a database a long way from the function -- so the page took the
+  // SUM of them, not the slowest. The permission check is among them rather than
+  // before them: nothing read here reaches the response unless it passes, and a
+  // caller who fails it (rare) wastes three cheap reads.
+  const [permission, project, towers, rows] = await Promise.all([
+    assertPermission(db, session.user.id, "unit.read", { projectId }).then(
+      () => null,
+      (error: unknown) => error,
+    ),
+    db.project.findUnique({
+      where: { id: projectId, orgId },
+      select: { id: true, code: true, name: true },
+    }),
+    db.tower.findMany({
+      where: { projectId, orgId },
+      select: { id: true, code: true, name: true, kind: true },
+      orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
+    }),
+    db.unit.findMany({
+      where: { orgId, projectId },
+      select: {
+        id: true,
+        unitNumber: true,
+        floor: true,
+        towerId: true,
+        facing: true,
+        plcTags: true,
+        status: true,
+        blockReason: true,
+        currentHoldId: true,
+        updatedAt: true,
+        carpetAreaOverride: true,
+        saleableAreaOverride: true,
+        unitType: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            bedrooms: true,
+            areaBasis: true,
+            carpetArea: true,
+            builtUpArea: true,
+            saleableArea: true,
+          },
+        },
       },
-    },
-    orderBy: [{ floor: "desc" }, { unitNumber: "asc" }],
-  });
+      orderBy: [{ floor: "desc" }, { unitNumber: "asc" }],
+    }),
+  ]);
+  if (permission instanceof ForbiddenError) notFound();
+  if (permission) throw permission;
+  if (!project) notFound();
 
   const holdIds = rows.map((row) => row.currentHoldId).filter((id): id is string => id !== null);
   const holds = holdIds.length
@@ -89,58 +100,23 @@ export default async function PwaInventoryProjectPage({
         },
       })
     : [];
-  const holdById = new Map(holds.map((hold) => [hold.id, hold]));
 
-  const myAssociate = await db.associate.findUnique({ where: { userId: session.user.id }, select: { id: true } });
-
-  const units: (BoardUnit & {
-    towerCode: string | null;
-    towerKind: GroupKind | null;
-    isMine: boolean;
-  })[] = rows.map((row) => {
-    const hold = row.currentHoldId ? (holdById.get(row.currentHoldId) ?? null) : null;
-    const status = effectiveUnitStatus({ status: row.status }, hold, readStartedAt);
-    const liveHold = status === "HELD" ? hold : null;
-
-    return {
-      id: row.id,
-      unitNumber: row.unitNumber,
-      floor: row.floor,
-      towerId: row.towerId,
-      towerCode: row.towerId ? (towerCodeById.get(row.towerId) ?? null) : null,
-      towerKind: row.towerId ? (towerKindById.get(row.towerId) ?? null) : null,
-      facing: row.facing,
-      plcTags: row.plcTags,
-      unitTypeId: row.unitType.id,
-      unitTypeCode: row.unitType.code,
-      unitTypeName: row.unitType.name,
-      bedrooms: row.unitType.bedrooms,
-      carpetArea: formatArea(
-        row.carpetAreaOverride ?? row.unitType.carpetArea,
-        "carpet",
-        row.unitType.areaBasis,
-      ),
-      builtUpArea: formatArea(row.unitType.builtUpArea, "builtUp", row.unitType.areaBasis),
-      saleableArea: formatArea(
-        row.saleableAreaOverride ?? row.unitType.saleableArea,
-        "saleable",
-        row.unitType.areaBasis,
-      )!,
-      blockReason: row.blockReason,
-      status,
-      currentHoldExpiresAt: liveHold ? liveHold.expiresAt.toISOString() : null,
-      heldByName: liveHold ? liveHold.associate.user.name : null,
-      heldByCode: liveHold ? liveHold.associate.code : null,
-      isMine: !!(myAssociate && liveHold && liveHold.associate.userId === session.user.id),
-      updatedAt: row.updatedAt.toISOString(),
-    };
+  // viewerUserId marks the live holds that are this associate's own -- a hold
+  // is theirs exactly when its associate row belongs to their user, so no
+  // separate lookup of their associate profile is needed.
+  const catalogue = buildCatalogue({
+    rows,
+    holds: new Map(holds.map((hold) => [hold.id, hold])),
+    towers: towers.map((tower) => ({ id: tower.id, code: tower.code, name: tower.name, kind: tower.kind })),
+    now: readStartedAt,
+    viewerUserId: session.user.id,
   });
 
   return (
     <InventoryGrid
       projectId={project.id}
       projectName={project.name}
-      units={units}
+      catalogue={catalogue}
       serverTime={readStartedAt.toISOString()}
     />
   );

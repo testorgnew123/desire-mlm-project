@@ -32,32 +32,24 @@ async function getPermissionCodes(
   userId: string,
   options: PermissionCheckOptions = {},
 ): Promise<Set<string>> {
-  // `select`, not `include`. Only permission.code is read below, and this
-  // walks three relation levels to reach it -- with `include` each level
-  // returned whole rows (Role's name/description/requiresMfa, every
-  // RolePermission column, every Permission column) on a query that runs on
-  // effectively every authenticated request.
-  const userRoles = await db.userRole.findMany({
-    where: {
-      userId,
-      OR: [{ projectId: null }, ...(options.projectId ? [{ projectId: options.projectId }] : [])],
-    },
-    select: {
-      role: {
-        select: {
-          rolePermissions: { select: { permission: { select: { code: true } } } },
-        },
-      },
-    },
-  });
-
-  const codes = new Set<string>();
-  for (const ur of userRoles) {
-    for (const rp of ur.role.rolePermissions) {
-      codes.add(rp.permission.code);
-    }
-  }
-  return codes;
+  // ONE statement. This used to be a Prisma findMany walking user_roles ->
+  // roles -> role_permissions -> permissions, and with relationJoins off
+  // (the generator declares no previewFeatures) every relation level is its own
+  // sequential round trip: four statements, on effectively every authenticated
+  // request AND inside every transaction that asserts a permission. A plain join
+  // returns exactly what was read and nothing else -- the permission codes.
+  //
+  // A role granted org-wide (projectId IS NULL) always counts; one scoped to a
+  // project counts only when that project is the one being asked about.
+  const rows = await db.$queryRaw<{ code: string }[]>`
+    SELECT DISTINCT p."code"
+    FROM "user_roles" ur
+    JOIN "role_permissions" rp ON rp."roleId" = ur."roleId"
+    JOIN "permissions" p ON p."id" = rp."permissionId"
+    WHERE ur."userId" = ${userId}
+      AND (ur."projectId" IS NULL OR ur."projectId" = ${options.projectId ?? null}::text)
+  `;
+  return new Set(rows.map((row) => row.code));
 }
 
 /** Public wrapper around getPermissionCodes -- the one-round-trip permission

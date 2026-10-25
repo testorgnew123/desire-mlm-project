@@ -11,6 +11,8 @@
 // as CSV covers the actual need.
 import { getPrismaClient } from "@desire/db";
 import { SessionInvalidError, validateSession } from "@desire/services/auth";
+import { PlotsOnlyError } from "@desire/services/plots-only";
+import { ProjectReraInvalidError } from "@desire/services/projects";
 import { ForbiddenError } from "@desire/services/rbac";
 import {
   UnitImportConflictError,
@@ -219,8 +221,16 @@ export async function POST(
     if (error instanceof ForbiddenError) {
       return problemResponse(403, "forbidden", "Forbidden", error.message);
     }
-    if (error instanceof UnitImportTargetError) {
+    if (error instanceof UnitImportTargetError || error instanceof PlotsOnlyError) {
       return problemResponse(422, "unprocessable-entity", "Unprocessable Entity", error.message);
+    }
+    if (error instanceof ProjectReraInvalidError) {
+      return problemResponse(
+        422,
+        "project-rera-invalid",
+        "RERA registration required",
+        "Plots can't be created until the project has a live RERA registration. Nothing was imported.",
+      );
     }
     throw error;
   }

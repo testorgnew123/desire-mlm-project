@@ -1,5 +1,25 @@
 # 09 — Roles, Permissions & Separation of Duties
 
+> ## Active scope (2026-10-25): three roles
+>
+> The product is currently cut down to plotted projects, booking a plot and user
+> admin, with exactly three kinds of user: **SUPER_ADMIN**, **ADMIN** and
+> **ASSOCIATE**. `packages/db/src/permission-matrix.ts` is what is granted today;
+> the eight-role design below (Finance Admin, Project Manager, Sales Head, Sales
+> Admin, Team Lead, Auditor) is kept as the design to return to when those
+> features are switched back on (`apps/web/lib/features.ts`). Where this page and
+> the code disagree about today, the code is right.
+>
+> - **ADMIN** runs projects, plots and price lists, confirms and cancels bookings,
+>   and manages **ASSOCIATE** accounts only (`user.manage`). It cannot create,
+>   promote, demote or reset an admin or superadmin: anything touching those needs
+>   `rbac.manage`, which only SUPER_ADMIN holds.
+> - **ASSOCIATE** browses plots, holds one and drafts a booking. It cannot confirm:
+>   the seller never confirms their own sale.
+> - A key for a switched-off feature is held by SUPER_ADMIN alone.
+> - Moving an existing database to this matrix is `packages/db/scripts/narrow-roles.ts`
+>   (dry run by default).
+
 Roles are **data** (`Role`, `Permission`, `RolePermission`), not an enum. Sales
 organisations restructure constantly and a hardcoded enum means a deploy every
 time they do.

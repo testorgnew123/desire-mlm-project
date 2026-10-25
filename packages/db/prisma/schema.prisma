@@ -432,6 +432,11 @@ model User {
   passwordHash String // argon2id
   status       UserStatus @default(INVITED)
 
+  /// True while the password is a temporary one somebody else chose (a new
+  /// account, an admin reset). Login sends the person to pick their own before
+  /// any session exists.
+  mustChangePassword Boolean @default(false)
+
   /// TOTP. Mandatory for SUPER_ADMIN, FINANCE_ADMIN, SALES_HEAD —
   /// enforced in the service layer, see docs/10-SECURITY.md.
   mfaSecret        String?
@@ -444,15 +449,33 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  org              Organization      @relation(fields: [orgId], references: [id])
-  associate        Associate?
-  userRoles        UserRole[]
-  sessions         Session[]
-  savedReportViews SavedReportView[]
+  org                 Organization         @relation(fields: [orgId], references: [id])
+  associate           Associate?
+  userRoles           UserRole[]
+  sessions            Session[]
+  savedReportViews    SavedReportView[]
+  passwordResetTokens PasswordResetToken[]
 
   @@unique([orgId, email])
   @@index([orgId, status])
   @@map("users")
+}
+
+/// A single-use link that lets someone who forgot their password choose a new
+/// one. Only the SHA-256 of the token is stored, like Session.tokenHash, so a
+/// copy of this table is not a set of working links.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("password_reset_tokens")
 }
 
 model Session {

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, CircleAlert } from "lucide-react";
+import { Building2, CircleAlert, CircleCheck } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,8 @@ export const metadata: Metadata = {
 interface LoginSearchParams {
   error?: string;
   until?: string;
+  /** "ok" after a password was changed through a reset link. */
+  reset?: string;
 }
 
 /** AccountLockedError/InvalidCredentialsError shown inline verbatim, no
@@ -47,7 +50,8 @@ export default async function LoginPage({
   const session = await getSession();
   if (session) redirect("/");
 
-  const error = errorMessage(await searchParams);
+  const params = await searchParams;
+  const error = errorMessage(params);
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted p-4">
@@ -75,6 +79,12 @@ export default async function LoginPage({
                 required
               />
             </div>
+            {params.reset === "ok" ? (
+              <p role="status" className="flex items-start gap-1.5 text-sm text-success">
+                <CircleCheck className="mt-0.5 size-4 shrink-0" />
+                Your password was changed. Sign in with the new one.
+              </p>
+            ) : null}
             {error ? (
               <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
@@ -84,6 +94,9 @@ export default async function LoginPage({
             <Button type="submit" className="w-full">
               Sign in
             </Button>
+            <Link href="/login/forgot" className="text-center text-sm text-primary hover:underline">
+              Forgot password?
+            </Link>
           </form>
         </CardContent>
       </Card>

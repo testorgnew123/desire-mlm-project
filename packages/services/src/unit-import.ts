@@ -14,10 +14,11 @@
 // uploaded CSV/XLSX into plain objects and hands them over, the same division
 // docs/07-API.md draws for every other endpoint -- handlers validate shape,
 // services hold the rules.
-import { Prisma } from "@desire/db";
+import { Prisma, SCOPE } from "@desire/db";
 import type { UnitGroupKind } from "@desire/db";
 import type { PrismaClient } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
+import { PlotsOnlyError, assertPlotsOnlyGroup } from "./plots-only";
 import { assertPermission, ForbiddenError } from "./rbac";
 import { ProjectReraInvalidError, resolveUnitAreas, type UnitTypeAreas } from "./projects";
 
@@ -616,6 +617,7 @@ export async function importUnitsInTx(
         `Tower ${params.towerId} does not belong to project ${params.projectId}.`,
       );
     }
+    assertPlotsOnlyGroup(tower.kind);
     // Null for a BLOCK, which has no floors to bound against.
     towerTotalFloors = tower.totalFloors ?? undefined;
     targetGroupKind = tower.kind;
@@ -630,11 +632,21 @@ export async function importUnitsInTx(
     select: {
       id: true,
       code: true,
+      areaBasis: true,
       carpetArea: true,
       builtUpArea: true,
       saleableArea: true,
     },
   });
+  if (SCOPE.plotsOnly) {
+    const notPlots = new Set(unitTypes.filter((type) => type.areaBasis !== "SQYD").map((type) => type.code));
+    const flat = params.rows.find((row) => typeof row.unitTypeCode === "string" && notPlots.has(row.unitTypeCode));
+    if (flat) {
+      throw new PlotsOnlyError(
+        `Unit type "${String(flat.unitTypeCode)}" is a flat type; plots need a plot type (square yards).`,
+      );
+    }
+  }
   const unitTypeIdByCode = new Map(unitTypes.map((type) => [type.code, type.id]));
   const unitTypeAreas: [string, UnitTypeAreas][] = unitTypes.map((type) => [
     type.code,

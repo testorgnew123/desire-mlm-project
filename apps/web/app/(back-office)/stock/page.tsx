@@ -10,10 +10,12 @@ export const metadata: Metadata = {
   title: "Inventory — Desire",
 };
 
-/** Inventory hub (docs/08-SCREENS.md: "Inventory -- Live board · Stock
- *  statement · Active holds · Blocked units"). The live board is already
- *  built and stays at its own path (apps/web/app/board/[projectId]) --
- *  linked in here per-project, not moved. */
+/** Inventory hub: one card per project, each opening the live board at its own
+ *  path (apps/web/app/board/[projectId]) -- linked in here, not moved. The stock
+ *  statement, active-holds and blocked-units screens
+ *  (docs/08-SCREENS.md: "Inventory -- Live board · Stock statement · Active
+ *  holds · Blocked units") are switched off (apps/web/lib/features.ts), so their
+ *  cards are gone too. */
 export default async function InventoryHubPage() {
   const session = await requireSession();
   const db = getPrismaClient();
@@ -27,33 +29,6 @@ export default async function InventoryHubPage() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Inventory</h1>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Link href="/stock/holds">
-          <Card>
-            <CardHeader>
-              <CardTitle>Active holds</CardTitle>
-              <CardDescription>Every live hold, org-wide</CardDescription>
-            </CardHeader>
-          </Card>
-        </Link>
-        <Link href="/stock/blocked">
-          <Card>
-            <CardHeader>
-              <CardTitle>Blocked units</CardTitle>
-              <CardDescription>Currently blocked, with reason</CardDescription>
-            </CardHeader>
-          </Card>
-        </Link>
-        <Link href="/stock/statement">
-          <Card>
-            <CardHeader>
-              <CardTitle>Stock statement</CardTitle>
-              <CardDescription>Units by tower or block, type and status</CardDescription>
-            </CardHeader>
-          </Card>
-        </Link>
-      </div>
 
       <div>
         <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Live board</h2>
