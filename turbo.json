@@ -28,6 +28,13 @@
       "dependsOn": ["^build"]
     },
     "lint": {},
+    // Run through the root scripts with --concurrency=1, on purpose. Every package
+    // with database tests (db, services, web) shares ONE database, and
+    // `permissions` is a global table: services' price-lists tests delete rows
+    // from it, and the db and web suites create and delete rows in it. Side by side
+    // they fail on each other's rows (a unique violation on user.manage, a foreign
+    // key on role_permissions); each suite passes on its own, and one after the
+    // other.
     "test": {
       "dependsOn": ["^build"],
       "env": [
