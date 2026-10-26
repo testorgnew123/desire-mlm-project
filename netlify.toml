@@ -19,9 +19,16 @@
 # pnpm-workspace monorepo where schema.prisma isn't at a conventional root
 # path. Confirmed by a real deploy failing with "@prisma/client did not
 # initialize yet" before this was added.
+# `migrate-on-deploy.sh` applies pending Prisma migrations BEFORE the app is
+# built, on production builds only (CONTEXT=production). Netlify publishes a
+# build only once it has finished, so the schema is always in place before the
+# code that reads it goes live; merging used to publish the code with nothing
+# migrating the database (PR 8: sign-ins failed for a few minutes). A preview is
+# skipped -- it has its own Neon branch, migrated by neon-preview-branches.yml --
+# and a production build with no DATABASE_URL_UNPOOLED FAILS rather than skips.
 [build]
   base = "apps/web"
-  command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/db exec prisma generate && pnpm --filter @desire/web build"
+  command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @desire/db exec prisma generate && sh packages/db/scripts/migrate-on-deploy.sh && pnpm --filter @desire/web build"
   publish = ".next"
   # `base = apps/web` makes Netlify's default change-detection only look at
   # files inside that folder -- a real deploy was silently SKIPPED
