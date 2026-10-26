@@ -435,6 +435,128 @@
 > | Fewer round trips on the request path | Every kept page lost 3-4 statements to the two joins; the table above has each route's count. The budget's "≤ 4 sequential round trips per page" was framed in round trips but measured in statements; pages that read in parallel (the PWA grid, the board) are shallower than their count, the rest are not provably ≤ 4. |
 > | Hold, draft and confirm cut by ≥ 40% | **Not met**: hold 23 → 18 (-22%), draft 25 → 20 (-20%), confirm 35 → 30 (-14%), cancel 19 → 15 (-21%), nearly all of it from the permission and session joins. Reason above. Reason above. |
 
+> ## Round six, 2026-10-26: the whole user and booking journey, the live site from India, and cold start
+>
+> The client said RERA registration is not mandatory (PROGRESS.md decision log, 2026-10-26: both guards are gone) and asked for every page and API listed and timed, the complete user-creation and plot-booking flow run, the slow places named with reasons, and fixes. Rounds one to five timed single routes on a local build; this round times the **journey** (admin creates an associate, the associate signs in and is forced to change the password, an admin sets up a plotted project, the associate books a plot, the admin confirms) and, for the first time, the **live site from India** and the **cold start**.
+>
+> ### The surface
+>
+> 20 live pages, 11 live route handlers (counting the `/api/disabled` sentinel), 19 Server Actions reachable from a live page. 33 pages and 41 routes of switched-off features answer 404 in about 3 ms (local `/dashboard`, p50 2.6 ms). `api-smoke.ts` calls every one as each role and as nobody: **146 checks, 0 failed**.
+>
+> ### How it was measured
+>
+> - **Local:** a production build on `localhost:3011`, a fresh database seeded by `perf-seed.ts` (one plotted project of 2,000 plots in 20 blocks, 50 associates, 200 bookings, **no RERA anywhere**), Postgres `log_statement = 'all'` to count statements, an SMTP stand-in (`smtp-sink.mjs`, answering after a settable delay) so the emailed password is real. `perf-run.ts`, two full runs, the better of the two per route (the two agreed closely). `perf-run.ts` now also runs the journey as a chain (`FLOW_RUNS`, default 10): each Server Action is called as a plain form post, each step is timed and its statements counted.
+> - **Live:** logged-out requests with `curl` (reused and fresh connections, `/cdn-cgi/trace`), idle-gap probes of `/api/health`, and signed-in read-only GETs from the built-in browser while the admin was signed in (4 sequential GETs per URL, no clicks that write).
+>
+> ### Live, from this PC in India (Mon 12:50-14:30 IST)
+>
+> | What | Result |
+> |---|---|
+> | Cloudflare edge serving this PC | **Marseille** (`colo=MRS`, `loc=IN`); RTT to the edge 210-255 ms. Round three assumed ~80 ms. Free-plan traffic from India is reported to be served from a far PoP depending on the ISP's peering; this was not checked from a second network. |
+> | Warm dynamic request, reused connection | `/api/health` **440-470 ms** (one `SELECT 1`, `durationMs` 2-3); `curl` over a reused connection 350-390 ms |
+> | Every signed-in page and read-only API (warm) | **0.45-0.65 s**, whatever the server work (1-15 statements): `/projects` 0.50-0.57, `/stock` 0.5-0.57, `/board/[id]` 0.50, `/bookings` 0.55, `/bookings/[id]` 0.50, `/admin/users` 0.53, `/inventory/[id]` 0.53, `/my-bookings` 0.6, deltas API 0.54 |
+> | Fresh connection (TCP + TLS + request) | 0.7-1.2 s over HTTP/1.1; the browser uses HTTP/3 |
+> | Direct Netlify host (Singapore edge, no Cloudflare) | warm 0.40-0.47 s, the same as through Cloudflare; connect 110 ms against 170-230 ms |
+> | **First request after 6.7 minutes idle** (13:01, 13:08, 13:15, inside the keep-warm window) | **8.46 s, 8.48 s, 2.14 s**; the database wake inside the function was 4.62 s, 4.51 s, 0.85 s. A browser load after the PC restarted: 8.17 s for a page that runs no query |
+> | Compression | assets `br`, immutable, Cloudflare `HIT`; dynamic HTML `zstd` |
+>
+> **`infra/keepalive-worker` is not effective.** Its cron covers 09:30-19:29 IST on weekdays; three probes inside that window, each 6.7 minutes after the last request, were all cold. Either it was never deployed or it fails.
+>
+> ### Local, every kept route (best of two runs; ms; statements are exact)
+>
+> | Route | stmts | KB | p50 | p95 |
+> |---|---:|---:|---:|---:|
+> | GET /login | 1 | 20.7 | 7.5 | 9.8 |
+> | GET /api/health | 2 | 0.2 | 3.9 | 5.3 |
+> | GET /projects | 5 | 61.8 | 19.9 | 23.8 |
+> | GET /projects/[id] | 8 | 109.2 | 24.4 | 33.5 |
+> | GET /projects/new | 3 | 92 | 17.6 | 22.8 |
+> | GET /stock | 4 | 57.4 | 15 | 21.7 |
+> | GET /board/[id] (2,000 plots) | 11 | 376 | 74 | 91.8 |
+> | GET /bookings | 10 | 308.1 | 58.9 | 71.3 |
+> | GET /bookings/[id] (confirmed / draft) | 12 / 15 | 62.9 / 59.4 | 24.4 / 24.7 | 27.4 / 38.8 |
+> | GET /admin/users | 7 | 408.9 | 48.7 | 53 |
+> | GET /inventory (associate) | 4 | 31.3 | 12.5 | 16.9 |
+> | GET /inventory/[id] (associate, 2,000 plots) | 11 | 390.9 | 69.7 | 82 |
+> | GET /inventory/[id]/[unitId]/book | 9 | 39.3 | 15.7 | 18.9 |
+> | GET /my-bookings (associate) | 10 | 37.2 | 19.6 | 25.4 |
+> | GET /login/forgot, /login/reset?token=x | 1, 2 | 17.6, 14.7 | 6.5, 7 | 8.3, 9.6 |
+> | GET / (signed in / out, both 307) | 4 / 1 | 8.2 | 10.6 / 6.7 | 12.8 / 10 |
+> | GET units/deltas (full / since=now) | 5 / 4 | 312 / 0.1 | 23.8 / 8.2 | 29.8 / 10.2 |
+> | GET /api/v1/bookings/[id] | 7 | 0.7 | 12.8 | 15.4 |
+> | GET /dashboard (switched off, 404) | 1 | 12.1 | 2.6 | 4 |
+> | POST holds / draft / confirm / cancel (REST) | 18 / 20 / 30 / 15 | - | 34.8 / 38.1 / 57 / 31.5 | 61.3 / 52.5 / 80.1 / 49 |
+> | POST /api/jobs/holds/expire | 2 | 0 | 4.8 | 10.5 |
+>
+> The slowest page is the board at 74 ms. The application's own work is not where the time goes.
+>
+> ### The journey, step by step
+>
+> p50 of 10 warm iterations after one cold; server work only. The Server Action rows are the POST alone: in a browser the next page is rendered inside that response (or fetched right after it, see below).
+>
+> | Step | stmts | local p50 ms | model for the live site |
+> |---|---:|---:|---|
+> | Admin: GET /admin/users | 7 | 50.3 | 0.53 s |
+> | Admin: **create user + email** (associate) | 15 | **133.4** | POST 0.65 s + the mail's round trips, then a GET 0.53 s |
+> | Associate: GET /login | 1 | 7.3 | 0.46 s |
+> | Associate: **sign in** with the temporary password | 4 | 30 | 0.50 s |
+> | Associate: **change password** | 11 | 55.7 | 0.56 s |
+> | Admin: create project (no RERA) | 7 | 17.1 | 0.50 s |
+> | Admin: plot type | 8 | 18.7 | 0.51 s |
+> | Admin: **block + 20 plots** | 17 | 42.9 | 0.57 s |
+> | Admin: price list draft / publish | 13 / 12 | 24.2 / 24.1 | 0.53 s each |
+> | Associate: **book a plot** | **42** | **87.4** | 0.73 s, 0.80 s with the page it lands on |
+> | Admin: **confirm** | 29 | 57.9 | 0.64 s, 0.73 s with the page |
+> | Admin: cancel | 15 | 32.7 | 0.55 s, 0.64 s with the page |
+>
+> The model is `0.45 s (warm floor of a dynamic request) + local ms + 4.5 ms x statements` (a statement is about 6 ms against the colocated Ohio database, 1.5 ms here). Checked against the live reads above it is within about 0.1 s: `/bookings/[id]` (15 statements) models 0.54 s against 0.50 s measured, `/admin/users` 0.53 against 0.53, `/inventory/[id]` 0.50 against 0.53.
+>
+> **Create user, where the time goes** (local; the sink stands in for the mail provider):
+>
+> | argon2 hash | send the mail, sink 0 ms | send the mail, sink 150 ms | whole POST, sink 0 ms | whole POST, sink 150 ms |
+> |---:|---:|---:|---:|---:|
+> | 16 ms | 93 ms | 933 ms | 137-171 ms | 991-997 ms |
+>
+> The mail is awaited inside the request and costs **about six sequential SMTP round trips** (no pooling: every send opens a connection, says hello, names the sender and recipient, sends the data, quits). Against a provider 150 ms away it is 0.84 s of a 1.0 s action; against one 15 ms away it is about 0.1 s. Which it is on the live site is the one number this round could not take (it needs the live write flow, below).
+>
+> ### What a browser does (local, real UI)
+>
+> - **Sign in** is one request: the POST answers with the next page (63 KB decoded, 22 KB on the wire) and the browser then fetches 6 script chunks.
+> - **A redirect to another page** (create project and sign in were measured) is one request. **A redirect to the same URL** (update a role was measured; confirm, cancel, price list and plot type go through the same helper) is one request.
+> - **Create user is the exception: two requests** (the POST, then a separate GET of `/admin/users?issued=...`), because the banner rides on a query string that makes the target a different URL. Reset password has the same code path. About one extra round trip, 0.45 s on the live site.
+> - A sidebar click inside the 60 s router-cache window sends no request, as round four intended. List rows are the other thing: **`/bookings` prefetches one `?_rsc` shell per row** (30 in the first 160 ms locally, up to 100 on a full list) and `/projects` one per card. Each is a function invocation. Live today that is 3-4 requests (3 projects, 1 booking), so nothing to fix now; at 100 bookings it is 100 invocations per view against a 125k monthly budget. `prefetch={false}` on row links is the fix when the lists grow.
+>
+> ### Reasons, in the order a user feels them
+>
+> 1. **Cold start, 2-8.5 s, after any five idle minutes.** Neon's free tier suspends the database (0.85-4.6 s to wake) and the function itself starts cold (about 3 s in two probes, almost nothing in the third, 7+ s once after the PC restarted); the keep-warm Worker is not running. Nothing in the application can shorten a suspended database.
+> 2. **The network, 0.45 s per request, paid by every click and form.** About 0.21 s of it is this PC's route to a Marseille Cloudflare PoP, the rest is edge to Ohio and back (round four measured 0.40 s, today 0.44-0.47 s). A fresh connection adds about 0.5 s. Round three's conclusion stands: the function region is Pro-gated.
+> 3. **Create user's mail**: six SMTP round trips awaited inside the request, plus a second request for the banner.
+> 4. **Statements at 6 ms each in production**: book a plot is 42 of them (about 0.25 s), confirm 29. Reasonable, and guarded by 800+ tests; round five declined restructuring them.
+> 5. **Page weight** is not an issue at live volume: `/admin/users` is 73 KB gzip locally at 50 users, `/bookings` 78 KB at 100 rows.
+>
+> ### What changed
+>
+> - RERA is no longer required or checked (see the PROGRESS entry); a project without one can be populated, held, booked and confirmed. Proven at scale: `perf-seed.ts` now builds its 2,000-plot project with no RERA at all.
+> - `perf-run.ts` runs the journey and the missing pages (the commit message has the detail).
+> - **The sign-in page now wakes the database** while the person types (`components/warm-up.tsx`: one `GET /api/health` when the page opens). Verified: exactly one request per page open. It hides the database wake (0.85-4.6 s) behind the typing; it cannot hide the function's own cold start.
+>
+> ### Tried and reverted
+>
+> A shared submit button that disables itself and says "Working..." while a form's Server Action runs (`useFormStatus`). In Next 15.5.25 it **stalls same-page redirects**: the button stayed on "Working..." and the redirect landed only when the next action was submitted (reproduced in a visible, focused pane; the build without it behaves correctly). Not shipped. A pending indicator for these forms needs another design (an in-flight counter on `fetch` filtered by the `Next-Action` header, or `useActionState` with no redirect) and a Next upgrade is worth retrying first.
+>
+> ### Not changed, and why
+>
+> - **Statements in the booking chain** (42 / 29): round five's reasoning holds; ~0.1 s of a ~0.8 s click.
+> - **Create user's second request and the mail**: moving the mail to `after()` would take away the only way the admin learns the mail failed (the temporary password is shown only then), and Netlify's `after()` support is unverified. A single-request create user (`useActionState`, banner in client state, no temporary password in a URL) is the better redesign and also gives a pending state; not done here.
+> - **`prefetch` on list rows**: see above; not at today's volume.
+> - **Cloudflare**: the route to Marseille is this ISP's and Cloudflare's, not the application's. The options (a paid Cloudflare plan, serving the host from Netlify directly) are separate trade-offs; ask two or three associates to open `https://crm.desirerealty.in/cdn-cgi/trace` and send the `colo=` line first.
+>
+> ### Open for the client
+>
+> 1. **Deploy the keep-warm Worker** (`infra/keepalive-worker`, three commands in its README, free, about 55 of Neon's 100 CU-hours a month by the arithmetic in docs/21 section 12). It is the only free fix for the 2-8.5 s cold start; re-run the idle-gap probe afterwards (expect 0.4-1 s).
+> 2. A paid Netlify function region and/or a Neon plan with autosuspend off are the only ways to remove the cold start for good and to cut the 0.45 s floor.
+> 3. **The live write flow** (create a user on the live site, sign in as them, set up a labelled test project, book, confirm, cancel) was not run: until the RERA change is deployed the live guards refuse plots and holds without a registration. It also needs an inbox for the test associate's emailed password and the admin and associate to sign in themselves. It is what turns the mail's round trips from a model into a number.
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the
