@@ -819,7 +819,7 @@ model Project {
   name   String
   status ProjectStatus @default(PLANNING)
 
-  // ── RERA. Required before any unit may be marketed.
+  // ── RERA. Optional and informational; nothing in the app checks it.
   reraRegNo     String?
   reraValidTill DateTime?
   reraPortalUrl String?

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma, getPrismaClient } from "@desire/db";
-import { ProjectReraInvalidError, createUnit, createUnitType } from "@desire/services/projects";
+import { createUnit, createUnitType } from "@desire/services/projects";
 import { createBlockWithPlots } from "@desire/services/blocks";
 import { UnitImportRejectedError } from "@desire/services/unit-import";
 import { createDraftPriceList, publishPriceList } from "@desire/services/price-lists";
@@ -41,12 +41,6 @@ async function runAction(projectId: string, run: () => Promise<void>): Promise<v
  *  in terms of what the person did -- and, since a block and its plots are
  *  created in one transaction, that nothing was created. */
 function describePlotFailure(error: unknown): unknown {
-  if (error instanceof ProjectReraInvalidError) {
-    return new Error(
-      "Plots can't be created until the project has a live RERA registration. Nothing was " +
-        "created. Add the block without a plot count to create it on its own.",
-    );
-  }
   if (error instanceof UnitImportRejectedError) {
     const shown = error.report.errors.slice(0, 3).map((problem) => problem.message);
     const more = error.report.errors.length - shown.length;

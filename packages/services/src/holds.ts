@@ -178,11 +178,8 @@ export async function acquireHold(db: PrismaClient, params: AcquireHoldParams): 
 
         const project = await tx.project.findUniqueOrThrow({
           where: { id: unit.projectId },
-          select: { holdTtlMinutes: true, reraValidTill: true, reraRegNo: true },
+          select: { holdTtlMinutes: true },
         });
-        if (!project.reraRegNo || !project.reraValidTill || project.reraValidTill < now) {
-          throw new HoldGuardError("Project RERA registration is missing or expired; units cannot be held.");
-        }
 
         const activePriceList = await tx.priceList.findFirst({
           where: {

@@ -339,6 +339,18 @@ describe("the associate drafts, an admin confirms", () => {
     expect(await db.unitHold.count({ where: { unitId: plot.id, releaseReason: "CONVERTED_TO_BOOKING" } })).toBe(1);
   });
 
+  it("books and confirms a plot on a project with no RERA registration, which is not required", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    await db.project.update({ where: { id: f.project.id }, data: { reraRegNo: null, reraValidTill: null } });
+
+    const booked = await bookPlot(db, { unitId: plot.id, customer, audit: ctx(ORG, f.seller.user, "seller") });
+    const confirmed = await confirmBooking(db, { bookingId: booked.bookingId, audit: ctx(ORG, f.admin.user, "admin") });
+
+    expect(confirmed.status).toBe("CONFIRMED");
+    expect((await unitState(plot.id)).status).toBe("BOOKED");
+  });
+
   it("the seller cannot confirm their own sale", async () => {
     const f = await seedFixture();
     const booked = await bookPlot(db, { unitId: f.plots[0]!.id, customer, audit: ctx(ORG, f.seller.user, "seller") });

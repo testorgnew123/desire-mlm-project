@@ -96,12 +96,12 @@ describe("POST /api/v1/projects/[projectId]/units/import", () => {
     expect(await plotsNow()).toBe(3);
   });
 
-  it("answers 422 while the project has no live RERA registration, with nothing imported", async () => {
+  it("loads plots into a project with no RERA registration, which is not required", async () => {
     await db.project.update({ where: { id: w.project.id }, data: { reraRegNo: null, reraValidTill: null } });
     const response = await upload(w.admin.token, `${HEADER}\nB-01,PLOT-200,,,,,\n`);
-    expect(response.status).toBe(422);
-    expect(String((await body(response)).detail)).toMatch(/RERA/);
-    expect(await plotsNow()).toBe(3);
+    expect(response.status).toBe(200);
+    expect(await body(response)).toMatchObject({ imported: 1, skipped: 0 });
+    expect(await plotsNow()).toBe(4);
   });
 
   it("answers 422 for a block that belongs to another project", async () => {

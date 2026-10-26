@@ -141,11 +141,11 @@ describe("POST /api/v1/projects/[projectId]/units/[unitId]/holds", () => {
     expect(await unitStatus(w.plots[1]!.id)).toBe("AVAILABLE");
   });
 
-  it("answers 422 while the project has no live RERA registration", async () => {
+  it("takes the hold while the project has no RERA registration, which is not required", async () => {
     await db.project.update({ where: { id: w.project.id }, data: { reraRegNo: null, reraValidTill: null } });
     const response = await takeHold(w.seller.token, w.plots[0]!.id);
-    expect(response.status).toBe(422);
-    expect(String((await body(response)).detail)).toMatch(/RERA/);
+    expect(response.status).toBe(201);
+    expect(await unitStatus(w.plots[0]!.id)).toBe("HELD");
   });
 
   it("answers 422 while the project has no active price list", async () => {

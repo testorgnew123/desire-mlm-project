@@ -25,21 +25,12 @@ const SELECT_CLASS =
  *  transaction (createBlockWithPlots), numbered `<code>-01`, `<code>-02`, ...
  *  The preview line uses the very function the server uses, so what is shown is
  *  what is made. */
-export function GroupForm({
-  projectId,
-  plotTypes,
-  plotsBlockedReason,
-}: {
-  projectId: string;
-  plotTypes: PlotTypeOption[];
-  /** Why plots cannot be created with the block right now, or null. */
-  plotsBlockedReason: string | null;
-}) {
+export function GroupForm({ projectId, plotTypes }: { projectId: string; plotTypes: PlotTypeOption[] }) {
   const [code, setCode] = useState("");
   const [plotCount, setPlotCount] = useState("");
   const [plotTypeId, setPlotTypeId] = useState(plotTypes[0]?.id ?? "");
 
-  const plotsDisabled = plotsBlockedReason !== null || plotTypes.length === 0;
+  const plotsDisabled = plotTypes.length === 0;
   const count = plotCount.trim() === "" ? null : Number(plotCount);
   const range = count === null ? null : plotRange(code, count);
 
@@ -86,9 +77,7 @@ export function GroupForm({
         </select>
       </div>
 
-      {plotsBlockedReason !== null ? (
-        <p className="text-xs text-muted-foreground">{plotsBlockedReason}</p>
-      ) : plotTypes.length === 0 ? (
+      {plotTypes.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           Add a plot type (sq yd) first to create plots along with the block. You can still add the
           block on its own.

@@ -44,7 +44,7 @@ export default async function ProjectDetailPage({
 
   const project = await db.project.findUnique({
     where: { id: projectId, orgId: session.user.orgId },
-    select: { id: true, code: true, name: true, city: true, reraRegNo: true, reraValidTill: true },
+    select: { id: true, code: true, name: true, city: true },
   });
   if (!project) notFound();
 
@@ -78,15 +78,6 @@ export default async function ProjectDetailPage({
 
   const towerCount = towers.filter((tower) => tower.kind === "TOWER").length;
   const blockCount = towers.filter((tower) => tower.kind === "BLOCK").length;
-
-  // createUnit and importUnits both refuse a project without a live RERA
-  // registration, so plots cannot be created with a block until it has one. Said
-  // up front, in the form, rather than as an error after the fact.
-  const reraLive =
-    Boolean(project.reraRegNo) && project.reraValidTill !== null && project.reraValidTill >= new Date();
-  const plotsBlockedReason = reraLive
-    ? null
-    : "Plots can't be created until the project has a live RERA registration. You can still add the block on its own.";
 
   const plotTypes = unitTypes
     .filter((unitType) => unitType.areaBasis === "SQYD")
@@ -141,11 +132,7 @@ export default async function ProjectDetailPage({
                 );
               })}
             </div>
-            <GroupForm
-              projectId={project.id}
-              plotTypes={plotTypes}
-              plotsBlockedReason={plotsBlockedReason}
-            />
+            <GroupForm projectId={project.id} plotTypes={plotTypes} />
           </CardContent>
         </Card>
 

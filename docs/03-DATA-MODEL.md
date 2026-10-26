@@ -70,7 +70,7 @@ erDiagram
 
 | Model | Purpose | Watch out for |
 |---|---|---|
-| `Project` | RERA metadata + hold policy config | `reraValidTill` gates marketing |
+| `Project` | RERA metadata + hold policy config | RERA fields are optional and informational; nothing checks them |
 | `UnitType` | Carpet / built-up / saleable areas | Three different numbers — see [glossary](19-GLOSSARY.md) |
 | `Unit` | The sellable thing | `currentHoldId` is a read convenience, **not** the lock |
 | `PriceList` / `PriceListItem` | Versioned pricing, never mutated | A booking pins its version |

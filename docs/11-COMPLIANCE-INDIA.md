@@ -10,7 +10,7 @@ The Real Estate (Regulation and Development) Act 2016.
 
 | Requirement | Implementation |
 |---|---|
-| Project registration before marketing | `Project.reraRegNo`, `reraValidTill`. Units cannot be held or booked under an expired registration |
+| Project registration before marketing | `Project.reraRegNo`, `reraValidTill`, `reraPortalUrl`: optional, recorded for reference only. **The software does not check them** (client decision, 2026-10-26): a project with no registration, or an expired one, can be populated, held and booked. Keeping registrations in order is a process matter outside the system |
 | **Carpet area disclosure** | `UnitType.carpetArea` mandatory; printed on cost sheet, allotment letter, agreement, and shown on every customer-facing screen |
 | Agent registration | `Associate.reraAgentRegNo` — relevant for `CHANNEL_PARTNER`. An employee of the promoter is generally not a separately registrable agent; **confirm with counsel** |
 | 70% escrow of collections | Out of scope for this system, but receipts export to the client's accounting for it |
