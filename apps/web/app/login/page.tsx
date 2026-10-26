@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { Building2, CircleAlert, CircleCheck } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
+import { WarmUp } from "@/components/warm-up";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,6 +56,7 @@ export default async function LoginPage({
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted p-4">
+      <WarmUp />
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
           <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
