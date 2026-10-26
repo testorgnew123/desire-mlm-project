@@ -13,7 +13,8 @@
 // (credentials by email), first sign-in and forced password change, a plotted
 // project with no RERA, block + plots, price list, book a plot, confirm, cancel.
 // Each step is timed and its statements counted. The emailed password is read from
-// the SMTP sink (SINK_URL); with SMTP unset the admin is shown it instead.
+// the SMTP sink (scripts/smtp-sink.mjs, at SINK_URL); with SMTP unset the admin is
+// shown it instead.
 //
 // Prerequisites, all local (this script refuses anything else):
 //   1. perf-seed.ts has run.

@@ -448,6 +448,13 @@
 > - **Local:** a production build on `localhost:3011`, a fresh database seeded by `perf-seed.ts` (one plotted project of 2,000 plots in 20 blocks, 50 associates, 200 bookings, **no RERA anywhere**), Postgres `log_statement = 'all'` to count statements, an SMTP stand-in (`smtp-sink.mjs`, answering after a settable delay) so the emailed password is real. `perf-run.ts`, two full runs, the better of the two per route (the two agreed closely). `perf-run.ts` now also runs the journey as a chain (`FLOW_RUNS`, default 10): each Server Action is called as a plain form post, each step is timed and its statements counted.
 > - **Live:** logged-out requests with `curl` (reused and fresh connections, `/cdn-cgi/trace`), idle-gap probes of `/api/health`, and signed-in read-only GETs from the built-in browser while the admin was signed in (4 sequential GETs per URL, no clicks that write).
 >
+> To repeat the local half (nothing near the hosted database; `apps/web/.env.local` defines `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NODE_ENV`, `JOB_TRIGGER_SECRET`, `PII_ENCRYPTION_KEY` and `PII_ENCRYPTION_KEY_ID`, so export all six first, pointing the two database URLs at the local container):
+>
+> 1. `docker exec desire-postgres psql -U desire -d postgres -c "CREATE DATABASE desire_perf"`, then `pnpm db:migrate:deploy`, `pnpm db:seed` and `perf-seed.ts`, all with the exported URLs on that database.
+> 2. `node apps/web/scripts/smtp-sink.mjs`, and export `SMTP_HOST=127.0.0.1 SMTP_PORT=2525 MAIL_FROM=noreply@perf.test SINK_URL=http://127.0.0.1:2526`.
+> 3. `pnpm --filter @desire/web build`, then `pnpm --filter @desire/web exec next start -p 3011`.
+> 4. `pnpm --filter @desire/db exec tsx ../../apps/web/scripts/api-smoke.ts`, then `.../perf-run.ts <label>` twice (`OUT=file.json` keeps the rows).
+>
 > ### Live, from this PC in India (Mon 12:50-14:30 IST)
 >
 > | What | Result |
