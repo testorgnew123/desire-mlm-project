@@ -157,13 +157,40 @@ rather than waiting for a second occurrence.
 
 ## Deployment
 
-Trunk-based. `main` auto-deploys to staging; production on tag.
+Trunk-based. Merging to `main` deploys **production**: Netlify builds `main` and
+publishes it once the build finishes. A pull request gets a deploy preview with its
+own Neon branch (`neon-preview-branches.yml` creates and migrates it).
 
-Pre-deploy runs `prisma migrate deploy` against **`DATABASE_URL_UNPOOLED`**.
-Running migrations through the pooler is the classic deploy-day failure.
+A production build applies pending Prisma migrations **before** it builds the app.
+`netlify.toml` calls `packages/db/scripts/migrate-on-deploy.sh` between
+`prisma generate` and the app build; it runs `prisma migrate deploy` through
+**`DATABASE_URL_UNPOOLED`** (running migrations through the pooler is the classic
+deploy-day failure). Netlify only publishes a build that finished, so the schema is
+always in place before the code that reads it goes live. Previews are skipped, and
+a production build with no `DATABASE_URL_UNPOOLED` (Builds scope) **fails** instead
+of skipping, which leaves the previous deploy serving.
+
+Until 2026-10-26 nothing in the repository did this for Netlify, although this
+section said it did: PR 8 went live with code that reads `users.mustChangePassword`
+before the hosted database had the column, and new sign-ins failed until the
+migration was applied by hand.
 
 Breaking schema changes use expand–contract: add column → backfill → switch reads
-→ drop in a later release. Never a destructive migration in a single release.
+→ drop in a later release. Never a destructive migration in a single release. Because
+migrations now run before the new code is published, the OLD code must keep working
+against the NEW schema for the length of a build, which is what expand–contract gives.
+
+### A migration failed on deploy
+
+The build fails and the previous deploy keeps serving. Postgres runs a migration file
+as one implicit transaction, so a failed migration normally leaves the schema as it
+was, but Prisma records it as failed in `_prisma_migrations` and every later
+`migrate deploy` refuses to run until that is resolved. Read the failed build log,
+correct the migration file (it did not apply, so editing it is fine), then against the
+unpooled hosted URL run
+`prisma migrate resolve --rolled-back <migration_name>` and redeploy. If part of it
+did apply (a non-transactional statement such as `CREATE INDEX CONCURRENTLY`),
+correct the schema by hand and use `--applied` instead.
 
 ## Health check
 
