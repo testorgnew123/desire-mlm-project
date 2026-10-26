@@ -117,8 +117,8 @@ and a Team Lead can act on their downline's but not a stranger's.
 
 `acquireHold` takes a `SELECT … FOR UPDATE` on the unit, then checks in order:
 lazily expires a stale hold inside the same lock → unit must be `AVAILABLE` (the
-error **names the current holder**) → valid transition → **RERA must be present
-and unexpired** → **an ACTIVE price list must exist** → quota.
+error **names the current holder**) → valid transition → **an ACTIVE price list
+must exist** → quota. (RERA used to be checked here; it no longer is, 2026-10-26.)
 
 - **TTL** comes from `project.holdTtlMinutes`, default **1440 minutes (24h)** —
   `PLACEHOLDER`, as are the extension window and max extensions.
@@ -432,8 +432,8 @@ product cannot presently take a sale from enquiry to payout.
 ## What this means for a pilot
 
 The parts that **work end to end today**: lead capture (via API), qualification,
-site visits, reassignment, the live inventory board, and unit holds with quota,
-RERA and price-list gating.
+site visits, reassignment, the live inventory board, and unit holds with quota
+and price-list gating.
 
 The parts that **cannot be exercised**: everything from booking onward, because
 of break #1.

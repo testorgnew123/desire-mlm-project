@@ -5,13 +5,10 @@
 //      (docs/19-GLOSSARY.md). Swapping them misprices a unit by ~35% and the
 //      error only surfaces after a customer has signed, so the ordering is
 //      enforced at write time rather than trusted.
-//   2. RERA, which is deliberately NOT checked here. The guard table in
-//      docs/06-INVENTORY-SPEC.md scopes "project RERA registration valid" to
-//      the AVAILABLE -> HELD transition, and holds.ts applies it there.
-//      Enforcing it at creation would leave a PLANNING or PRE_LAUNCH project
-//      impossible to populate -- Project.reraRegNo is nullable and
-//      createProject does not ask for it -- and would disagree with
-//      unit-import.ts, which inserts the same inventory with no such check.
+//   2. RERA, which is deliberately NOT checked anywhere. The client confirmed
+//      (2026-10-26) that registration is not mandatory: a project without one is
+//      populated, held and booked like any other. Project.reraRegNo,
+//      reraValidTill and reraPortalUrl are optional, informational fields.
 //   3. Tenancy. orgId is taken from the audit context, never from the caller,
 //      so a mutation cannot write into one org while being audited under
 //      another.
@@ -97,16 +94,6 @@ export class InvalidHoldPolicyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InvalidHoldPolicyError";
-  }
-}
-
-/** Nothing in this file throws this -- see the note on RERA in the file
- *  header. Kept exported because unit-import.ts imports it; the two should be
- *  removed together if that import is ever dropped. */
-export class ProjectReraInvalidError extends Error {
-  constructor(public readonly projectId: string) {
-    super(`Project ${projectId} has no valid RERA registration; units cannot be created.`);
-    this.name = "ProjectReraInvalidError";
   }
 }
 

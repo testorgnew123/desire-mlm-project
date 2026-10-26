@@ -44,8 +44,6 @@ async function main(): Promise<void> {
     project = await createProject(db, {
       code: PROJECT_CODE,
       name: "Perf Plots",
-      reraRegNo: "PRM/PERF/0001",
-      reraValidTill: new Date(Date.now() + 5 * 365 * 86_400_000),
       audit: adminAudit,
     });
   }

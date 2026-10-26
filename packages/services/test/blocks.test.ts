@@ -1,12 +1,12 @@
 // A plotted block and its plots, created together. Runs against LOCAL Docker
 // Postgres: what is under test is a transaction -- "either the block and every
-// plot exist, or nothing does" -- and RERA, unique-number and permission checks
-// that all live in the database or behind it. A mock would prove nothing.
+// plot exist, or nothing does" -- and unique-number and permission checks that
+// all live in the database or behind it. A mock would prove nothing.
 import "dotenv/config";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
-import { DuplicateCodeError, ProjectReraInvalidError } from "../src/projects";
+import { DuplicateCodeError } from "../src/projects";
 import { createBlockWithPlots } from "../src/blocks";
 import { MAX_PLOTS_PER_BLOCK, PlotCountError } from "../src/plot-numbering";
 import { UnitImportRejectedError, importUnits } from "../src/unit-import";
@@ -51,7 +51,7 @@ async function makeUser(label: string, holdsWrite: boolean) {
 
 /** A project, a 200 sq yd plot type, and a user who may write. `rera: false`
  *  gives the project no registration -- the state a freshly created project is
- *  in, and the one importUnits refuses to load units into. */
+ *  in. RERA is optional, so it must make no difference. */
 async function seed({ rera = true }: { rera?: boolean } = {}) {
   await db.organization.create({
     data: { id: ORG, name: "Blocks Test Org", legalName: "Blocks Test Org Pvt Ltd" },
@@ -160,27 +160,30 @@ describe("createBlockWithPlots", () => {
     expect(await db.unit.count({ where: { projectId: project.id } })).toBe(0);
   });
 
-  // The reason this is one transaction. A project with no RERA registration is
-  // the normal state of a project that was just created, and importUnits
-  // refuses to load units into it. Without the shared transaction the block
-  // would be created and the plots would not.
-  it("leaves NO block behind when the project has no RERA registration", async () => {
-    const { project, writer } = await seed({ rera: false });
+  // RERA registration is not required, so a project that has none -- the normal
+  // state of a project that was just created -- gets its block and plots like any
+  // other, and so does one whose registration has lapsed.
+  it.each([
+    ["has no RERA registration", { rera: false }],
+    ["has an expired RERA registration", { rera: true }],
+  ])("creates the block and its plots when the project %s", async (_label, { rera }) => {
+    const { project, writer } = await seed({ rera });
+    if (rera) {
+      await db.project.update({ where: { id: project.id }, data: { reraValidTill: new Date("2020-01-01") } });
+    }
 
-    await expect(
-      createBlockWithPlots(db, {
-        projectId: project.id,
-        code: "A",
-        name: "Block A",
-        plotCount: 5,
-        plotUnitTypeCode: "PLOT-200",
-        audit: ctx(writer),
-      }),
-    ).rejects.toThrow(ProjectReraInvalidError);
+    const result = await createBlockWithPlots(db, {
+      projectId: project.id,
+      code: "A",
+      name: "Block A",
+      plotCount: 5,
+      plotUnitTypeCode: "PLOT-200",
+      audit: ctx(writer),
+    });
 
-    expect(await db.tower.count({ where: { projectId: project.id } })).toBe(0);
-    expect(await db.unit.count({ where: { projectId: project.id } })).toBe(0);
-    expect(await db.auditLog.count({ where: { orgId: ORG, entity: "Tower" } })).toBe(0);
+    expect(result.plotsCreated).toBe(5);
+    expect(await db.tower.count({ where: { projectId: project.id } })).toBe(1);
+    expect(await db.unit.count({ where: { projectId: project.id } })).toBe(5);
   });
 
   it("leaves no block behind when one of the plot numbers is already taken", async () => {

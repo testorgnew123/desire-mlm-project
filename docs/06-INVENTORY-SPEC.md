@@ -34,7 +34,7 @@ already migrated and gate-tested by the time this was caught.
 
 | Transition | Guard |
 |---|---|
-| `AVAILABLE → HELD` | Unit not blocked · associate has hold quota remaining · an ACTIVE price list exists · project RERA registration valid |
+| `AVAILABLE → HELD` | Unit not blocked · associate has hold quota remaining · an ACTIVE price list exists |
 | `HELD → AVAILABLE` | TTL expiry (automatic) · associate release · admin force-release (audited, reason required) |
 | `HELD → BOOKED` | Booking form complete · booking-amount receipt captured · sales admin confirms |
 | `BOOKED → AVAILABLE` | Booking cancelled. Approval required · **triggers commission clawback**. (This is the diagram's "cancel" transition — there is no separate `CANCELLED` unit state; see above) |

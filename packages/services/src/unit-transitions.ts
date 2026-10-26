@@ -1,7 +1,7 @@
 // Pure Unit state machine -- structural legality only (docs/06-INVENTORY-SPEC.md
 // section 1). "Structural" means: is this transition ever allowed, regardless
 // of who is asking or what data backs it. Business-rule guards that need DB
-// data (hold quota, price list active, RERA validity) live in holds.ts, which
+// data (hold quota, price list active) live in holds.ts, which
 // calls into this table first and then layers its own checks on top.
 //
 // No @prisma/client import here -- same purity discipline as

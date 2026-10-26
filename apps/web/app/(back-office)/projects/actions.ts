@@ -59,10 +59,8 @@ export async function createProjectAction(formData: FormData): Promise<void> {
       city: optional(formData.get("city")),
       state: optional(formData.get("state")),
 
-      // RERA is optional at creation on purpose: a PLANNING project has no
-      // registration yet. holds.ts enforces it at the point it actually
-      // matters -- the AVAILABLE -> HELD transition -- so a project can be
-      // set up and populated before the number exists.
+      // RERA is optional and nothing checks it: a project with no registration
+      // is populated, held and booked like any other.
       reraRegNo: optional(formData.get("reraRegNo")),
       reraValidTill: optionalDate(formData.get("reraValidTill")),
       reraPortalUrl: optional(formData.get("reraPortalUrl")),

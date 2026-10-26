@@ -20,7 +20,7 @@ import type { PrismaClient } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { PlotsOnlyError, assertPlotsOnlyGroup } from "./plots-only";
 import { assertPermission, ForbiddenError } from "./rbac";
-import { ProjectReraInvalidError, resolveUnitAreas, type UnitTypeAreas } from "./projects";
+import { resolveUnitAreas, type UnitTypeAreas } from "./projects";
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -507,8 +507,6 @@ export interface ImportUnitsParams {
   audit: AuditContext;
   /** Defaults to ALL_OR_NOTHING -- see importUnits. */
   mode?: UnitImportMode;
-  /** Injectable clock for the RERA validity check, as createUnit takes. */
-  now?: Date;
 }
 
 export interface UnitImportReport {
@@ -581,11 +579,10 @@ export async function importUnitsInTx(
 ): Promise<UnitImportReport> {
   const mode = params.mode ?? "ALL_OR_NOTHING";
   const submitted = params.rows.length;
-  const now = params.now ?? new Date();
 
   const project = await tx.project.findUnique({
     where: { id: params.projectId },
-    select: { id: true, orgId: true, reraRegNo: true, reraValidTill: true },
+    select: { orgId: true },
   });
   // Org mismatch is treated as "not found": a caller from another org
   // must not learn that this project id exists.
@@ -595,15 +592,6 @@ export async function importUnitsInTx(
     );
   }
   await assertPermission(tx, actorId, "project.write", { projectId: params.projectId });
-
-  // Same guard, same reason as createUnit in projects.ts and acquireHold
-  // in holds.ts: without a live RERA registration the units may not be
-  // marketed, so loading a tower's worth of them into inventory is
-  // premature at best and a compliance breach at worst
-  // (docs/11-COMPLIANCE-INDIA.md).
-  if (!project.reraRegNo || !project.reraValidTill || project.reraValidTill < now) {
-    throw new ProjectReraInvalidError(project.id);
-  }
 
   let towerTotalFloors: number | undefined;
   let targetGroupKind: UnitGroupKind | undefined;

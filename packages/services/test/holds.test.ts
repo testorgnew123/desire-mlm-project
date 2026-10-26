@@ -213,16 +213,18 @@ describe("acquire guards", () => {
     ).rejects.toThrow(HoldGuardError);
   });
 
-  it("rejects when the project's RERA registration has expired", async () => {
+  // RERA registration is not required, so it is not looked at: a project that
+  // never had one, and one whose registration has lapsed, hold plots like any other.
+  it.each([
+    ["has expired", { reraValidTill: new Date("2020-01-01") }],
+    ["was never entered", { reraRegNo: null, reraValidTill: null }],
+  ])("holds a plot when the project's RERA registration %s", async (_label, data) => {
     const { project, units, associates } = await seedFixture({ associateCount: 1 });
-    await db.project.update({
-      where: { id: project.id },
-      data: { reraValidTill: new Date("2020-01-01") },
-    });
+    await db.project.update({ where: { id: project.id }, data });
 
-    await expect(
-      acquireHold(db, { orgId: ORG, unitId: units[0]!.id, associateId: associates[0]!.id, audit }),
-    ).rejects.toThrow(HoldGuardError);
+    await acquireHold(db, { orgId: ORG, unitId: units[0]!.id, associateId: associates[0]!.id, audit });
+
+    expect((await db.unit.findUniqueOrThrow({ where: { id: units[0]!.id } })).status).toBe("HELD");
   });
 
   it("writes a UnitStatusHistory row and an audit row on success", async () => {

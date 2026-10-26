@@ -2,13 +2,12 @@
 //
 // A township block is defined by how many plots it holds, the way a tower is by
 // its floors. Creating the block and then, separately, its plots would leave an
-// empty block behind whenever the second step fails -- and the likely cause (the
-// project has no RERA registration yet, which importUnits refuses on) is exactly
-// the case a user would hit on a fresh project. So both writes share one
+// empty block behind whenever the second step fails (a clashing plot number, a
+// plot type that is not a plot, a missing permission). So both writes share one
 // transaction: either the block and every plot exist, or nothing does.
 //
 // The plots go through the same importer a CSV upload uses, so a generated plot
-// is held to every rule an imported one is: RERA, unique unit numbers, no floor
+// is held to every rule an imported one is: unique unit numbers, no floor
 // inside a block, one genesis history row each, one audit row for the batch.
 import { Prisma } from "@desire/db";
 import type { PrismaClient, Tower } from "@desire/db";
@@ -23,7 +22,7 @@ export interface CreateBlockWithPlotsParams {
   code: string;
   name: string;
   /** Plots to create inside the block, numbered `<code>-01`, `<code>-02`, ...
-   *  Omit or pass 0 for an empty block (which needs no RERA, same as before). */
+   *  Omit or pass 0 for an empty block. */
   plotCount?: number;
   /** UnitType.code every generated plot gets. Required when plotCount > 0. */
   plotUnitTypeCode?: string;
