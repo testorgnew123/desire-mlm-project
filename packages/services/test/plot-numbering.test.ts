@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_PLOTS_PER_BLOCK,
   PlotCountError,
+  describePlotRows,
+  plotAssignments,
   plotNumbers,
   plotRange,
 } from "../src/plot-numbering";
@@ -72,5 +74,87 @@ describe("plotRange", () => {
     expect(plotRange("", 10)).toBeNull();
     expect(plotRange("A", 0)).toBeNull();
     expect(plotRange("A", MAX_PLOTS_PER_BLOCK + 1)).toBeNull();
+  });
+});
+
+describe("plotAssignments", () => {
+  it("numbers rows in order, carrying on from one to the next", () => {
+    expect(
+      plotAssignments("A", [
+        { count: 2, type: "P200" },
+        { count: 1, type: "P300" },
+      ]),
+    ).toEqual([
+      { unitNumber: "A-1", type: "P200" },
+      { unitNumber: "A-2", type: "P200" },
+      { unitNumber: "A-3", type: "P300" },
+    ]);
+  });
+
+  it("pads to the width of the TOTAL, so the whole block sorts the way it reads", () => {
+    const out = plotAssignments("A", [
+      { count: 5, type: "x" },
+      { count: 5, type: "y" },
+    ]);
+    expect(out[0]!.unitNumber).toBe("A-01");
+    expect(out[9]!.unitNumber).toBe("A-10");
+    const numbers = out.map((o) => o.unitNumber);
+    expect([...numbers].sort()).toEqual(numbers);
+  });
+
+  it("a single row is exactly what plotNumbers makes", () => {
+    expect(plotAssignments("B", [{ count: 40, type: "x" }]).map((o) => o.unitNumber)).toEqual(
+      plotNumbers("B", 40),
+    );
+  });
+
+  it("lets the same type repeat", () => {
+    const out = plotAssignments("A", [
+      { count: 1, type: "x" },
+      { count: 1, type: "y" },
+      { count: 1, type: "x" },
+    ]);
+    expect(out.map((o) => o.type)).toEqual(["x", "y", "x"]);
+  });
+
+  it("refuses a total over the maximum, though each row is small", () => {
+    expect(() =>
+      plotAssignments("A", [
+        { count: MAX_PLOTS_PER_BLOCK, type: "x" },
+        { count: 1, type: "y" },
+      ]),
+    ).toThrow(PlotCountError);
+  });
+
+  it.each([[0], [-1], [1.5], [Number.NaN]])("refuses a row of %s plots", (count) => {
+    expect(() => plotAssignments("A", [{ count, type: "x" }])).toThrow(PlotCountError);
+  });
+
+  it("refuses no rows and a blank code", () => {
+    expect(() => plotAssignments("A", [])).toThrow(PlotCountError);
+    expect(() => plotAssignments(" ", [{ count: 1, type: "x" }])).toThrow(PlotCountError);
+  });
+});
+
+describe("describePlotRows", () => {
+  it("gives first and last number per row and the total", () => {
+    expect(
+      describePlotRows("A", [
+        { count: 10, type: "x" },
+        { count: 5, type: "y" },
+      ]),
+    ).toEqual({
+      total: 15,
+      rows: [
+        { type: "x", count: 10, first: "A-01", last: "A-10" },
+        { type: "y", count: 5, first: "A-11", last: "A-15" },
+      ],
+    });
+  });
+
+  it("is null, not a throw, while the inputs are not valid", () => {
+    expect(describePlotRows("A", [])).toBeNull();
+    expect(describePlotRows("", [{ count: 3, type: "x" }])).toBeNull();
+    expect(describePlotRows("A", [{ count: 0, type: "x" }])).toBeNull();
   });
 });

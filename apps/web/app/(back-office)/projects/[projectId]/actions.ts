@@ -9,6 +9,7 @@ import { UnitImportRejectedError } from "@desire/services/unit-import";
 import { createDraftPriceList, publishPriceList } from "@desire/services/price-lists";
 import type { PlcCharge } from "@desire/services/price-lists";
 import { requireSession } from "@/lib/session";
+import { parsePlotGroups } from "@/lib/plot-groups";
 
 function auditFor(orgId: string, actorId: string, actorLabel: string) {
   return { orgId, actorId, actorLabel };
@@ -67,27 +68,30 @@ export async function createTowerAction(formData: FormData): Promise<void> {
 
   await runAction(projectId, async () => {
     // A block sends NO floor count -- createTower rejects a block that declares
-    // floors, which is the point of the rule. It sends a plot count instead.
-    const rawCount = String(formData.get("plotCount") ?? "").trim();
-    let plotUnitTypeCode: string | undefined;
-    if (rawCount !== "") {
-      const plotType = await db.unitType.findFirst({
-        where: { id: String(formData.get("plotUnitTypeId") ?? ""), projectId },
-        select: { code: true },
+    // floors, which is the point of the rule. It sends plot rows instead: one
+    // (count, type) pair per size, so a block can mix sizes.
+    const groups = parsePlotGroups(
+      formData.getAll("plotCount").map(String),
+      formData.getAll("plotUnitTypeId").map(String),
+    );
+    let plotGroups: Array<{ count: number; unitTypeCode: string }> | undefined;
+    if (groups.length > 0) {
+      // One query for every type used, scoped to this project.
+      const typeIds = [...new Set(groups.map((group) => group.unitTypeId))];
+      const types = await db.unitType.findMany({
+        where: { id: { in: typeIds }, projectId },
+        select: { id: true, code: true },
       });
-      if (!plotType) throw new Error("Choose a plot type for the plots.");
-      plotUnitTypeCode = plotType.code;
+      const codeById = new Map(types.map((type) => [type.id, type.code]));
+      plotGroups = groups.map((group, index) => {
+        const unitTypeCode = codeById.get(group.unitTypeId);
+        if (!unitTypeCode) throw new Error(`Size ${index + 1}: choose a plot type.`);
+        return { count: group.count, unitTypeCode };
+      });
     }
 
     try {
-      await createBlockWithPlots(db, {
-        projectId,
-        code,
-        name,
-        plotCount: rawCount === "" ? undefined : Number(rawCount),
-        plotUnitTypeCode,
-        audit,
-      });
+      await createBlockWithPlots(db, { projectId, code, name, plotGroups, audit });
     } catch (error) {
       throw describePlotFailure(error);
     }
