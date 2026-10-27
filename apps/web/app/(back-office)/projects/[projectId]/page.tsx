@@ -48,7 +48,7 @@ export default async function ProjectDetailPage({
   });
   if (!project) notFound();
 
-  const [towers, unitTypes, priceLists, plcTagRows] =
+  const [towers, unitTypes, priceLists, plcTagRows, plotCounts] =
     await Promise.all([
     db.tower.findMany({
       where: { projectId },
@@ -72,6 +72,13 @@ export default async function ProjectDetailPage({
       WHERE "projectId" = ${projectId}
       ORDER BY tag
     `,
+    // Plots per block and size, for the breakdown on the Blocks card and the
+    // count on the Plot types card: one grouped read, not one per row.
+    db.unit.groupBy({
+      by: ["towerId", "unitTypeId"],
+      where: { projectId },
+      _count: { _all: true },
+    }),
   ]);
 
   const plcTags = plcTagRows.map((row) => row.tag);
@@ -79,12 +86,28 @@ export default async function ProjectDetailPage({
   const towerCount = towers.filter((tower) => tower.kind === "TOWER").length;
   const blockCount = towers.filter((tower) => tower.kind === "BLOCK").length;
 
+  // Smallest first, the way sizes are listed. Every plot type is quoted in
+  // saleable sq yd, so the form drops the "(saleable)" tag: the dropdown has
+  // little room and the word adds nothing there.
   const plotTypes = unitTypes
     .filter((unitType) => unitType.areaBasis === "SQYD")
+    .sort((a, b) => Number(a.saleableArea) - Number(b.saleableArea))
     .map((unitType) => ({
       id: unitType.id,
-      label: `${unitType.code} — ${formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}`,
+      label: `${unitType.code} — ${(formatArea(unitType.saleableArea, "saleable", unitType.areaBasis) ?? "").replace(" (saleable)", "")}`,
     }));
+  const typeCodeById = new Map(unitTypes.map((unitType) => [unitType.id, unitType.code]));
+  const plotsInType = new Map<string, number>();
+  const sizesByBlock = new Map<string, Array<{ code: string; count: number }>>();
+  for (const row of plotCounts) {
+    const code = typeCodeById.get(row.unitTypeId) ?? "?";
+    plotsInType.set(row.unitTypeId, (plotsInType.get(row.unitTypeId) ?? 0) + row._count._all);
+    if (row.towerId) {
+      const list = sizesByBlock.get(row.towerId) ?? [];
+      list.push({ code, count: row._count._all });
+      sizesByBlock.set(row.towerId, list);
+    }
+  }
   // What a plot can be loaded into or typed as: blocks and plot types only.
   const blocks = towers.filter((tower) => tower.kind === "BLOCK");
   const plotTypeRows = unitTypes.filter((unitType) => unitType.areaBasis === "SQYD");
@@ -118,6 +141,15 @@ export default async function ProjectDetailPage({
                   <div key={tower.id} className="flex justify-between gap-3 py-1.5 text-sm first:pt-0">
                     <span>
                       {tower.code} — {tower.name}
+                      {tower.kind === "BLOCK" && (sizesByBlock.get(tower.id)?.length ?? 0) > 0 ? (
+                        <span className="block text-xs text-muted-foreground">
+                          {sizesByBlock
+                            .get(tower.id)!
+                            .sort((a, b) => a.code.localeCompare(b.code))
+                            .map((size) => `${size.count} × ${size.code}`)
+                            .join(" · ")}
+                        </span>
+                      ) : null}
                     </span>
                     {/* The kind sits on the right, not in front of the name: a
                         block usually IS named "Block A", and "Block A — Block A"
@@ -132,7 +164,7 @@ export default async function ProjectDetailPage({
                 );
               })}
             </div>
-            <GroupForm projectId={project.id} plotTypes={plotTypes} />
+            <GroupForm key={towers.length} projectId={project.id} plotTypes={plotTypes} />
           </CardContent>
         </Card>
 
@@ -154,6 +186,7 @@ export default async function ProjectDetailPage({
                   <p className="text-xs text-muted-foreground">
                     {unitType.areaBasis === "SQYD" ? "Plot" : "Flat"} ·{" "}
                     {formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}
+                    {plotsInType.has(unitType.id) ? ` · ${plotsInType.get(unitType.id)} in use` : ""}
                   </p>
                 </div>
               ))}

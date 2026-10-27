@@ -685,6 +685,9 @@ export async function importUnitsInTx(
     }));
     await tx.unitStatusHistory.createMany({ data: genesis });
 
+    const byUnitType: Record<string, number> = {};
+    for (const row of valid) byUnitType[row.unitTypeCode] = (byUnitType[row.unitTypeCode] ?? 0) + 1;
+
     // ONE audit row for the batch. Per-unit rows would bury the signal: a
     // 900-unit import is one administrative act, and "who loaded this
     // inventory, when, and how much of it was rejected" is the question
@@ -703,6 +706,7 @@ export async function importUnitsInTx(
         imported: valid.length,
         skipped: submitted - valid.length,
         errorCount: errors.length,
+        byUnitType,
       },
     });
   }
