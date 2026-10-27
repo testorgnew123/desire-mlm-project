@@ -159,6 +159,16 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                           defaultValue={user.roleCodes[0] ?? ""}
                           className={`${FIELD_CLASS} w-auto min-w-[8.5rem]`}
                         >
+                          {/* A role that is not one of the three (an old one) matches no
+                              option, so the browser would show the first, Super Admin,
+                              and Update would promote the person. Name the role instead,
+                              disabled: a disabled selected option is not submitted, so
+                              Update refuses until a real role is chosen. */}
+                          {user.roleCodes[0] && !(ROLE_CODES as readonly string[]).includes(user.roleCodes[0]) ? (
+                            <option value={user.roleCodes[0]} disabled>
+                              {user.roleCodes[0].replaceAll("_", " ")} (old role)
+                            </option>
+                          ) : null}
                           {ROLE_CODES.map((code) => (
                             <option key={code} value={code}>
                               {ROLE_NAMES[code]}

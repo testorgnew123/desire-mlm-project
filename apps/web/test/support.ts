@@ -9,7 +9,7 @@
 // database (apps/web/.env.local is production, and `next build` / `next start`
 // read it).
 import { randomBytes } from "node:crypto";
-import { ROLE_CODES, ROLE_NAMES, PERMISSION_CODES, getPrismaClient, permissionsForRole } from "@desire/db";
+import { applyRoleSync, getPrismaClient, planRoleSync } from "@desire/db";
 import type { RoleCode } from "@desire/db";
 import { createSession } from "@desire/services/auth";
 import { assertLocalDatabase } from "../scripts/local-db-guard";
@@ -61,21 +61,12 @@ export interface Person {
 export async function seedWorld() {
   await db.organization.create({ data: { id: ORG, name: "Web Test Org", legalName: "Web Test Org Pvt Ltd" } });
 
-  for (const code of PERMISSION_CODES) {
-    const [resource, action] = code.split(".");
-    await db.permission.upsert({ where: { code }, update: {}, create: { code, resource: resource!, action: action! } });
-  }
-  const permissions = await db.permission.findMany({ select: { id: true, code: true } });
-  const permissionId = new Map(permissions.map((p) => [p.code, p.id]));
-
-  const roleId = new Map<RoleCode, string>();
-  for (const code of ROLE_CODES) {
-    const role = await db.role.create({ data: { orgId: ORG, code, name: ROLE_NAMES[code] } });
-    roleId.set(code, role.id);
-    await db.rolePermission.createMany({
-      data: permissionsForRole(code).map((permission) => ({ roleId: role.id, permissionId: permissionId.get(permission)! })),
-    });
-  }
+  // The role sync every deploy runs, so a route test goes through the code that
+  // creates roles in a real database, and still gets the three roles holding
+  // exactly what the matrix says.
+  await applyRoleSync(db, await planRoleSync(db, ORG));
+  const roles = await db.role.findMany({ where: { orgId: ORG }, select: { id: true, code: true } });
+  const roleId = new Map(roles.map((role) => [role.code as RoleCode, role.id]));
 
   const grade = await db.grade.create({ data: { orgId: ORG, code: "G1", name: "Executive", rank: 1, holdQuota: 5 } });
 

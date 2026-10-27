@@ -63,3 +63,6 @@ export function getPrismaClient(): PrismaClient {
 export * from "./generated/prisma/client";
 export * from "./permission-matrix";
 export * from "./scope";
+// The add-only role sync: the web and services tests build their orgs through it,
+// so they exercise the code that creates roles in a real database.
+export * from "./sync-roles";
