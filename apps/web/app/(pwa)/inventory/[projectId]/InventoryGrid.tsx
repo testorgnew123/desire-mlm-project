@@ -16,9 +16,10 @@
 // than behind a tower switcher, and the layout CSS is local (grid.module.css)
 // because board.module.css's `.board` root is a full-page desktop shell.
 //
-// The hold POST is the one place a client-side fetch is justified over a
-// Server Action, matching the board's own existing pattern (the route
-// already exists and is GATE-tested; no reason to wrap it).
+// Hold and Release call Server Actions (./actions.ts), not the REST route the
+// board uses (unchanged): an action's revalidatePath refreshes this page in the
+// same response, with a new server time that also drops the delta overlay below,
+// so a plot you just held is still yours on screen and Book stays available.
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -30,6 +31,8 @@ import { formatDateTime } from "@/lib/format";
 import { groupNoun, type GroupKind } from "@/lib/groups";
 import { expandCatalogue, type Catalogue, type CatalogueUnit } from "@/app/board/[projectId]/catalogue";
 import styles from "./grid.module.css";
+import { holdPlotAction, releaseHoldAction } from "./actions";
+import { plotSheetActions } from "./plot-sheet";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -49,18 +52,22 @@ export function InventoryGrid({
   projectName,
   catalogue,
   serverTime,
+  holdInfo,
 }: {
   projectId: string;
   projectName: string;
   /** The units and blocks in the compact form that crosses the wire (catalogue.ts). */
   catalogue: Catalogue;
   serverTime: string;
+  /** The viewer's hold allowance and how much of it is in use, or null when the
+   *  account has no associate profile (only associates hold and book). */
+  holdInfo: { quota: number; live: number } | null;
 }) {
   const router = useRouter();
   // Rebuilt once per snapshot, not per render: `merged` below depends on its identity.
   const units = useMemo(() => expandCatalogue(catalogue).units, [catalogue]);
   const knownUnitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
-  const { live, refreshNow, isFetching, error } = useUnitDeltas({
+  const { live, isFetching, error } = useUnitDeltas({
     projectId,
     initialServerTime: serverTime,
     knownUnitIds,
@@ -70,7 +77,7 @@ export function InventoryGrid({
   // drawing all of them at once put thousands of tiles in the page (and in the
   // HTML sent to a phone) for a screen that shows thirty.
   const [activeBlock, setActiveBlock] = useState<string | null>(null);
-  const [holding, setHolding] = useState(false);
+  const [busy, setBusy] = useState<"hold" | "release" | null>(null);
   const [holdError, setHoldError] = useState<string | null>(null);
 
   // The clock behind the hold countdowns, and behind displayStatus's lazy
@@ -132,6 +139,15 @@ export function InventoryGrid({
   // "Hold this unit" button can never disagree about whether a lapsed hold
   // still counts.
   const selectedStatus = selected === null ? null : displayStatus(selected, nowMs);
+  const sheet =
+    selected === null || selectedStatus === null
+      ? null
+      : plotSheetActions({
+          status: selectedStatus,
+          isMine: selected.isMine,
+          holderUnknown: selected.holderUnknown,
+          viewerIsAssociate: holdInfo !== null,
+        });
 
   // Tower, then floor descending -- the board's building-elevation reading
   // order (InventoryBoard's floorSections). The board uses a tower switcher;
@@ -194,26 +210,19 @@ export function InventoryGrid({
   // Falls back to the first block if the chosen one is gone from the list.
   const shownSections = towerSections.length <= 1 || matching.length === 0 ? towerSections.slice(0, 1) : matching;
 
-  async function handleHold(unit: CatalogueUnit) {
-    setHolding(true);
+  /** Hold or release, then leave the sheet open: on success the page has been
+   *  refreshed by the action (revalidatePath) and the sheet now shows what the
+   *  plot is, your hold with its countdown and Book; on a refusal it says why. */
+  async function runHoldAction(kind: "hold" | "release", unit: CatalogueUnit) {
+    setBusy(kind);
     setHoldError(null);
     try {
-      const response = await fetch(`/api/v1/projects/${projectId}/units/${unit.id}/holds`, {
-        method: "POST",
-        credentials: "same-origin",
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-        // Never a generic error -- "Just taken by Ravi (A-0042)" is the
-        // whole point (docs/08-SCREENS.md).
-        throw new Error(body?.detail ?? `Hold failed (HTTP ${response.status}).`);
-      }
-      refreshNow();
-      setSelectedId(null);
-    } catch (caught) {
-      setHoldError(caught instanceof Error ? caught.message : "Hold failed.");
+      const result = await (kind === "hold" ? holdPlotAction : releaseHoldAction)(projectId, unit.id);
+      if (!result.ok) setHoldError(result.message);
+    } catch {
+      setHoldError("Could not reach the server. Check your connection and try again.");
     } finally {
-      setHolding(false);
+      setBusy(null);
     }
   }
 
@@ -283,6 +292,7 @@ export function InventoryGrid({
                         }
                         urgent={remainingMs !== null && remainingMs <= EXPIRY_WARNING_MS}
                         selected={unit.id === selectedId}
+                        mine={status === "HELD" && unit.isMine && !unit.holderUnknown}
                         onSelect={(unitId) => {
                           setHoldError(null);
                           setSelectedId(unitId);
@@ -341,7 +351,9 @@ export function InventoryGrid({
                       <span className="text-muted-foreground">{selected.isMine ? "Your hold expires" : "Held by"}</span>
                       <span>
                         {selected.isMine
-                          ? formatDateTime(selected.currentHoldExpiresAt)
+                          ? `${formatDateTime(selected.currentHoldExpiresAt)} (${formatCountdown(
+                              Math.max(0, Date.parse(selected.currentHoldExpiresAt) - nowMs),
+                            )} left)`
                           : (selected.heldByName ?? "Another associate")}
                       </span>
                     </div>
@@ -353,29 +365,49 @@ export function InventoryGrid({
                   </p>
                 ) : null}
               </div>
-              {/* Booking takes the hold itself when the plot is free, so "Book" is
-                  the main action; "Hold" stays for reserving without a customer
-                  yet. A plot this associate already holds can be booked too. */}
-              {selectedStatus === "AVAILABLE" || (selectedStatus === "HELD" && selected.isMine) ? (
+              {/* Two things an associate does with a free plot: BOOK it (which takes
+                  the hold itself, then asks for the customer) or HOLD it to
+                  reserve it without a customer yet. Once it is held by them, Book
+                  carries on from that hold and Release gives it back. */}
+              {sheet && (sheet.canBook || sheet.canHold || sheet.canRelease) ? (
                 <SheetFooter>
-                  <Button
-                    nativeButton={false}
-                    render={<Link href={`/inventory/${projectId}/${selected.id}/book`} />}
-                    className="w-full"
-                  >
-                    Book this plot
-                  </Button>
-                  {selectedStatus === "AVAILABLE" ? (
+                  {sheet.canBook ? (
                     <Button
-                      variant="outline"
-                      onClick={() => handleHold(selected)}
-                      disabled={holding}
+                      nativeButton={false}
+                      render={<Link href={`/inventory/${projectId}/${selected.id}/book`} />}
                       className="w-full"
                     >
-                      {holding ? "Holding…" : "Hold this unit"}
+                      Book this plot
                     </Button>
                   ) : null}
+                  {sheet.canHold ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => runHoldAction("hold", selected)}
+                      disabled={busy !== null}
+                      className="w-full"
+                    >
+                      {busy === "hold" ? "Holding…" : "Hold this plot"}
+                    </Button>
+                  ) : null}
+                  {sheet.canRelease ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => runHoldAction("release", selected)}
+                      disabled={busy !== null}
+                      className="w-full"
+                    >
+                      {busy === "release" ? "Releasing…" : "Release hold"}
+                    </Button>
+                  ) : null}
+                  {holdInfo ? (
+                    <p className="text-center text-xs text-muted-foreground">
+                      Holds used {holdInfo.live} of {holdInfo.quota}
+                    </p>
+                  ) : null}
                 </SheetFooter>
+              ) : sheet?.note ? (
+                <p className="px-4 pb-4 text-sm text-muted-foreground">{sheet.note}</p>
               ) : null}
             </>
           ) : null}

@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
-import { bookPlot } from "@desire/services/plot-booking";
+import { bookPlot, releasePlotHold } from "@desire/services/plot-booking";
+import { describeHoldFailure } from "@/lib/hold-messages";
 import { requireSession } from "@/lib/session";
 
 /** The associate's one action: hold the plot (unless they already do), record
@@ -41,4 +42,28 @@ export async function bookPlotAction(formData: FormData): Promise<void> {
   revalidatePath(`/inventory/${projectId}`);
   revalidatePath("/my-bookings");
   redirect(destination);
+}
+
+/** Gives a held plot back, from the book page or from My bookings. Back to the
+ *  plot grid, or to My bookings when that is where the button was. A refusal
+ *  (someone else's hold, a draft is waiting for an admin) comes back as a message. */
+export async function releaseHoldFormAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const projectId = String(formData.get("projectId") ?? "");
+  const unitId = String(formData.get("unitId") ?? "");
+  // Only these two places, never a posted address: no open redirect.
+  const home = formData.get("next") === "/my-bookings" ? "/my-bookings" : `/inventory/${projectId}`;
+
+  try {
+    await releasePlotHold(getPrismaClient(), {
+      unitId,
+      audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
+    });
+  } catch (error) {
+    redirect(`${home === "/my-bookings" ? home : `/inventory/${projectId}/${unitId}/book`}?error=${encodeURIComponent(describeHoldFailure(error))}`);
+  }
+
+  revalidatePath(`/inventory/${projectId}`);
+  revalidatePath("/my-bookings");
+  redirect(home);
 }
