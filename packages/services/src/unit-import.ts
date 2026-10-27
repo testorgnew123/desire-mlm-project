@@ -18,6 +18,7 @@ import { Prisma, SCOPE } from "@desire/db";
 import type { UnitGroupKind } from "@desire/db";
 import type { PrismaClient } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
+import { normalizePlcTag } from "./plc-tags";
 import { PlotsOnlyError, assertPlotsOnlyGroup } from "./plots-only";
 import { assertPermission, ForbiddenError } from "./rbac";
 import { resolveUnitAreas, type UnitTypeAreas } from "./projects";
@@ -308,10 +309,14 @@ function validateRow(
             `plcTags[${tagIndex}] must be a non-empty string, got ${display(tag)}`,
           );
         } else {
-          tags.push(tag.trim());
+          try {
+            tags.push(normalizePlcTag(tag));
+          } catch (error) {
+            fail("plcTags", tag, `plcTags[${tagIndex}]: ${(error as Error).message}`);
+          }
         }
       });
-      plcTags = tags;
+      plcTags = [...new Set(tags)];
     }
   }
 
@@ -685,6 +690,9 @@ export async function importUnitsInTx(
     }));
     await tx.unitStatusHistory.createMany({ data: genesis });
 
+    const byUnitType: Record<string, number> = {};
+    for (const row of valid) byUnitType[row.unitTypeCode] = (byUnitType[row.unitTypeCode] ?? 0) + 1;
+
     // ONE audit row for the batch. Per-unit rows would bury the signal: a
     // 900-unit import is one administrative act, and "who loaded this
     // inventory, when, and how much of it was rejected" is the question
@@ -703,6 +711,7 @@ export async function importUnitsInTx(
         imported: valid.length,
         skipped: submitted - valid.length,
         errorCount: errors.length,
+        byUnitType,
       },
     });
   }

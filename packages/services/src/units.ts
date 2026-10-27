@@ -4,6 +4,10 @@ import type { PrismaClient, Prisma, UnitStatus } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { assertValidTransition, InvalidTransitionError } from "./unit-transitions";
 import { effectiveUnitStatus } from "./holds";
+import { ForbiddenError, assertPermission } from "./rbac";
+
+/** Longest reason accepted; it is shown on the board and kept in the history. */
+export const MAX_BLOCK_REASON_LENGTH = 500;
 
 export class UnitBlockError extends Error {
   constructor(message: string) {
@@ -63,15 +67,25 @@ async function applyTransition(
   });
 }
 
-/** Blocking is admin-only with a mandatory reason (docs/06-INVENTORY-SPEC.md).
- *  Any live hold is released as part of the same transaction -- leaving a
- *  hold pointing at a blocked unit would let it look holdable on a stale read. */
+/** Blocking takes a plot off sale while it is sorted out. It needs the
+ *  `unit.block` permission for the unit's project (Admin, Super Admin) and a
+ *  reason, and it is for plots that are still for sale: AVAILABLE, or HELD -- the
+ *  hold is released in the same transaction, since a hold pointing at a blocked
+ *  unit would look holdable on a stale read. A plot with a booking waiting on it
+ *  (a draft) is refused, and so is anything already sold: cancel the booking
+ *  first, otherwise the cancel would later put a blocked plot back on sale
+ *  behind the admin's back. */
 export async function blockUnit(
   db: PrismaClient,
   params: { unitId: string; reason: string; audit: AuditContext; now?: Date },
 ): Promise<void> {
-  if (!params.reason?.trim()) {
+  const actorId = requireUserActor(params.audit, "Blocking a plot");
+  const reason = params.reason?.trim() ?? "";
+  if (!reason) {
     throw new UnitBlockError("Blocking a unit requires a reason.");
+  }
+  if (reason.length > MAX_BLOCK_REASON_LENGTH) {
+    throw new UnitBlockError(`The reason can be at most ${MAX_BLOCK_REASON_LENGTH} characters.`);
   }
   const now = params.now ?? new Date();
 
@@ -79,14 +93,37 @@ export async function blockUnit(
     await tx.$queryRaw`SELECT "id" FROM "units" WHERE "id" = ${params.unitId} FOR UPDATE`;
     const unit = await tx.unit.findUniqueOrThrow({
       where: { id: params.unitId },
-      select: { id: true, status: true, currentHoldId: true },
+      select: { id: true, orgId: true, projectId: true, status: true, currentHoldId: true },
     });
+    if (unit.orgId !== params.audit.orgId) {
+      throw new UnitBlockError("Unit not found.");
+    }
+    await assertPermission(tx, actorId, "unit.block", { projectId: unit.projectId });
+
+    if (unit.status !== "AVAILABLE" && unit.status !== "HELD") {
+      throw new UnitBlockError(
+        unit.status === "BLOCKED"
+          ? "This plot is already blocked."
+          : `This plot is ${unit.status.toLowerCase().replaceAll("_", " ")}. Cancel the booking first; only plots that are still for sale can be blocked.`,
+      );
+    }
+    if (unit.status === "HELD") {
+      const waiting = await tx.booking.findFirst({
+        where: { unitId: unit.id, status: { in: ["DRAFT", "PENDING_APPROVAL"] } },
+        select: { bookingNumber: true },
+      });
+      if (waiting) {
+        throw new UnitBlockError(
+          `Booking ${waiting.bookingNumber} is waiting on this plot. Confirm or cancel it first.`,
+        );
+      }
+    }
     assertValidTransition(unit.status, "BLOCKED");
 
     if (unit.currentHoldId) {
       await tx.unitHold.updateMany({
         where: { id: unit.currentHoldId, releasedAt: null },
-        data: { releasedAt: now, releaseReason: "UNIT_BLOCKED", releasedById: params.audit.actorId },
+        data: { releasedAt: now, releaseReason: "UNIT_BLOCKED", releasedById: actorId },
       });
     }
     await tx.unit.update({
@@ -94,8 +131,8 @@ export async function blockUnit(
       data: {
         status: "BLOCKED",
         currentHoldId: null,
-        blockReason: params.reason,
-        blockedById: params.audit.actorId,
+        blockReason: reason,
+        blockedById: actorId,
         blockedAt: now,
       },
     });
@@ -104,8 +141,8 @@ export async function blockUnit(
         unitId: unit.id,
         fromStatus: unit.status,
         toStatus: "BLOCKED",
-        reason: params.reason,
-        actorId: params.audit.actorId,
+        reason,
+        actorId,
         actorLabel: params.audit.actorLabel,
       },
     });
@@ -115,9 +152,16 @@ export async function blockUnit(
       entityId: unit.id,
       before: { status: unit.status },
       after: { status: "BLOCKED" },
-      reason: params.reason,
+      reason,
     });
   });
+}
+
+function requireUserActor(audit: AuditContext, what: string): string {
+  if (!audit.actorId) {
+    throw new ForbiddenError(`${what} requires a user actor, not a system actor.`);
+  }
+  return audit.actorId;
 }
 
 /** Unblocking returns the unit to whatever status it held immediately before
@@ -131,11 +175,19 @@ export async function unblockUnit(
   db: PrismaClient,
   params: { unitId: string; reason?: string; audit: AuditContext },
 ): Promise<{ restoredTo: UnitStatus }> {
+  const actorId = requireUserActor(params.audit, "Unblocking a plot");
   return db.$transaction(async (tx) => {
+    // Locked like blockUnit, so two admins unblocking at once write one history
+    // row, not two.
+    await tx.$queryRaw`SELECT "id" FROM "units" WHERE "id" = ${params.unitId} FOR UPDATE`;
     const unit = await tx.unit.findUniqueOrThrow({
       where: { id: params.unitId },
-      select: { id: true, status: true },
+      select: { id: true, orgId: true, projectId: true, status: true },
     });
+    if (unit.orgId !== params.audit.orgId) {
+      throw new UnitBlockError("Unit not found.");
+    }
+    await assertPermission(tx, actorId, "unit.block", { projectId: unit.projectId });
     if (unit.status !== "BLOCKED") {
       throw new UnitBlockError(`Unit is not blocked (status: ${unit.status}).`);
     }
@@ -167,7 +219,7 @@ export async function unblockUnit(
         fromStatus: "BLOCKED",
         toStatus: restoredTo,
         reason: params.reason ?? "unblocked",
-        actorId: params.audit.actorId,
+        actorId,
         actorLabel: params.audit.actorLabel,
       },
     });

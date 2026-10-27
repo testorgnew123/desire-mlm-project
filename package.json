@@ -16,6 +16,7 @@
     "db:migrate": "pnpm --filter @desire/db exec prisma migrate dev",
     "db:migrate:deploy": "pnpm --filter @desire/db exec prisma migrate deploy",
     "db:seed": "pnpm --filter @desire/db exec prisma db seed",
+    "db:sync-roles": "pnpm --filter @desire/db exec tsx scripts/sync-roles.ts",
     "db:format": "pnpm --filter @desire/db exec prisma format",
     "db:validate": "pnpm --filter @desire/db exec prisma validate"
   },

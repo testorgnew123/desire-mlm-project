@@ -16,6 +16,14 @@
 # If a migration itself fails the build fails with it, Prisma records the
 # migration as failed, and every later `migrate deploy` refuses to run until it
 # is resolved by hand (runbook, "A migration failed on deploy").
+#
+# After the migrations, the role sync (src/sync-roles.ts) adds any role,
+# permission or grant the permission matrix has and the database lacks. Roles are
+# rows that nothing else ever updates after the first seed, so a new role in code
+# (Admin, 2026-10-25) was never created in production. It is add-only and
+# idempotent; a failure fails the build, so the previous deploy keeps serving.
+# The first connect can hit a Neon database that is still waking, so it is tried
+# up to three times (ROLE_SYNC_RETRY_SLEEP seconds apart).
 set -eu
 
 if [ "${CONTEXT:-}" != "production" ]; then
@@ -35,3 +43,15 @@ export DATABASE_URL="${DATABASE_URL:-$DATABASE_URL_UNPOOLED}"
 
 echo "migrate-on-deploy: applying pending migrations to the production database..."
 pnpm --filter @desire/db exec prisma migrate deploy
+
+echo "migrate-on-deploy: adding any missing roles, permissions and grants (add-only)..."
+attempt=1
+until DATABASE_URL="$DATABASE_URL_UNPOOLED" pnpm --filter @desire/db exec tsx scripts/sync-roles.ts --apply --allow-remote; do
+  if [ "$attempt" -ge 3 ]; then
+    echo "migrate-on-deploy: the role sync failed after $attempt attempts; failing the build." >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  echo "migrate-on-deploy: the role sync failed; trying again ($attempt of 3)..." >&2
+  sleep "${ROLE_SYNC_RETRY_SLEEP:-5}"
+done

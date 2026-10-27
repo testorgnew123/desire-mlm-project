@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
+import { getMyHolds } from "@desire/services/plot-booking";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
-import { getSession } from "@/lib/session";
+import { getCachedSessionPermissions, getSession } from "@/lib/session";
 import { InventoryGrid } from "./InventoryGrid";
 import { buildCatalogue } from "@/app/board/[projectId]/build-catalogue";
 
@@ -39,7 +40,7 @@ export default async function PwaInventoryProjectPage({
   // SUM of them, not the slowest. The permission check is among them rather than
   // before them: nothing read here reaches the response unless it passes, and a
   // caller who fails it (rare) wastes three cheap reads.
-  const [permission, project, towers, rows] = await Promise.all([
+  const [permission, project, towers, rows, myHolds, permissions] = await Promise.all([
     assertPermission(db, session.user.id, "unit.read", { projectId }).then(
       () => null,
       (error: unknown) => error,
@@ -83,6 +84,11 @@ export default async function PwaInventoryProjectPage({
       },
       orderBy: [{ floor: "desc" }, { unitNumber: "asc" }],
     }),
+    // The viewer's hold allowance, for "Holds used n of N" and to know whether
+    // they are an associate at all (only associates hold and book). Read with the
+    // rest, so it adds no wait of its own.
+    getMyHolds(db, { actorId: session.user.id, now: readStartedAt }),
+    getCachedSessionPermissions(db, session.user.id, { projectId }),
   ]);
   if (permission instanceof ForbiddenError) notFound();
   if (permission) throw permission;
@@ -105,7 +111,8 @@ export default async function PwaInventoryProjectPage({
   // is theirs exactly when its associate row belongs to their user, so no
   // separate lookup of their associate profile is needed.
   const catalogue = buildCatalogue({
-    rows,
+    // The reason a plot is blocked is for those who block plots, not the phone.
+    rows: permissions.has("unit.block") ? rows : rows.map((row) => ({ ...row, blockReason: null })),
     holds: new Map(holds.map((hold) => [hold.id, hold])),
     towers: towers.map((tower) => ({ id: tower.id, code: tower.code, name: tower.name, kind: tower.kind })),
     now: readStartedAt,
@@ -118,6 +125,7 @@ export default async function PwaInventoryProjectPage({
       projectName={project.name}
       catalogue={catalogue}
       serverTime={readStartedAt.toISOString()}
+      holdInfo={myHolds ? { quota: myHolds.quota, live: myHolds.live } : null}
     />
   );
 }

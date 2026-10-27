@@ -4,6 +4,7 @@ import { getPrismaClient } from "@desire/db";
 import { getBookingForActor } from "@desire/services/bookings";
 import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatDate, formatDateTime } from "@/lib/format";
+import { bookingActions } from "@/lib/booking-actions";
 import { formatArea, formatMoney } from "@/lib/money";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
@@ -63,8 +64,11 @@ export default async function BookingDetailPage({
   // reading one as square feet is a ninefold mistake.
   const basis = unit?.unitType.areaBasis ?? "SQFT";
   const holdLive = !!hold && hold.expiresAt > new Date();
-  const canConfirm = booking.status === "DRAFT" && permissions.has("booking.confirm");
-  const canCancel = booking.status === "CONFIRMED" && permissions.has("booking.cancel");
+  const { canConfirm, confirmDisabled, confirmNote, canCancel } = bookingActions({
+    status: booking.status,
+    permissions,
+    holdLive,
+  });
 
   const priceRows: [label: string, amount: typeof booking.baseAmount, show: boolean][] = [
     ["Base price", booking.baseAmount, true],
@@ -109,12 +113,13 @@ export default async function BookingDetailPage({
                 ? `Held for ${hold.associate.user.name} (${hold.associate.code}) until ${formatDateTime(hold.expiresAt)}. Confirming books the plot and fixes the price below.`
                 : "The associate's hold on this plot has lapsed, so it can no longer be confirmed. They need to book it again."}
             </p>
+            {confirmNote ? <p className="text-muted-foreground">{confirmNote}</p> : null}
             {canConfirm ? (
               <form action={confirmBookingAction}>
                 <input type="hidden" name="bookingId" value={booking.id} />
                 <ConfirmSubmitButton
                   size="sm"
-                  disabled={!holdLive}
+                  disabled={confirmDisabled}
                   message={`Confirm booking ${booking.bookingNumber}? The plot is booked and the price is fixed.`}
                 >
                   Confirm booking

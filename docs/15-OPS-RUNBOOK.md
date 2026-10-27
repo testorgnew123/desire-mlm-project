@@ -175,6 +175,20 @@ section said it did: PR 8 went live with code that reads `users.mustChangePasswo
 before the hosted database had the column, and new sign-ins failed until the
 migration was applied by hand.
 
+Right after the migrations the same script runs the **role sync**
+(`packages/db/src/sync-roles.ts`, `scripts/sync-roles.ts`): for every organisation it
+adds the permissions, roles and role grants the permission matrix has and the database
+lacks, through `DATABASE_URL_UNPOOLED`, retrying the first connect (a Neon database may
+still be waking). Roles are rows that nothing else updates after the first seed, so a
+role added in code (Admin, 2026-10-25) never existed in production: the Users screen
+offered it and the save failed with *Role "ADMIN" is not configured for this
+organisation*. The sync is **add-only** (it never removes a grant, a role or a user’s
+role; grants a role holds beyond the matrix are only listed in the build log) and
+idempotent, and a failure fails the build like a failed migration. A preview database
+gets the same sync from `neon-preview-branches.yml`. To look without changing anything:
+`pnpm db:sync-roles` is a dry run; `-- --apply` performs it. Moving people off the old
+roles and removing grants is still `narrow-roles.ts`, by hand, with a go-ahead.
+
 Breaking schema changes use expand–contract: add column → backfill → switch reads
 → drop in a later release. Never a destructive migration in a single release. Because
 migrations now run before the new code is published, the OLD code must keep working

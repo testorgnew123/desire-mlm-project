@@ -16,6 +16,7 @@ import {
   unblockUnit,
 } from "../src/units";
 import { acquireHold } from "../src/holds";
+import { ForbiddenError } from "../src/rbac";
 import type { AuditContext } from "../src/audit";
 
 const db = getPrismaClient();
@@ -23,8 +24,33 @@ const ORG = "org_test_units";
 
 const audit: AuditContext = { orgId: ORG, actorId: null, actorLabel: "test" };
 
+/** An admin who holds unit.block; set by seedFixture. Blocking is permissioned,
+ *  so these calls go through a real user rather than the system actor. */
+let adminAudit: AuditContext;
+
+/** A user holding `unit.block` org-wide (the Admin role has it). */
+async function makeUser(label: string, permissions: string[]) {
+  const user = await db.user.create({
+    data: { orgId: ORG, email: `${label}@test.local`, name: label, passwordHash: "unused" },
+  });
+  const role = await db.role.create({ data: { orgId: ORG, code: `ROLE_${label}`, name: label } });
+  for (const code of permissions) {
+    const [resource, action] = code.split(".") as [string, string];
+    const perm = await db.permission.upsert({
+      where: { code },
+      update: {},
+      create: { code, resource, action },
+    });
+    await db.rolePermission.create({ data: { roleId: role.id, permissionId: perm.id } });
+  }
+  await db.userRole.create({ data: { userId: user.id, roleId: role.id, projectId: null } });
+  return user;
+}
+
 async function reset() {
   await db.auditLog.deleteMany({ where: { orgId: ORG } });
+  await db.booking.deleteMany({ where: { orgId: ORG } });
+  await db.customer.deleteMany({ where: { orgId: ORG } });
   await db.unitStatusHistory.deleteMany({ where: { unit: { orgId: ORG } } });
   await db.unitHold.deleteMany({ where: { orgId: ORG } });
   await db.unit.deleteMany({ where: { orgId: ORG } });
@@ -34,6 +60,9 @@ async function reset() {
   await db.tower.deleteMany({ where: { orgId: ORG } });
   await db.associateGrade.deleteMany({ where: { associate: { orgId: ORG } } });
   await db.associate.deleteMany({ where: { orgId: ORG } });
+  await db.userRole.deleteMany({ where: { role: { orgId: ORG } } });
+  await db.rolePermission.deleteMany({ where: { role: { orgId: ORG } } });
+  await db.role.deleteMany({ where: { orgId: ORG } });
   await db.user.deleteMany({ where: { orgId: ORG } });
   await db.project.deleteMany({ where: { orgId: ORG } });
   await db.grade.deleteMany({ where: { orgId: ORG } });
@@ -111,7 +140,10 @@ async function seedFixture() {
     data: { associateId: associate.id, gradeId: grade.id, validFrom: new Date("2024-01-01") },
   });
 
-  return { project, unit, unitType, associate };
+  const admin = await makeUser("admin", ["unit.block"]);
+  adminAudit = { orgId: ORG, actorId: admin.id, actorLabel: admin.name };
+
+  return { project, unit, unitType, associate, admin };
 }
 
 beforeEach(reset);
@@ -169,10 +201,10 @@ describe("transitionUnitStatus", () => {
 describe("blockUnit", () => {
   it("requires a non-empty reason", async () => {
     const { unit } = await seedFixture();
-    await expect(blockUnit(db, { unitId: unit.id, reason: "", audit })).rejects.toThrow(
+    await expect(blockUnit(db, { unitId: unit.id, reason: "", audit: adminAudit })).rejects.toThrow(
       UnitBlockError,
     );
-    await expect(blockUnit(db, { unitId: unit.id, reason: "   ", audit })).rejects.toThrow(
+    await expect(blockUnit(db, { unitId: unit.id, reason: "   ", audit: adminAudit })).rejects.toThrow(
       UnitBlockError,
     );
   });
@@ -180,7 +212,7 @@ describe("blockUnit", () => {
   it("blocks an AVAILABLE unit, recording who and why", async () => {
     const { unit } = await seedFixture();
 
-    await blockUnit(db, { unitId: unit.id, reason: "legal hold", audit });
+    await blockUnit(db, { unitId: unit.id, reason: "legal hold", audit: adminAudit });
 
     const after = await db.unit.findUniqueOrThrow({ where: { id: unit.id } });
     expect(after.status).toBe("BLOCKED");
@@ -196,17 +228,17 @@ describe("blockUnit", () => {
 
   it("refuses to block a unit already BLOCKED", async () => {
     const { unit } = await seedFixture();
-    await blockUnit(db, { unitId: unit.id, reason: "first", audit });
+    await blockUnit(db, { unitId: unit.id, reason: "first", audit: adminAudit });
     await expect(
-      blockUnit(db, { unitId: unit.id, reason: "second", audit }),
-    ).rejects.toThrow(InvalidTransitionError);
+      blockUnit(db, { unitId: unit.id, reason: "second", audit: adminAudit }),
+    ).rejects.toThrow(/already blocked/);
   });
 
   it("releases a live hold in the same transaction as the block, so a blocked unit never points at a live hold", async () => {
     const { unit, associate } = await seedFixture();
     const held = await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
 
-    await blockUnit(db, { unitId: unit.id, reason: "compliance freeze", audit });
+    await blockUnit(db, { unitId: unit.id, reason: "compliance freeze", audit: adminAudit });
 
     const after = await db.unit.findUniqueOrThrow({ where: { id: unit.id } });
     expect(after.status).toBe("BLOCKED");
@@ -221,14 +253,14 @@ describe("blockUnit", () => {
 describe("unblockUnit", () => {
   it("refuses to unblock a unit that is not BLOCKED", async () => {
     const { unit } = await seedFixture();
-    await expect(unblockUnit(db, { unitId: unit.id, audit })).rejects.toThrow(UnitBlockError);
+    await expect(unblockUnit(db, { unitId: unit.id, audit: adminAudit })).rejects.toThrow(UnitBlockError);
   });
 
   it("restores an AVAILABLE unit to AVAILABLE", async () => {
     const { unit } = await seedFixture();
-    await blockUnit(db, { unitId: unit.id, reason: "test", audit });
+    await blockUnit(db, { unitId: unit.id, reason: "test", audit: adminAudit });
 
-    const result = await unblockUnit(db, { unitId: unit.id, reason: "resolved", audit });
+    const result = await unblockUnit(db, { unitId: unit.id, reason: "resolved", audit: adminAudit });
 
     expect(result.restoredTo).toBe("AVAILABLE");
     const after = await db.unit.findUniqueOrThrow({ where: { id: unit.id } });
@@ -247,9 +279,14 @@ describe("unblockUnit", () => {
     const { unit, associate } = await seedFixture();
     await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
     await transitionUnitStatus(db, { unitId: unit.id, to: "BOOKED", audit });
-    await blockUnit(db, { unitId: unit.id, reason: "review", audit });
+    // blockUnit no longer takes a sold plot, but one blocked before that rule
+    // may exist: lay down the state it left (BLOCKED, history from BOOKED).
+    await db.unit.update({ where: { id: unit.id }, data: { status: "BLOCKED", blockReason: "review" } });
+    await db.unitStatusHistory.create({
+      data: { unitId: unit.id, fromStatus: "BOOKED", toStatus: "BLOCKED", reason: "review", actorLabel: "legacy" },
+    });
 
-    const result = await unblockUnit(db, { unitId: unit.id, audit });
+    const result = await unblockUnit(db, { unitId: unit.id, audit: adminAudit });
 
     expect(result.restoredTo).toBe("BOOKED");
     const after = await db.unit.findUniqueOrThrow({ where: { id: unit.id } });
@@ -259,9 +296,9 @@ describe("unblockUnit", () => {
   it("the special case: a unit blocked while HELD returns to AVAILABLE, not HELD, because the hold was already released", async () => {
     const { unit, associate } = await seedFixture();
     await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
-    await blockUnit(db, { unitId: unit.id, reason: "freeze", audit });
+    await blockUnit(db, { unitId: unit.id, reason: "freeze", audit: adminAudit });
 
-    const result = await unblockUnit(db, { unitId: unit.id, audit });
+    const result = await unblockUnit(db, { unitId: unit.id, audit: adminAudit });
 
     // Structurally HELD -> BLOCKED -> HELD would be legal, but it would point
     // at the hold row blockUnit already released -- unblockUnit deliberately
@@ -273,8 +310,8 @@ describe("unblockUnit", () => {
 
   it("defaults the history reason to 'unblocked' when none is given", async () => {
     const { unit } = await seedFixture();
-    await blockUnit(db, { unitId: unit.id, reason: "test", audit });
-    await unblockUnit(db, { unitId: unit.id, audit });
+    await blockUnit(db, { unitId: unit.id, reason: "test", audit: adminAudit });
+    await unblockUnit(db, { unitId: unit.id, audit: adminAudit });
 
     const history = await db.unitStatusHistory.findFirst({
       where: { unitId: unit.id, fromStatus: "BLOCKED" },
@@ -284,12 +321,159 @@ describe("unblockUnit", () => {
 
   it("throws when the unit has no recorded prior status (data corruption, not a real path)", async () => {
     const { unit } = await seedFixture();
-    await blockUnit(db, { unitId: unit.id, reason: "test", audit });
+    await blockUnit(db, { unitId: unit.id, reason: "test", audit: adminAudit });
     // Simulate a corrupted history table: delete the row that names what the
     // unit was before it was blocked.
     await db.unitStatusHistory.deleteMany({ where: { unitId: unit.id, toStatus: "BLOCKED" } });
 
-    await expect(unblockUnit(db, { unitId: unit.id, audit })).rejects.toThrow(UnitBlockError);
+    await expect(unblockUnit(db, { unitId: unit.id, audit: adminAudit })).rejects.toThrow(UnitBlockError);
+  });
+});
+
+describe("blocking is permissioned and only for plots still on sale", () => {
+  async function bookingOn(unitId: string, projectId: string, associateId: string, status: "DRAFT" | "CONFIRMED" | "CANCELLED") {
+    const customer = await db.customer.create({ data: { orgId: ORG, name: "Buyer", phone: "9999900000" } });
+    const priceList = await db.priceList.findFirstOrThrow({ where: { projectId } });
+    return db.booking.create({
+      data: {
+        orgId: ORG,
+        projectId,
+        unitId,
+        customerId: customer.id,
+        bookingNumber: `BK-${Math.random().toString(36).slice(2, 8)}`,
+        bookingDate: new Date(),
+        status,
+        sellingAssociateId: associateId,
+        priceListId: priceList.id,
+        baseAmount: "1000.00",
+        agreementValue: "1000.00",
+        commissionableValue: "1000.00",
+        saleableAreaAtBooking: "975.00",
+      },
+    });
+  }
+
+  it("refuses a user without unit.block, and changes nothing", async () => {
+    const { unit } = await seedFixture();
+    const associateUser = await makeUser("plain", ["unit.read"]);
+
+    await expect(
+      blockUnit(db, {
+        unitId: unit.id,
+        reason: "nope",
+        audit: { orgId: ORG, actorId: associateUser.id, actorLabel: "plain" },
+      }),
+    ).rejects.toThrow(ForbiddenError);
+
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).status).toBe("AVAILABLE");
+    await blockUnit(db, { unitId: unit.id, reason: "ok", audit: adminAudit });
+    await expect(
+      unblockUnit(db, { unitId: unit.id, audit: { orgId: ORG, actorId: associateUser.id, actorLabel: "plain" } }),
+    ).rejects.toThrow(ForbiddenError);
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).status).toBe("BLOCKED");
+  });
+
+  it("refuses the system actor", async () => {
+    const { unit } = await seedFixture();
+    await expect(blockUnit(db, { unitId: unit.id, reason: "x", audit })).rejects.toThrow(ForbiddenError);
+    await expect(unblockUnit(db, { unitId: unit.id, audit })).rejects.toThrow(ForbiddenError);
+  });
+
+  it("refuses an admin of another organisation", async () => {
+    const { unit } = await seedFixture();
+    await expect(
+      blockUnit(db, { unitId: unit.id, reason: "x", audit: { ...adminAudit, orgId: "org_somewhere_else" } }),
+    ).rejects.toThrow(/not found/i);
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).status).toBe("AVAILABLE");
+  });
+
+  it("refuses an admin whose role is for a different project", async () => {
+    const { unit } = await seedFixture();
+    const other = await db.project.create({
+      data: { orgId: ORG, code: "OTHERP", name: "Other", city: "Pune", state: "Maharashtra" },
+    });
+    const scoped = await makeUser("scoped", []);
+    const role = await db.role.create({ data: { orgId: ORG, code: "ROLE_scoped_block", name: "scoped" } });
+    const perm = await db.permission.upsert({
+      where: { code: "unit.block" },
+      update: {},
+      create: { code: "unit.block", resource: "unit", action: "block" },
+    });
+    await db.rolePermission.create({ data: { roleId: role.id, permissionId: perm.id } });
+    await db.userRole.create({ data: { userId: scoped.id, roleId: role.id, projectId: other.id } });
+
+    await expect(
+      blockUnit(db, { unitId: unit.id, reason: "x", audit: { orgId: ORG, actorId: scoped.id, actorLabel: "s" } }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("trims the reason, and refuses one over 500 characters", async () => {
+    const { unit } = await seedFixture();
+    await expect(
+      blockUnit(db, { unitId: unit.id, reason: "x".repeat(501), audit: adminAudit }),
+    ).rejects.toThrow(UnitBlockError);
+    await blockUnit(db, { unitId: unit.id, reason: "  title dispute  ", audit: adminAudit });
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).blockReason).toBe("title dispute");
+  });
+
+  it.each(["BOOKED", "AGREEMENT_SIGNED", "REGISTERED", "POSSESSION"] as const)("refuses a %s plot: cancel the booking first", async (status) => {
+    const { unit } = await seedFixture();
+    await db.unit.update({ where: { id: unit.id }, data: { status } });
+    await expect(blockUnit(db, { unitId: unit.id, reason: "x", audit: adminAudit })).rejects.toThrow(
+      /Cancel the booking first/,
+    );
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).status).toBe(status);
+  });
+
+  it("refuses a held plot with a draft booking waiting on it", async () => {
+    const { unit, project, associate } = await seedFixture();
+    await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+    const booking = await bookingOn(unit.id, project.id, associate.id, "DRAFT");
+
+    await expect(blockUnit(db, { unitId: unit.id, reason: "x", audit: adminAudit })).rejects.toThrow(
+      new RegExp(booking.bookingNumber),
+    );
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).status).toBe("HELD");
+  });
+
+  it("takes a held plot whose only booking was cancelled", async () => {
+    const { unit, project, associate } = await seedFixture();
+    await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+    await bookingOn(unit.id, project.id, associate.id, "CANCELLED");
+
+    await blockUnit(db, { unitId: unit.id, reason: "x", audit: adminAudit });
+    expect((await db.unit.findUniqueOrThrow({ where: { id: unit.id } })).status).toBe("BLOCKED");
+  });
+
+  it("a blocked plot cannot be held", async () => {
+    const { unit, associate } = await seedFixture();
+    await blockUnit(db, { unitId: unit.id, reason: "x", audit: adminAudit });
+    await expect(
+      acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit }),
+    ).rejects.toThrow();
+    expect(await db.unitHold.count({ where: { unitId: unit.id } })).toBe(0);
+  });
+
+  it("writes an audit row naming the admin and the reason", async () => {
+    const { unit, admin } = await seedFixture();
+    await blockUnit(db, { unitId: unit.id, reason: "survey pending", audit: adminAudit });
+    const row = await db.auditLog.findFirstOrThrow({
+      where: { entity: "Unit", entityId: unit.id, action: "UPDATE" },
+    });
+    expect(row.actorId).toBe(admin.id);
+    expect(row.reason).toBe("survey pending");
+  });
+
+  it("two admins unblocking at once write one history row, and one of them is told it is not blocked", async () => {
+    const { unit } = await seedFixture();
+    await blockUnit(db, { unitId: unit.id, reason: "x", audit: adminAudit });
+
+    const results = await Promise.allSettled([
+      unblockUnit(db, { unitId: unit.id, audit: adminAudit }),
+      unblockUnit(db, { unitId: unit.id, audit: adminAudit }),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await db.unitStatusHistory.count({ where: { unitId: unit.id, fromStatus: "BLOCKED" } })).toBe(1);
   });
 });
 
@@ -417,9 +601,7 @@ describe("listActiveHolds", () => {
 describe("listBlockedUnits", () => {
   it("returns a blocked unit with its reason and who blocked it", async () => {
     const { unit } = await seedFixture();
-    const blocker = await db.user.create({
-      data: { orgId: ORG, email: "blocker@test.local", name: "Blocker Admin", passwordHash: "unused" },
-    });
+    const blocker = await makeUser("Blocker Admin", ["unit.block"]);
     await blockUnit(db, {
       unitId: unit.id,
       reason: "compliance freeze",

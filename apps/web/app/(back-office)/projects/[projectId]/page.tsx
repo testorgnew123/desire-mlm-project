@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { UNIT_FACINGS } from "@desire/services/unit-import";
+import { getActivePriceList } from "@desire/services/price-lists";
+import { parsePlcCharges } from "@desire/services/cost-sheet";
 import { requireSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
 import { describeGroupCounts, groupNoun } from "@/lib/groups";
@@ -48,7 +51,7 @@ export default async function ProjectDetailPage({
   });
   if (!project) notFound();
 
-  const [towers, unitTypes, priceLists, plcTagRows] =
+  const [towers, unitTypes, priceLists, plcTagRows, plotCounts, activeList] =
     await Promise.all([
     db.tower.findMany({
       where: { projectId },
@@ -72,19 +75,60 @@ export default async function ProjectDetailPage({
       WHERE "projectId" = ${projectId}
       ORDER BY tag
     `,
+    // Plots per block and size, for the breakdown on the Blocks card and the
+    // count on the Plot types card: one grouped read, not one per row.
+    db.unit.groupBy({
+      by: ["towerId", "unitTypeId"],
+      where: { projectId },
+      _count: { _all: true },
+    }),
+    // The live list, to start a new version from: a new version replaces the old
+    // one whole, so a form that opened empty would drop every rate it did not
+    // retype.
+    getActivePriceList(db, { projectId }),
   ]);
 
-  const plcTags = plcTagRows.map((row) => row.tag);
+  // Every tag in use, every tag the live list already prices, and CORNER always:
+  // the corner premium is the one the client sets before any plot is marked.
+  const activeItems = new Map(
+    (activeList?.items ?? []).filter((item) => item.unitTypeId).map((item) => [item.unitTypeId!, item]),
+  );
+  const pricedTags = new Set<string>();
+  for (const item of activeItems.values()) {
+    for (const tag of Object.keys(parsePlcCharges(item.plcCharges))) pricedTags.add(tag);
+  }
+  const plcTags = [...new Set(["CORNER", ...plcTagRows.map((row) => row.tag), ...pricedTags])].sort();
+  const activeRate = (unitTypeId: string) => activeItems.get(unitTypeId)?.baseRate.toString() ?? "";
+  const activeCharge = (unitTypeId: string, tag: string) => {
+    const item = activeItems.get(unitTypeId);
+    return item ? parsePlcCharges(item.plcCharges)[tag] : undefined;
+  };
 
   const towerCount = towers.filter((tower) => tower.kind === "TOWER").length;
   const blockCount = towers.filter((tower) => tower.kind === "BLOCK").length;
 
+  // Smallest first, the way sizes are listed. Every plot type is quoted in
+  // saleable sq yd, so the form drops the "(saleable)" tag: the dropdown has
+  // little room and the word adds nothing there.
   const plotTypes = unitTypes
     .filter((unitType) => unitType.areaBasis === "SQYD")
+    .sort((a, b) => Number(a.saleableArea) - Number(b.saleableArea))
     .map((unitType) => ({
       id: unitType.id,
-      label: `${unitType.code} — ${formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}`,
+      label: `${unitType.code} — ${(formatArea(unitType.saleableArea, "saleable", unitType.areaBasis) ?? "").replace(" (saleable)", "")}`,
     }));
+  const typeCodeById = new Map(unitTypes.map((unitType) => [unitType.id, unitType.code]));
+  const plotsInType = new Map<string, number>();
+  const sizesByBlock = new Map<string, Array<{ code: string; count: number }>>();
+  for (const row of plotCounts) {
+    const code = typeCodeById.get(row.unitTypeId) ?? "?";
+    plotsInType.set(row.unitTypeId, (plotsInType.get(row.unitTypeId) ?? 0) + row._count._all);
+    if (row.towerId) {
+      const list = sizesByBlock.get(row.towerId) ?? [];
+      list.push({ code, count: row._count._all });
+      sizesByBlock.set(row.towerId, list);
+    }
+  }
   // What a plot can be loaded into or typed as: blocks and plot types only.
   const blocks = towers.filter((tower) => tower.kind === "BLOCK");
   const plotTypeRows = unitTypes.filter((unitType) => unitType.areaBasis === "SQYD");
@@ -118,6 +162,15 @@ export default async function ProjectDetailPage({
                   <div key={tower.id} className="flex justify-between gap-3 py-1.5 text-sm first:pt-0">
                     <span>
                       {tower.code} — {tower.name}
+                      {tower.kind === "BLOCK" && (sizesByBlock.get(tower.id)?.length ?? 0) > 0 ? (
+                        <span className="block text-xs text-muted-foreground">
+                          {sizesByBlock
+                            .get(tower.id)!
+                            .sort((a, b) => a.code.localeCompare(b.code))
+                            .map((size) => `${size.count} × ${size.code}`)
+                            .join(" · ")}
+                        </span>
+                      ) : null}
                     </span>
                     {/* The kind sits on the right, not in front of the name: a
                         block usually IS named "Block A", and "Block A — Block A"
@@ -132,7 +185,12 @@ export default async function ProjectDetailPage({
                 );
               })}
             </div>
-            <GroupForm projectId={project.id} plotTypes={plotTypes} />
+            {blockCount > 0 ? (
+              <Link href={`/projects/${project.id}/plots`} className="text-sm text-primary hover:underline">
+                Block plots or mark corner plots
+              </Link>
+            ) : null}
+            <GroupForm key={towers.length} projectId={project.id} plotTypes={plotTypes} />
           </CardContent>
         </Card>
 
@@ -154,6 +212,7 @@ export default async function ProjectDetailPage({
                   <p className="text-xs text-muted-foreground">
                     {unitType.areaBasis === "SQYD" ? "Plot" : "Flat"} ·{" "}
                     {formatArea(unitType.saleableArea, "saleable", unitType.areaBasis)}
+                    {plotsInType.has(unitType.id) ? ` · ${plotsInType.get(unitType.id)} in use` : ""}
                   </p>
                 </div>
               ))}
@@ -262,6 +321,7 @@ export default async function ProjectDetailPage({
                       <input type="hidden" name="unitTypeId" value={unitType.id} />
                       <Input
                         name={`rate_${unitType.id}`}
+                        defaultValue={activeRate(unitType.id)}
                         placeholder={
                           unitType.areaBasis === "SQYD" ? "Rate per sq yd" : "Rate per sq ft"
                         }
@@ -274,7 +334,9 @@ export default async function ProjectDetailPage({
                         priced for this type -- which is NOT the same as zero,
                         and the cost sheet will refuse to quote a unit whose
                         tag has no charge rather than quote it at nothing. */}
-                    {plcTags.map((tag) => (
+                    {plcTags.map((tag) => {
+                      const live = activeCharge(unitType.id, tag);
+                      return (
                       <div key={tag} className="flex items-center gap-2 pl-4">
                         <Label
                           title={tag}
@@ -289,7 +351,7 @@ export default async function ProjectDetailPage({
                         <select
                           name={`plcBasis_${unitType.id}`}
                           aria-label={`${tag} charge basis for ${unitType.code}`}
-                          defaultValue="PER_AREA"
+                          defaultValue={live?.basis ?? (tag === "CORNER" && unitType.areaBasis === "SQYD" ? "PCT_OF_BASE" : "PER_AREA")}
                           className="h-9 w-32 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
                         >
                           <option value="PER_AREA">
@@ -300,18 +362,21 @@ export default async function ProjectDetailPage({
                         <Input
                           name={`plcValue_${unitType.id}`}
                           aria-label={`${tag} charge for ${unitType.code}`}
+                          defaultValue={live?.value.toString() ?? ""}
                           placeholder="Blank = not priced"
                         />
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ))}
-                {plcTags.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    No PLC tags on this project&rsquo;s units yet. Tag units CORNER, PARK_FACING
-                    and so on when importing them, and each tag gets a rate here.
-                  </p>
-                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  {activeList
+                    ? "Opened with the live rates; change what you need and publish it as the next version."
+                    : "No live price list yet."}{" "}
+                  Corner plots are marked on the Plots screen of each block. A tag left blank is not
+                  priced, and a plot with that tag cannot be booked until it is.
+                </p>
                 <Button type="submit" size="sm">
                   Create draft price list
                 </Button>
