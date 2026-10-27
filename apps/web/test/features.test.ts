@@ -89,10 +89,12 @@ describe("feature registry", () => {
     ["/board/abc", "enabled"],
     ["/inventory/abc/def/book", "enabled"],
     ["/bookings", "enabled"],
+    ["/bookings/by-associate", "enabled"],
     ["/my-bookings", "enabled"],
     ["/admin/users", "enabled"],
     ["/api/v1/projects/p1/units/u1/holds", "enabled"],
     ["/api/v1/bookings", "enabled"],
+    ["/api/v1/bookings/by-associate", "enabled"],
     ["/api/v1/bookings/b1/confirm", "enabled"],
     ["/api/v1/bookings/b1/cancel", "enabled"],
     ["/api/jobs/holds/expire", "enabled"],
@@ -178,6 +180,7 @@ describe("navigation", () => {
       "projects",
       "inventory",
       "bookings",
+      "sales-report",
       "admin",
     ]);
     expect(filterNav(PWA_NAV, everything).map((item) => item.key)).toEqual(["inventory", "my-bookings"]);
@@ -190,7 +193,7 @@ describe("navigation", () => {
 
   it("shows an ADMIN (user.manage, no rbac.manage) the Admin section", () => {
     const admin = new Set(["project.read", "unit.read", "booking.read", "user.manage"]);
-    expect(filterNav(BACK_OFFICE_NAV, admin).map((item) => item.key)).toEqual(["projects", "inventory", "bookings", "admin"]);
+    expect(filterNav(BACK_OFFICE_NAV, admin).map((item) => item.key)).toEqual(["projects", "inventory", "bookings", "sales-report", "admin"]);
   });
 
   it("gives an ASSOCIATE the phone shell's two tabs and no Admin", () => {

@@ -27,6 +27,7 @@ a download link. Every export writes `AuditAction.EXPORT`.
 | **Team rollup** | Lead+ | Own + full downline, resolved via the hierarchy path |
 | **Site visit conversion** | Sales | Visits → bookings, by associate and project |
 | **Lost analysis** | Head | `lostReason` distribution, trend |
+| **Sales by associate** (built, 2026-10-27) | Admin: all associates; associate: own row | Per associate: plots sold (CONFIRMED and later), waiting (drafts), cancelled, base price total, agreement value total, average agreement value, last sale; totals row; drill-down to the bookings behind a row. Filters: project and Indian-calendar-day range on booking date. Screen `/bookings/by-associate`, files `GET /api/v1/bookings/by-associate?format=csv|xlsx` (`view=bookings&associate=` for the drill-down). Scope comes from the signed-in user, never a parameter. Free-text cells are guarded against spreadsheet formulas. |
 
 ## Collections
 

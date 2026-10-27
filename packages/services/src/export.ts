@@ -24,6 +24,15 @@ export function csvField(value: string): string {
   return value;
 }
 
+/** A spreadsheet runs a cell that starts with = + - @ (or a tab / carriage
+ *  return) as a formula, so a customer or associate name typed as `=HYPERLINK(...)`
+ *  would execute when an admin opens the export. A leading apostrophe makes it
+ *  text. For free-text cells only: numbers are written as numbers and must not be
+ *  touched, so csvField itself stays as it was. */
+export function guardFormula(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+}
+
 export function toCsv(header: string[], rows: string[][]): string {
   return [header, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
 }

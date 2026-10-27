@@ -4,9 +4,10 @@ import { ClipboardList, CircleAlert, CircleCheck } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listBookings } from "@desire/services/bookings";
 import { getMyHolds } from "@desire/services/plot-booking";
+import { getSalesByAssociate } from "@desire/services/sales-report";
 import { requireSession } from "@/lib/session";
 import { formatDate, formatDateTime } from "@/lib/format";
-import { formatMoney } from "@/lib/money";
+import { formatMoney, formatMoneyCompact } from "@/lib/money";
 import { bookingStatusTone } from "@/lib/status-tone";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
@@ -32,7 +33,7 @@ export default async function MyBookingsPage({
   const session = await requireSession();
   const db = getPrismaClient();
 
-  const [bookings, myHolds] = await Promise.all([
+  const [bookings, myHolds, sales] = await Promise.all([
     listBookings(db, {
       orgId: session.user.orgId,
       actorId: session.user.id,
@@ -40,6 +41,8 @@ export default async function MyBookingsPage({
       take: 50,
     }),
     getMyHolds(db, { actorId: session.user.id }),
+    // Their own totals: the service scopes an associate to their own row.
+    getSalesByAssociate(db, { orgId: session.user.orgId, actorId: session.user.id }),
   ]);
 
   const unitIds = [...new Set(bookings.map((b) => b.unitId))];
@@ -71,6 +74,23 @@ export default async function MyBookingsPage({
           <CircleAlert className="mt-0.5 size-4 shrink-0" />
           {error}
         </p>
+      ) : null}
+
+      {sales.totals.sold + sales.totals.waiting > 0 ? (
+        <dl className="grid grid-cols-3 gap-2 rounded-lg border border-border p-3 text-center">
+          <div>
+            <dt className="text-xs text-muted-foreground">Plots sold</dt>
+            <dd className="text-lg font-semibold tabular-nums">{sales.totals.sold}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Sold value</dt>
+            <dd className="text-lg font-semibold tabular-nums">{formatMoneyCompact(sales.totals.agreementTotal)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Waiting</dt>
+            <dd className="text-lg font-semibold tabular-nums">{sales.totals.waiting}</dd>
+          </div>
+        </dl>
       ) : null}
 
       {myHolds && myHolds.holds.length > 0 ? (
