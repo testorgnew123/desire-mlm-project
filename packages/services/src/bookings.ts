@@ -849,6 +849,24 @@ export async function listBookings(db: PrismaClient, params: ListBookingsParams)
   });
 }
 
+/** Whose bookings this actor may read: null means all of the organisation's,
+ *  otherwise the associates whose bookings they may see (themself, plus the
+ *  downline for a team lead). The rule listBookings applies, for readers that
+ *  aggregate instead of listing (the sales report). Checks booking.read. */
+export async function resolveBookingScope(
+  db: PrismaClient,
+  params: { actorId: string; projectId?: string },
+): Promise<string[] | null> {
+  await assertPermission(db, params.actorId, READ_PERMISSION, { projectId: params.projectId });
+  const roleCodes = await resolveActorRoleCodes(db, params.actorId);
+  const isScoped = roleCodes.size > 0 && [...roleCodes].every((code) => SCOPED_ROLE_CODES.has(code));
+  if (!isScoped) return null;
+  const caller = await db.associate.findUnique({ where: { userId: params.actorId }, select: { id: true } });
+  if (!caller) return [];
+  const mode: ScopeMode = roleCodes.has("TEAM_LEAD") ? "OWN_AND_DOWNLINE" : "OWN";
+  return getAccessibleAssociateIds(db, caller.id, mode);
+}
+
 /** Same row-level scope as listBookings, for a single booking -- the
  *  back-office detail screen must not let a scoped ASSOCIATE/TEAM_LEAD view
  *  a booking outside their own/downline by guessing its id. Returns null
