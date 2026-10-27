@@ -35,6 +35,8 @@ export interface UnitDrawerProps {
   holdError: string | null;
   /** False for a viewer with no associate profile: no Hold button is drawn. */
   canHold: boolean;
+  /** Link to the Plots screen, for viewers who may block plots; null otherwise. */
+  manageHref: string | null;
   onHold: () => void;
 }
 
@@ -62,6 +64,7 @@ export function UnitDrawer({
   isHolding,
   holdError,
   canHold,
+  manageHref,
   onHold,
 }: UnitDrawerProps) {
   const headingId = useId();
@@ -186,6 +189,14 @@ export function UnitDrawer({
               <p className={styles.blockReason}>
                 {unit.blockReason ?? "No reason recorded."}
               </p>
+            </section>
+          ) : null}
+
+          {manageHref && (status === "AVAILABLE" || status === "HELD" || status === "BLOCKED") ? (
+            <section>
+              <a className={styles.inlineButton} href={manageHref}>
+                {status === "BLOCKED" ? "Unblock on the Plots screen" : "Block or mark corner on the Plots screen"}
+              </a>
             </section>
           ) : null}
 

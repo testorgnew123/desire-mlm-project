@@ -8,6 +8,7 @@ import {
   NoActivePriceListError,
   PlotNotHeldError,
   PlotNotPricedError,
+  PlotTagNotPricedError,
 } from "@desire/services/plot-booking";
 import { ForbiddenError } from "@desire/services/rbac";
 
@@ -26,6 +27,7 @@ export function describeHoldFailure(error: unknown): string {
   if (
     error instanceof NoActivePriceListError ||
     error instanceof PlotNotPricedError ||
+    error instanceof PlotTagNotPricedError ||
     error instanceof HoldGuardError ||
     error instanceof ForbiddenError ||
     error instanceof PlotNotHeldError ||

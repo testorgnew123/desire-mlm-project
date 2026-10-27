@@ -6,6 +6,7 @@ import {
   NoActivePriceListError,
   PlotNotHeldError,
   PlotNotPricedError,
+  PlotTagNotPricedError,
 } from "@desire/services/plot-booking";
 import { ForbiddenError } from "@desire/services/rbac";
 import { describeHoldFailure } from "../lib/hold-messages";
@@ -32,6 +33,7 @@ describe("describeHoldFailure", () => {
     for (const error of [
       new NoActivePriceListError("p1"),
       new PlotNotPricedError("u1"),
+      new PlotTagNotPricedError("u1", ["CORNER"]),
       new HoldGuardError("Project cannot be held."),
       new ForbiddenError("This account has no associate profile; only associates can hold a plot."),
       new PlotNotHeldError("u1"),
