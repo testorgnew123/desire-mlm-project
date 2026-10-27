@@ -44,6 +44,7 @@ export const BACK_OFFICE_NAV: NavItem[] = [
   { key: "inventory", label: "Inventory", href: "/stock", icon: Warehouse, feature: "inventory", permissions: ["unit.read"] },
   { key: "crm", label: "CRM", href: "/crm", icon: Users, feature: "crm", permissions: ["lead.read"] },
   { key: "bookings", label: "Bookings", href: "/bookings", icon: Handshake, feature: "bookings", permissions: ["booking.read"] },
+  { key: "sales-report", label: "Sales report", href: "/bookings/by-associate", icon: FileBarChart, feature: "bookings", permissions: ["booking.read"] },
   {
     key: "collections",
     label: "Collections",
