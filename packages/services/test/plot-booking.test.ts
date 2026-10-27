@@ -8,7 +8,16 @@ import { ForbiddenError } from "../src/rbac";
 import { HoldQuotaExceededError, UnitNotAvailableError, UnitNotFoundError, acquireHold } from "../src/holds";
 import { confirmBooking } from "../src/bookings";
 import { InvalidCustomerError } from "../src/customers";
-import { NoActivePriceListError, PlotNotPricedError, bookPlot } from "../src/plot-booking";
+import {
+  HoldHasDraftError,
+  NoActivePriceListError,
+  PlotNotHeldError,
+  PlotNotPricedError,
+  bookPlot,
+  getMyHolds,
+  holdPlot,
+  releasePlotHold,
+} from "../src/plot-booking";
 import type { AuditContext } from "../src/audit";
 
 const db = getPrismaClient();
@@ -151,6 +160,202 @@ beforeEach(reset);
 afterAll(async () => {
   await reset();
   await db.$disconnect();
+});
+
+describe("holdPlot", () => {
+  const asSeller = (f: Awaited<ReturnType<typeof seedFixture>>) => ctx(ORG, f.seller.user, "seller");
+
+  it("holds the plot for the project's hold window and says it took the hold", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const now = new Date("2026-10-27T10:00:00Z");
+
+    const held = await holdPlot(db, { unitId: plot.id, audit: asSeller(f), now });
+
+    expect(held.tookHold).toBe(true);
+    expect(held.expiresAt.getTime()).toBe(now.getTime() + 60 * 60_000); // the fixture's holdTtlMinutes
+    const state = await unitState(plot.id);
+    expect(state.status).toBe("HELD");
+    const hold = await db.unitHold.findUniqueOrThrow({ where: { id: state.currentHoldId! } });
+    expect(hold.associateId).toBe(f.seller.associate!.id);
+    expect(await db.customer.count({ where: { orgId: ORG } })).toBe(0);
+  });
+
+  it("is not an error to hold a plot you already hold, and takes no second hold", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const first = await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+    const again = await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+
+    expect(again).toMatchObject({ tookHold: false, holdId: first.holdId });
+    expect(await db.unitHold.count({ where: { unitId: plot.id } })).toBe(1);
+  });
+
+  it("tells a rival who holds the plot, and leaves it alone", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+
+    const attempt = () => holdPlot(db, { unitId: plot.id, audit: ctx(ORG, f.rival.user, "rival") });
+    await expect(attempt()).rejects.toThrow(UnitNotAvailableError);
+    await expect(attempt()).rejects.toThrow(/seller/);
+    expect(await db.unitHold.count({ where: { unitId: plot.id, releasedAt: null } })).toBe(1);
+  });
+
+  it("takes over a plot whose hold has lapsed", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const past = new Date(Date.now() - 3 * 3_600_000);
+    await holdPlot(db, { unitId: plot.id, audit: ctx(ORG, f.rival.user, "rival"), now: past });
+
+    const held = await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+
+    expect(held.tookHold).toBe(true);
+    expect((await db.unitHold.findUniqueOrThrow({ where: { id: held.holdId } })).associateId).toBe(f.seller.associate!.id);
+  });
+
+  it("refuses when the hold allowance is used up, and writes nothing more", async () => {
+    const f = await seedFixture();
+    const tiny = await makeUser(ORG, "tiny", ["booking.create", "hold.create"], { associate: true, holdQuota: 1, gradeCode: "G2" });
+    const asTiny = ctx(ORG, tiny.user, "tiny");
+    await holdPlot(db, { unitId: f.plots[0]!.id, audit: asTiny });
+
+    await expect(holdPlot(db, { unitId: f.plots[1]!.id, audit: asTiny })).rejects.toThrow(HoldQuotaExceededError);
+    expect((await unitState(f.plots[1]!.id)).status).toBe("AVAILABLE");
+    expect(await db.unitHold.count({ where: { associateId: tiny.associate!.id } })).toBe(1);
+  });
+
+  it("refuses an admin (no associate profile), someone without hold.create, and a system actor", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const noPerm = await makeUser(ORG, "noperm", ["booking.create"], { associate: true });
+
+    await expect(holdPlot(db, { unitId: plot.id, audit: ctx(ORG, f.admin.user, "admin") })).rejects.toThrow(ForbiddenError);
+    await expect(holdPlot(db, { unitId: plot.id, audit: ctx(ORG, noPerm.user, "noperm") })).rejects.toThrow(ForbiddenError);
+    await expect(holdPlot(db, { unitId: plot.id, audit: ctx(ORG, null, "job") })).rejects.toThrow(ForbiddenError);
+    expect((await unitState(plot.id)).status).toBe("AVAILABLE");
+  });
+
+  it("refuses a plot that could not then be booked: no price, no active list, another org, no such plot", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+
+    await db.priceListItem.deleteMany({ where: { priceListId: f.priceList.id } });
+    await expect(holdPlot(db, { unitId: plot.id, audit: asSeller(f) })).rejects.toThrow(PlotNotPricedError);
+    await db.priceList.update({ where: { id: f.priceList.id }, data: { status: "ARCHIVED" } });
+    await expect(holdPlot(db, { unitId: plot.id, audit: asSeller(f) })).rejects.toThrow(NoActivePriceListError);
+    await expectNothingWritten(f, plot.id);
+
+    const other = await seedFixture(OTHER_ORG);
+    await expect(holdPlot(db, { unitId: other.plots[0]!.id, audit: asSeller(f) })).rejects.toThrow(ForbiddenError);
+    await expect(holdPlot(db, { unitId: "no-such-plot", audit: asSeller(f) })).rejects.toThrow(UnitNotFoundError);
+  });
+
+  it("lets the associate book from the hold they took: one hold, no second", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+
+    const booked = await bookPlot(db, { unitId: plot.id, customer, audit: asSeller(f) });
+
+    expect(booked.tookHold).toBe(false);
+    expect(await db.unitHold.count({ where: { unitId: plot.id } })).toBe(1);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } })).status).toBe("DRAFT");
+  });
+});
+
+describe("releasePlotHold", () => {
+  const asSeller = (f: Awaited<ReturnType<typeof seedFixture>>) => ctx(ORG, f.seller.user, "seller");
+
+  it("frees the plot for everyone, and records who released it and why", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const held = await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+
+    await releasePlotHold(db, { unitId: plot.id, audit: asSeller(f) });
+
+    expect((await unitState(plot.id)).status).toBe("AVAILABLE");
+    const hold = await db.unitHold.findUniqueOrThrow({ where: { id: held.holdId } });
+    expect(hold).toMatchObject({ releaseReason: "RELEASED_BY_ASSOCIATE", releasedById: f.seller.user.id });
+    expect(hold.releasedAt).not.toBeNull();
+    // The rival can now take it.
+    expect((await holdPlot(db, { unitId: plot.id, audit: ctx(ORG, f.rival.user, "rival") })).tookHold).toBe(true);
+  });
+
+  it("refuses anyone but the holder, an admin, and a plot nobody holds", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    await expect(releasePlotHold(db, { unitId: plot.id, audit: asSeller(f) })).rejects.toThrow(PlotNotHeldError);
+
+    await holdPlot(db, { unitId: plot.id, audit: asSeller(f) });
+    await expect(releasePlotHold(db, { unitId: plot.id, audit: ctx(ORG, f.rival.user, "rival") })).rejects.toThrow(ForbiddenError);
+    await expect(releasePlotHold(db, { unitId: plot.id, audit: ctx(ORG, f.admin.user, "admin") })).rejects.toThrow(ForbiddenError);
+    expect((await unitState(plot.id)).status).toBe("HELD");
+
+    await releasePlotHold(db, { unitId: plot.id, audit: asSeller(f) });
+    await expect(releasePlotHold(db, { unitId: plot.id, audit: asSeller(f) })).rejects.toThrow(PlotNotHeldError);
+  });
+
+  it("will not drop a hold while a draft booking made from it waits for an admin", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const booked = await bookPlot(db, { unitId: plot.id, customer, audit: asSeller(f) });
+
+    await expect(releasePlotHold(db, { unitId: plot.id, audit: asSeller(f) })).rejects.toThrow(HoldHasDraftError);
+    await expect(releasePlotHold(db, { unitId: plot.id, audit: asSeller(f) })).rejects.toThrow(new RegExp(booked.bookingNumber));
+    expect((await unitState(plot.id)).status).toBe("HELD");
+  });
+
+  it("refuses a plot of another organisation", async () => {
+    const f = await seedFixture();
+    const other = await seedFixture(OTHER_ORG);
+    await expect(releasePlotHold(db, { unitId: other.plots[0]!.id, audit: asSeller(f) })).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe("getMyHolds", () => {
+  const asSeller = (f: Awaited<ReturnType<typeof seedFixture>>) => ctx(ORG, f.seller.user, "seller");
+
+  it("is null for an account with no associate profile", async () => {
+    const f = await seedFixture();
+    expect(await getMyHolds(db, { actorId: f.admin.user.id })).toBeNull();
+  });
+
+  it("lists the live holds with the quota, and marks the one that has a draft", async () => {
+    const f = await seedFixture();
+    await holdPlot(db, { unitId: f.plots[0]!.id, audit: asSeller(f) });
+    const booked = await bookPlot(db, { unitId: f.plots[1]!.id, customer, audit: asSeller(f) });
+
+    const summary = (await getMyHolds(db, { actorId: f.seller.user.id }))!;
+
+    expect(summary).toMatchObject({ quota: 5, live: 2 });
+    expect(summary.holds.map((hold) => hold.unitNumber).sort()).toEqual(["A-01", "A-02"]);
+    const withDraft = summary.holds.find((hold) => hold.unitNumber === "A-02")!;
+    expect(withDraft).toMatchObject({ draftBookingId: booked.bookingId, draftBookingNumber: booked.bookingNumber });
+    expect(summary.holds.find((hold) => hold.unitNumber === "A-01")).toMatchObject({ draftBookingId: null });
+    expect(summary.holds[0]).toMatchObject({ projectName: "Plots", projectId: f.project.id });
+  });
+
+  it("has no quota without a grade, and leaves out released and lapsed holds", async () => {
+    const f = await seedFixture();
+    const user = await db.user.create({
+      data: { orgId: ORG, email: `nograde-${ORG}@test.local`, name: "nograde", passwordHash: "unused" },
+    });
+    await db.associate.create({
+      data: { orgId: ORG, userId: user.id, code: "A-nograde", engagementType: "CHANNEL_PARTNER", joinDate: new Date("2024-01-01") },
+    });
+    expect(await getMyHolds(db, { actorId: user.id })).toEqual({ quota: 0, live: 0, holds: [] });
+
+    await holdPlot(db, { unitId: f.plots[0]!.id, audit: asSeller(f) });
+    await holdPlot(db, { unitId: f.plots[1]!.id, audit: asSeller(f) });
+    await holdPlot(db, { unitId: f.plots[2]!.id, audit: asSeller(f) });
+    await releasePlotHold(db, { unitId: f.plots[1]!.id, audit: asSeller(f) });
+    await db.unitHold.updateMany({ where: { unitId: f.plots[2]!.id }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+
+    const summary = (await getMyHolds(db, { actorId: f.seller.user.id }))!;
+    expect(summary.live).toBe(1);
+    expect(summary.holds.map((hold) => hold.unitNumber)).toEqual(["A-01"]);
+  });
 });
 
 describe("bookPlot", () => {
