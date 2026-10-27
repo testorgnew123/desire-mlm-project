@@ -54,7 +54,10 @@ export class UserNotFoundError extends Error {
 
 export class RoleNotFoundError extends Error {
   constructor(public readonly roleCode: string) {
-    super(`Role "${roleCode}" is not configured for this organisation.`);
+    super(
+      `Role "${roleCode}" is not configured for this organisation. Roles are added by the role sync that ` +
+        "runs on every deploy (pnpm db:sync-roles); it has not reached this database yet.",
+    );
     this.name = "RoleNotFoundError";
   }
 }
