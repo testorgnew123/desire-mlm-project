@@ -5,8 +5,8 @@
 // associate needs before they can hold or book anything.
 import "dotenv/config";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getPrismaClient } from "@desire/db";
-import { ForbiddenError } from "../src/rbac";
+import { applyRoleSync, getPrismaClient, planRoleSync } from "@desire/db";
+import { ForbiddenError, getSessionPermissions } from "../src/rbac";
 import { createSession } from "../src/auth";
 import { verifyPassword } from "../src/password";
 import { EmailConfigError } from "../src/email";
@@ -337,6 +337,36 @@ describe("createUser", () => {
     await expect(
       createUser(db, { email: "x@test.local", name: "X", roleCode: "ADMIN", audit: ctx(ORG, f.owner.id, "owner") }),
     ).rejects.toThrow(RoleNotFoundError);
+  });
+
+  // Production's roles were hand-seeded before Admin existed (PROGRESS.md, Phase 0),
+  // so the Admin screen offered a role the database did not have: "Role "ADMIN" is
+  // not configured for this organisation". The role sync that runs on every deploy
+  // is the cure, and the person it creates must really be able to confirm bookings.
+  it("cannot hand out Admin in an organisation seeded before the cut, until the role sync has run", async () => {
+    const f = await seedFixture();
+    await db.role.deleteMany({ where: { orgId: ORG, code: "ADMIN" } });
+    const asOwner = ctx(ORG, f.owner.id, "owner");
+
+    await expect(createUser(db, { email: "a1@test.local", name: "A1", roleCode: "ADMIN", audit: asOwner })).rejects.toThrow(
+      RoleNotFoundError,
+    );
+    const associate = await createUser(db, { email: "seller@test.local", name: "Seller", roleCode: "ASSOCIATE", audit: asOwner });
+    await expect(
+      updateUserRoles(db, { userId: associate.userId, roleCode: "ADMIN", audit: asOwner }),
+    ).rejects.toThrow(RoleNotFoundError);
+
+    await applyRoleSync(db, await planRoleSync(db, ORG));
+
+    const created = await createUser(db, { email: "a2@test.local", name: "A2", roleCode: "ADMIN", audit: asOwner });
+    expect(await rolesOf(created.userId)).toEqual(["ADMIN"]);
+    const granted = await getSessionPermissions(db, created.userId);
+    for (const code of ["booking.read", "booking.confirm", "booking.cancel", "user.manage"]) expect(granted.has(code)).toBe(true);
+    expect(granted.has("rbac.manage")).toBe(false);
+    expect(granted.has("booking.create")).toBe(false);
+
+    await updateUserRoles(db, { userId: associate.userId, roleCode: "ADMIN", audit: asOwner });
+    expect(await rolesOf(associate.userId)).toEqual(["ADMIN"]);
   });
 
   it("refuses a user who holds no user-management permission", async () => {

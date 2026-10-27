@@ -106,6 +106,14 @@ jobs:
           DATABASE_URL_UNPOOLED: ${{ steps.neon.outputs.db_url }}
         run: pnpm --filter @desire/db exec prisma migrate deploy
 
+      # The branch is a copy of production, roles included, so it has the same
+      # gaps production has (no Admin role until the role sync ran). Same add-only
+      # sync as scripts/migrate-on-deploy.sh, so a preview shows what a deploy will.
+      - name: Add missing roles and permissions to the preview branch
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+        run: pnpm --filter @desire/db exec tsx scripts/sync-roles.ts --apply --allow-remote
+
       # `branch:<git branch>` scopes these to THIS PR's deploy preview only.
       # The context parameter is the PR's head branch (the branch Netlify
       # actually builds), not the Neon branch name -- two unrelated strings.

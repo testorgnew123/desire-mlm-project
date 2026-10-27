@@ -8,7 +8,8 @@
 // resembling production data.
 import "dotenv/config";
 import { hash as argon2Hash } from "@node-rs/argon2";
-import { getPrismaClient, PERMISSION_CODES, ROLE_CODES, ROLE_NAMES, MFA_REQUIRED_ROLES, permissionsForRole } from "../src/index";
+import { getPrismaClient, PERMISSION_CODES, ROLE_CODES, ROLE_NAMES } from "../src/index";
+import { applyRoleSync, planRoleSync } from "../src/sync-roles";
 
 const prisma = getPrismaClient();
 
@@ -54,42 +55,11 @@ async function seedOrgAndGrades() {
 }
 
 async function seedRbac() {
-  const permissionRows = await Promise.all(
-    PERMISSION_CODES.map((code) => {
-      const [resource, action] = code.split(".");
-      return prisma.permission.upsert({
-        where: { code },
-        update: {},
-        create: { code, resource: resource!, action: action! },
-      });
-    }),
-  );
-  const permissionIdByCode = new Map(permissionRows.map((p) => [p.code, p.id]));
+  // The same add-only sync every deploy runs (src/sync-roles.ts), so a seeded
+  // database and a deployed one converge on the matrix the same way.
+  await applyRoleSync(prisma, await planRoleSync(prisma, ORG_ID));
 
-  for (const roleCode of ROLE_CODES) {
-    const role = await prisma.role.upsert({
-      where: { orgId_code: { orgId: ORG_ID, code: roleCode } },
-      update: {},
-      create: {
-        orgId: ORG_ID,
-        code: roleCode,
-        name: ROLE_NAMES[roleCode],
-        isSystem: true,
-        requiresMfa: (MFA_REQUIRED_ROLES as string[]).includes(roleCode),
-      },
-    });
-
-    for (const permissionCode of permissionsForRole(roleCode)) {
-      const permissionId = permissionIdByCode.get(permissionCode)!;
-      await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: role.id, permissionId } },
-        update: {},
-        create: { roleId: role.id, permissionId },
-      });
-    }
-  }
-
-  console.log(`  ${permissionRows.length} permissions, ${ROLE_CODES.length} roles, matrix applied`);
+  console.log(`  ${PERMISSION_CODES.length} permissions, ${ROLE_CODES.length} roles, matrix applied`);
 }
 
 async function seedDemoProject() {
