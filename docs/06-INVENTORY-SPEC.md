@@ -27,7 +27,7 @@ already migrated and gate-tested by the time this was caught.
                                                                       ▼
                                                                  POSSESSION
 
-  Any state ──admin──► BLOCKED (management / legal / mortgage) ──► back to prior
+  AVAILABLE or HELD ──admin──► BLOCKED (management / legal / mortgage) ──► back to prior
 ```
 
 ### Transition guards
@@ -41,7 +41,7 @@ already migrated and gate-tested by the time this was caught.
 | `BOOKED → AGREEMENT_SIGNED` | Agreement document uploaded and verified |
 | `AGREEMENT_SIGNED → REGISTERED` | Registration completed with the sub-registrar |
 | `REGISTERED → POSSESSION` | Completion certificate issued, handover done |
-| `* → BLOCKED` | Admin only; reason mandatory |
+| `AVAILABLE/HELD → BLOCKED` | `unit.block` for the unit's project (Admin, Super Admin); reason mandatory (trimmed, up to 500 characters); the unit must be in the caller's organisation; a live hold is released in the same transaction; refused for BOOKED and later (cancel the booking first, otherwise the cancel would put a blocked plot back on sale) and for a HELD plot with a DRAFT / PENDING_APPROVAL booking waiting. Changed 2026-10-27 from "any state". |
 | `BLOCKED → <prior status>` | Admin only; returns to whatever status the unit held immediately before blocking (read from `UnitStatusHistory`), not a fixed target |
 
 Every transition writes a `UnitStatusHistory` row. Table-driven tests cover every

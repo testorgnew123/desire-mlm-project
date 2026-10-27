@@ -54,6 +54,8 @@ export interface InventoryBoardProps {
   /** Whether this viewer can hold a plot (has an associate profile). The board
    *  is read-only for everyone else. */
   canHold: boolean;
+  /** Where an admin who may block plots manages them; null for everyone else. */
+  manageHref: string | null;
 }
 
 // displayStatus (the client-side lazy-expiry rule) moved to ./status so the
@@ -79,6 +81,7 @@ export function InventoryBoard({
   catalogue,
   serverTime,
   canHold,
+  manageHref,
 }: InventoryBoardProps) {
   const router = useRouter();
 
@@ -571,6 +574,7 @@ export function InventoryBoard({
           isHolding={isHolding}
           holdError={holdError}
           canHold={canHold}
+          manageHref={manageHref}
           onHold={handleTakeHold}
         />
       ) : null}

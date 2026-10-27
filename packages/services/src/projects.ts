@@ -27,6 +27,7 @@ import { writeAuditLog, type AuditContext } from "./audit";
 import { assertPlotsOnlyBasis, assertPlotsOnlyGroup } from "./plots-only";
 import { assertPermission, ForbiddenError } from "./rbac";
 import { UnitNotFoundError } from "./holds";
+import { normalizePlcTags } from "./plc-tags";
 
 /** Decimals arrive as a Decimal or a fixed-point string, never a number --
  *  binary floats cannot hold 1234.55 exactly, and an area feeds straight into
@@ -737,7 +738,7 @@ export async function createUnit(db: PrismaClient, params: CreateUnitParams): Pr
         unitNumber: params.unitNumber,
         floor: params.floor ?? null,
         facing: params.facing,
-        plcTags: params.plcTags ?? [],
+        plcTags: normalizePlcTags(params.plcTags ?? []),
         carpetAreaOverride: overrides.carpetAreaOverride,
         saleableAreaOverride: overrides.saleableAreaOverride,
       } satisfies Prisma.UnitUncheckedCreateInput;
@@ -822,7 +823,7 @@ export async function updateUnit(db: PrismaClient, params: UpdateUnitParams): Pr
     if (params.unitNumber !== undefined) data.unitNumber = params.unitNumber;
     if (params.floor !== undefined) data.floor = params.floor;
     if (params.facing !== undefined) data.facing = params.facing;
-    if (params.plcTags !== undefined) data.plcTags = params.plcTags;
+    if (params.plcTags !== undefined) data.plcTags = normalizePlcTags(params.plcTags);
     if (params.carpetAreaOverride !== undefined) {
       data.carpetAreaOverride = overrides.carpetAreaOverride;
     }
