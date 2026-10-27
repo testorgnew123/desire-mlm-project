@@ -80,8 +80,6 @@ export default async function ProjectPlotsPage({
     db.unit.count({ where: { projectId, status: "BLOCKED" } }),
   ]);
 
-  const unpricedCorner = unpriced.find((entry) => entry.tag === "CORNER");
-
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -111,8 +109,8 @@ export default async function ProjectPlotsPage({
         <p role="alert" className="flex items-start gap-1.5 text-sm text-warning">
           <CircleAlert className="mt-0.5 size-4 shrink-0" />
           <span>
-            {unpriced.map((entry) => `${entry.tag.replaceAll("_", " ").toLowerCase()} (${entry.plots} plots)`).join(", ")}{" "}
-            {unpricedCorner || unpriced.length > 1 ? "have" : "has"} no rate in the live price list, so those
+            The live price list has no rate for{" "}
+            {unpriced.map((entry) => `${entry.tag.replaceAll("_", " ").toLowerCase()} (${entry.plots} plots)`).join(", ")}, so those
             plots cannot be booked yet.{" "}
             <Link href={`/projects/${project.id}`} className="underline">
               Add the rate in a new price list version.
