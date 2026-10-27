@@ -20,6 +20,8 @@ export interface UnitTileProps {
   remainingMinutes: number | null;
   urgent: boolean;
   selected: boolean;
+  /** The live hold is the viewer's own (the associate's grid; the board omits it). */
+  mine?: boolean;
   onSelect: (unitId: string, trigger: HTMLButtonElement) => void;
 }
 
@@ -36,6 +38,7 @@ function UnitTileComponent({
   remainingMinutes,
   urgent,
   selected,
+  mine = false,
   onSelect,
 }: UnitTileProps) {
   const presentation = STATUS_PRESENTATION[status];
@@ -45,6 +48,7 @@ function UnitTileComponent({
     floor === null ? null : `floor ${floor}`,
     unitTypeCode,
     presentation.long,
+    mine ? "held by you" : null,
     remainingMinutes === null
       ? null
       : remainingMinutes < 1
@@ -79,7 +83,7 @@ function UnitTileComponent({
       {/* Third line is always present so tiles stay a uniform height: the
           countdown when held, the unit type otherwise. */}
       <span className={styles.tileFoot}>
-        {countdown === null ? unitTypeCode : urgent ? `! ${countdown}` : countdown}
+        {countdown === null ? unitTypeCode : `${mine ? "You · " : ""}${urgent ? "! " : ""}${countdown}`}
       </span>
     </button>
   );

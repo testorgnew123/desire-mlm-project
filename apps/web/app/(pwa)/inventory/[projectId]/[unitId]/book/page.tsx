@@ -10,7 +10,7 @@ import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { bookPlotAction } from "./actions";
+import { bookPlotAction, releaseHoldFormAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -119,6 +119,18 @@ export default async function BookPlotPage({
           </Button>
         </form>
       )}
+
+      {heldByMe ? (
+        // Not ready to book after all: give the plot back to everyone. Refused
+        // while a draft booking from this hold waits for an admin.
+        <form action={releaseHoldFormAction}>
+          <input type="hidden" name="projectId" value={projectId} />
+          <input type="hidden" name="unitId" value={unit.id} />
+          <Button type="submit" variant="outline" className="w-full">
+            Release hold
+          </Button>
+        </form>
+      ) : null}
 
       <Link href={`/inventory/${projectId}`} className="text-center text-sm text-primary hover:underline">
         Back to the plots
