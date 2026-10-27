@@ -411,8 +411,8 @@ product cannot presently take a sale from enquiry to payout.
 
 - **No lead-creation screen** — manual capture is API-only
 - **No booking-creation or confirm screen** — API-only
-- **No hold release/extend**, no unit-block screen; `unit.block` and
-  `hold.force_release` are never checked
+- **No hold extend**; `hold.force_release` is never checked. (Release by the
+  holder and a plot-block screen exist since 2026-10-27: Projects > Plots.)
 - **`Document` model entirely unused** — no KYC or agreement upload exists,
   though the PRD and screens doc both call for it
 - **`ApprovalRequest` model entirely unused** — every approval is modelled ad hoc

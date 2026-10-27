@@ -15,6 +15,7 @@ import { createDraftBooking } from "./bookings";
 import { createCustomer, parseCustomerInput, type CustomerInput } from "./customers";
 import { UnitNotFoundError, acquireHold, isHoldLive, releaseHold } from "./holds";
 import { assertPermission, ForbiddenError } from "./rbac";
+import { unpricedTags } from "./unit-tags";
 
 export class NoActivePriceListError extends Error {
   constructor(public readonly projectId: string) {
@@ -27,6 +28,22 @@ export class PlotNotPricedError extends Error {
   constructor(public readonly unitId: string) {
     super("The project's price list has no rate for this plot's type, so it cannot be booked yet.");
     this.name = "PlotNotPricedError";
+  }
+}
+
+/** A plot marked corner (or another PLC tag) whose rate the price list does not
+ *  have: quoting it would fail, and charging nothing would give the premium away.
+ *  Caught here, before a hold or a customer exists, with something an associate
+ *  can pass on. */
+export class PlotTagNotPricedError extends Error {
+  constructor(
+    public readonly unitId: string,
+    public readonly tags: readonly string[],
+  ) {
+    super(
+      `This plot is marked ${tags.map((tag) => tag.toLowerCase().replaceAll("_", " ")).join(" and ")}, but the price list has no rate for that yet. Ask an admin to add it.`,
+    );
+    this.name = "PlotTagNotPricedError";
   }
 }
 
@@ -55,6 +72,7 @@ interface BookableUnit {
   projectId: string;
   unitTypeId: string;
   currentHoldId: string | null;
+  plcTags: string[];
 }
 
 /** Everything that must be true of a plot before it is held or booked and can be
@@ -67,7 +85,7 @@ async function assertPlotBookable(
 ): Promise<{ unit: BookableUnit; priceListId: string }> {
   const unit = await db.unit.findUnique({
     where: { id: params.unitId },
-    select: { id: true, orgId: true, projectId: true, unitTypeId: true, currentHoldId: true },
+    select: { id: true, orgId: true, projectId: true, unitTypeId: true, currentHoldId: true, plcTags: true },
   });
   if (!unit) throw new UnitNotFoundError(params.unitId);
   if (unit.orgId !== params.orgId) throw new ForbiddenError(`Unit ${params.unitId} belongs to another organisation.`);
@@ -84,11 +102,13 @@ async function assertPlotBookable(
   });
   if (!priceList) throw new NoActivePriceListError(unit.projectId);
 
-  const priced = await db.priceListItem.findFirst({
+  const items = await db.priceListItem.findMany({
     where: { priceListId: priceList.id, OR: [{ unitId: unit.id }, { unitTypeId: unit.unitTypeId }] },
-    select: { id: true },
+    select: { unitId: true, unitTypeId: true, plcCharges: true },
   });
-  if (!priced) throw new PlotNotPricedError(unit.id);
+  if (items.length === 0) throw new PlotNotPricedError(unit.id);
+  const missing = unpricedTags(items, unit);
+  if (missing.length > 0) throw new PlotTagNotPricedError(unit.id, missing);
 
   return { unit, priceListId: priceList.id };
 }

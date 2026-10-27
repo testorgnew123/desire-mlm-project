@@ -36,7 +36,7 @@ import { getPrismaClient } from "@desire/db";
 // Narrow subpath imports -- see the note in the deltas route: the barrel drags
 // a native .node addon into the build graph via auth.ts.
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
-import { getSession } from "@/lib/session";
+import { getCachedSessionPermissions, getSession } from "@/lib/session";
 import { InventoryBoard } from "./InventoryBoard";
 import { buildCatalogue } from "./build-catalogue";
 
@@ -81,7 +81,7 @@ export default async function InventoryBoardPage({
   // Independent reads -- neither depends on the other's result, unlike the
   // holds lookup below (which needs holdIds out of `rows`) -- so they run
   // concurrently instead of paying two sequential round trips.
-  const [project, rows, myAssociate] = await Promise.all([
+  const [project, rows, myAssociate, permissions] = await Promise.all([
     db.project.findUnique({
       where: { id: projectId, orgId },
       select: {
@@ -128,7 +128,11 @@ export default async function InventoryBoardPage({
     // Holding needs an associate profile; an admin looking at this board has
     // none, and a Hold button that can only answer 403 is worse than no button.
     db.associate.findUnique({ where: { userId: session.user.id }, select: { id: true } }),
+    getCachedSessionPermissions(db, session.user.id, { projectId }),
   ]);
+  // Why a plot is blocked (a title dispute, a legal note) is for the people who
+  // block plots; everyone else sees only that it is not for sale.
+  const canBlock = permissions.has("unit.block");
   if (!project) notFound();
 
   // currentHoldId is a denormalised pointer with no Prisma relation on Unit
@@ -159,7 +163,7 @@ export default async function InventoryBoardPage({
   // release (docs/06-INVENTORY-SPEC.md section 3). Re-implementing it here
   // would let the first paint disagree with the first poll a minute later.
   const catalogue = buildCatalogue({
-    rows,
+    rows: canBlock ? rows : rows.map((row) => ({ ...row, blockReason: null })),
     holds: holdById,
     towers: project.towers.map((tower) => ({
       id: tower.id,
@@ -179,6 +183,7 @@ export default async function InventoryBoardPage({
       catalogue={catalogue}
       serverTime={readStartedAt.toISOString()}
       canHold={myAssociate !== null}
+      manageHref={canBlock ? `/projects/${project.id}/plots` : null}
     />
   );
 }
