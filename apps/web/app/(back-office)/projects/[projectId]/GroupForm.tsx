@@ -152,6 +152,8 @@ export function GroupForm({ projectId, plotTypes }: { projectId: string; plotTyp
         <p role="alert" className="text-xs text-danger">
           Each size needs both a number of plots and a plot type.
         </p>
+      ) : filled.length > 0 && code.trim() === "" ? (
+        <p className="text-xs text-muted-foreground">Enter the block code to see how the plots will be numbered.</p>
       ) : filled.length > 0 ? (
         <p role="alert" className="text-xs text-danger">
           Enter whole numbers of plots, 1 or more, at most {MAX_PLOTS_PER_BLOCK} in all
