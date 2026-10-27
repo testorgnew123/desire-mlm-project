@@ -264,6 +264,189 @@ describe("createBlockWithPlots", () => {
     expect(await db.tower.count({ where: { projectId: project.id } })).toBe(0);
   });
 
+  describe("several sizes in one block", () => {
+    async function addType(projectId: string, code: string, area: string) {
+      return db.unitType.create({
+        data: { orgId: ORG, projectId, code, name: code, areaBasis: "SQYD", saleableArea: area },
+      });
+    }
+
+    it("makes each size in order, numbered straight through, with one tower and one import audit row", async () => {
+      const { project, writer } = await seed();
+      await addType(project.id, "PLOT-300", "300.00");
+      await addType(project.id, "PLOT-150", "150.00");
+
+      const result = await createBlockWithPlots(db, {
+        projectId: project.id,
+        code: "A",
+        name: "Block A",
+        plotGroups: [
+          { count: 4, unitTypeCode: "PLOT-200" },
+          { count: 3, unitTypeCode: "PLOT-300" },
+          { count: 2, unitTypeCode: "PLOT-150" },
+        ],
+        audit: ctx(writer),
+      });
+
+      expect(result.plotsCreated).toBe(9);
+      expect(result.byUnitType).toEqual({ "PLOT-200": 4, "PLOT-300": 3, "PLOT-150": 2 });
+
+      const units = await db.unit.findMany({
+        where: { projectId: project.id },
+        orderBy: { unitNumber: "asc" },
+        select: { unitNumber: true, unitType: { select: { code: true } } },
+      });
+      expect(units.map((u) => [u.unitNumber, u.unitType.code])).toEqual([
+        ["A-1", "PLOT-200"],
+        ["A-2", "PLOT-200"],
+        ["A-3", "PLOT-200"],
+        ["A-4", "PLOT-200"],
+        ["A-5", "PLOT-300"],
+        ["A-6", "PLOT-300"],
+        ["A-7", "PLOT-300"],
+        ["A-8", "PLOT-150"],
+        ["A-9", "PLOT-150"],
+      ]);
+
+      expect(await db.tower.count({ where: { projectId: project.id } })).toBe(1);
+      expect(await db.unitStatusHistory.count({ where: { unit: { projectId: project.id } } })).toBe(9);
+      const imports = await db.auditLog.findMany({ where: { orgId: ORG, entity: "UnitImport" } });
+      expect(imports).toHaveLength(1);
+      expect(imports[0]!.after).toMatchObject({
+        imported: 9,
+        byUnitType: { "PLOT-200": 4, "PLOT-300": 3, "PLOT-150": 2 },
+      });
+    });
+
+    it("the order of the groups decides who gets the first numbers", async () => {
+      const { project, writer } = await seed();
+      await addType(project.id, "PLOT-300", "300.00");
+
+      await createBlockWithPlots(db, {
+        projectId: project.id,
+        code: "A",
+        name: "Block A",
+        plotGroups: [
+          { count: 1, unitTypeCode: "PLOT-300" },
+          { count: 1, unitTypeCode: "PLOT-200" },
+        ],
+        audit: ctx(writer),
+      });
+
+      const first = await db.unit.findFirstOrThrow({
+        where: { projectId: project.id, unitNumber: "A-1" },
+        select: { unitType: { select: { code: true } } },
+      });
+      expect(first.unitType.code).toBe("PLOT-300");
+    });
+
+    it("one group is the same as the single count and type", async () => {
+      const { project, writer } = await seed();
+      const viaGroups = await createBlockWithPlots(db, {
+        projectId: project.id,
+        code: "A",
+        name: "Block A",
+        plotGroups: [{ count: 12, unitTypeCode: "PLOT-200" }],
+        audit: ctx(writer),
+      });
+      const viaCount = await createBlockWithPlots(db, {
+        projectId: project.id,
+        code: "B",
+        name: "Block B",
+        plotCount: 12,
+        plotUnitTypeCode: "PLOT-200",
+        audit: ctx(writer),
+      });
+      const numbers = async (towerId: string) =>
+        (await db.unit.findMany({ where: { towerId }, orderBy: { unitNumber: "asc" } })).map((u) =>
+          u.unitNumber.replace(/^[AB]/, ""),
+        );
+      expect(await numbers(viaGroups.tower.id)).toEqual(await numbers(viaCount.tower.id));
+      expect(viaCount.byUnitType).toEqual({ "PLOT-200": 12 });
+    });
+
+    it("refuses the single count and groups together", async () => {
+      const { project, writer } = await seed();
+      await expect(
+        createBlockWithPlots(db, {
+          projectId: project.id,
+          code: "A",
+          name: "Block A",
+          plotCount: 3,
+          plotUnitTypeCode: "PLOT-200",
+          plotGroups: [{ count: 2, unitTypeCode: "PLOT-200" }],
+          audit: ctx(writer),
+        }),
+      ).rejects.toThrow(PlotCountError);
+      expect(await db.tower.count({ where: { projectId: project.id } })).toBe(0);
+    });
+
+    it("counts the total against the maximum, not each group", async () => {
+      const { project, writer } = await seed();
+      await expect(
+        createBlockWithPlots(db, {
+          projectId: project.id,
+          code: "A",
+          name: "Block A",
+          plotGroups: [
+            { count: MAX_PLOTS_PER_BLOCK, unitTypeCode: "PLOT-200" },
+            { count: 1, unitTypeCode: "PLOT-200" },
+          ],
+          audit: ctx(writer),
+        }),
+      ).rejects.toThrow(PlotCountError);
+      expect(await db.tower.count({ where: { projectId: project.id } })).toBe(0);
+    });
+
+    it("rolls everything back when one size is not a type of this project", async () => {
+      const { project, writer } = await seed();
+      await expect(
+        createBlockWithPlots(db, {
+          projectId: project.id,
+          code: "A",
+          name: "Block A",
+          plotGroups: [
+            { count: 2, unitTypeCode: "PLOT-200" },
+            { count: 2, unitTypeCode: "NOPE" },
+          ],
+          audit: ctx(writer),
+        }),
+      ).rejects.toThrow(UnitImportRejectedError);
+      expect(await db.tower.count({ where: { projectId: project.id } })).toBe(0);
+      expect(await db.unit.count({ where: { projectId: project.id } })).toBe(0);
+    });
+
+    it("rolls everything back when one size is a flat type", async () => {
+      const { project, writer } = await seed();
+      await db.unitType.create({
+        data: {
+          orgId: ORG,
+          projectId: project.id,
+          code: "2BHK",
+          name: "2 BHK",
+          areaBasis: "SQFT",
+          bedrooms: 2,
+          carpetArea: "800.00",
+          builtUpArea: "900.00",
+          saleableArea: "1000.00",
+        },
+      });
+      await expect(
+        createBlockWithPlots(db, {
+          projectId: project.id,
+          code: "A",
+          name: "Block A",
+          plotGroups: [
+            { count: 2, unitTypeCode: "PLOT-200" },
+            { count: 2, unitTypeCode: "2BHK" },
+          ],
+          audit: ctx(writer),
+        }),
+      ).rejects.toThrow();
+      expect(await db.tower.count({ where: { projectId: project.id } })).toBe(0);
+    });
+  });
+
   it("reports a repeated block code as a duplicate code, not as a plot problem", async () => {
     const { project, writer } = await seed();
     await createBlockWithPlots(db, {

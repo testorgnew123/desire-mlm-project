@@ -14,17 +14,21 @@ import type { PrismaClient, Tower } from "@desire/db";
 import type { AuditContext } from "./audit";
 import { ForbiddenError } from "./rbac";
 import { createTowerInTx, withUniqueCode } from "./projects";
-import { PlotCountError, plotNumbers } from "./plot-numbering";
+import { PlotCountError, plotAssignments } from "./plot-numbering";
 import { UnitImportConflictError, importUnitsInTx, type RawUnitRow } from "./unit-import";
 
 export interface CreateBlockWithPlotsParams {
   projectId: string;
   code: string;
   name: string;
-  /** Plots to create inside the block, numbered `<code>-01`, `<code>-02`, ...
-   *  Omit or pass 0 for an empty block. */
+  /** Plots to create inside the block, as runs of one size each: A-01.. for the
+   *  first run, the next run carries on. A block with three sizes is three
+   *  groups. Omit for an empty block. */
+  plotGroups?: Array<{ count: number; unitTypeCode: string }>;
+  /** One size only: shorthand for a single group. Cannot be combined with
+   *  plotGroups. Omit or pass 0 for none. */
   plotCount?: number;
-  /** UnitType.code every generated plot gets. Required when plotCount > 0. */
+  /** UnitType.code every plot of `plotCount` gets. Required when plotCount > 0. */
   plotUnitTypeCode?: string;
   audit: AuditContext;
 }
@@ -32,6 +36,8 @@ export interface CreateBlockWithPlotsParams {
 export interface CreateBlockWithPlotsResult {
   tower: Tower;
   plotsCreated: number;
+  /** Plots made per UnitType.code. */
+  byUnitType: Record<string, number>;
 }
 
 export async function createBlockWithPlots(
@@ -43,18 +49,34 @@ export async function createBlockWithPlots(
     throw new ForbiddenError("Creating a block requires a user actor, not a system actor.");
   }
 
+  const wantsSingle = params.plotCount !== undefined && params.plotCount !== 0;
+  if (wantsSingle && params.plotGroups !== undefined) {
+    throw new PlotCountError("Give the plots either as one count or as groups of sizes, not both.");
+  }
   // Anything other than "none" must be a valid count, so NaN, 1.5 and 501 are
   // rejected here rather than quietly becoming an empty block.
-  const wantsPlots = params.plotCount !== undefined && params.plotCount !== 0;
-  const rows: RawUnitRow[] = [];
-  if (wantsPlots) {
+  let groups = params.plotGroups ?? [];
+  if (wantsSingle) {
     if (!params.plotUnitTypeCode) {
       throw new PlotCountError("Choose a plot type for the plots.");
     }
-    for (const unitNumber of plotNumbers(params.code, params.plotCount as number)) {
-      rows.push({ unitNumber, unitTypeCode: params.plotUnitTypeCode, plcTags: [] });
+    groups = [{ count: params.plotCount as number, unitTypeCode: params.plotUnitTypeCode }];
+  }
+  for (const group of groups) {
+    if (!group.unitTypeCode) throw new PlotCountError("Choose a plot type for every size.");
+  }
+  const rows: RawUnitRow[] = [];
+  if (groups.length > 0) {
+    const assigned = plotAssignments(
+      params.code,
+      groups.map((group) => ({ count: group.count, type: group.unitTypeCode })),
+    );
+    for (const { unitNumber, type } of assigned) {
+      rows.push({ unitNumber, unitTypeCode: type, plcTags: [] });
     }
   }
+  const byUnitType: Record<string, number> = {};
+  for (const group of groups) byUnitType[group.unitTypeCode] = (byUnitType[group.unitTypeCode] ?? 0) + group.count;
 
   return withUniqueCode("Tower code", params.code, () =>
     db.$transaction(
@@ -95,7 +117,7 @@ export async function createBlockWithPlots(
           }
         }
 
-        return { tower, plotsCreated: rows.length };
+        return { tower, plotsCreated: rows.length, byUnitType };
       },
       // Same ceiling importUnits uses: the platform's synchronous limit.
       { timeout: 10_000 },
