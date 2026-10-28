@@ -16,7 +16,8 @@ import {
 } from "./filters";
 import { useUnitDeltas } from "./useUnitDeltas";
 import { expandCatalogue, type Catalogue } from "./catalogue";
-import type { BoardUnit, HoldResponse, LiveUnitState } from "./types";
+import { holdPlotAction, releaseHoldAction } from "../../(pwa)/inventory/[projectId]/actions";
+import type { BoardUnit, LiveUnitState } from "./types";
 import styles from "./board.module.css";
 
 /** Unit.towerId is nullable in the schema, so "no tower" is a real group. */
@@ -26,7 +27,6 @@ const NO_TOWER = "__no_tower__";
  *  Same value and reasoning as useUnitDeltas.ts's REQUEST_TIMEOUT_MS -- not
  *  imported, since that file does not export it and duplicating one constant
  *  does not justify a shared module yet. */
-const HOLD_REQUEST_TIMEOUT_MS = 15_000;
 
 /** How old the server snapshot may be before the board force-refreshes on
  *  mount.
@@ -103,6 +103,7 @@ export function InventoryBoard({
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
   const [isHolding, setIsHolding] = useState(false);
+  const [isReleasing, setIsReleasing] = useState(false);
   const [holdError, setHoldError] = useState<string | null>(null);
   const lastTriggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -301,57 +302,32 @@ export function InventoryBoard({
     router.refresh();
   }, [router]);
 
-  // Success needs no new state here: refreshNow() re-polls the delta endpoint,
-  // the response lands in `live[unitId]`, and the existing HELD branch below
-  // (driven by `selectedStatus`, derived from `liveOf(selectedUnit)`) takes
-  // over on the very next render. Only failure needs anything new to show.
-  const handleTakeHold = useCallback(async () => {
-    if (selectedUnitId === null) return;
-
-    setIsHolding(true);
-    setHoldError(null);
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), HOLD_REQUEST_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(
-        `/api/v1/projects/${encodeURIComponent(projectId)}/units/${encodeURIComponent(selectedUnitId)}/holds`,
-        {
-          method: "POST",
-          signal: controller.signal,
-          credentials: "same-origin",
-          cache: "no-store",
-          headers: { accept: "application/json" },
-        },
-      );
-
-      if (response.ok) {
-        // 201 (fresh acquire) or 200 (idempotent retry of the caller's own
-        // hold) are both success -- the body shape is identical either way.
-        (await response.json()) as HoldResponse;
-        refreshNow();
-        return;
+  // Hold and release are Server Actions, the same ones the phone grid uses. On
+  // success the action revalidates this page, so the plot comes back from the
+  // server with a new snapshot -- holder, countdown and "yours" included -- and the
+  // delta overlay is dropped. (The delta poll carries no holder identity, so it
+  // would show your own fresh hold as "taken by someone".) Only failure needs
+  // anything here: the message is shown in the drawer, as the action worded it.
+  const runHoldAction = useCallback(
+    async (kind: "hold" | "release") => {
+      if (selectedUnitId === null) return;
+      setIsHolding(kind === "hold");
+      setIsReleasing(kind === "release");
+      setHoldError(null);
+      try {
+        const result = await (kind === "hold" ? holdPlotAction : releaseHoldAction)(projectId, selectedUnitId);
+        if (!result.ok) setHoldError(result.message);
+      } catch {
+        setHoldError("Could not reach the server. Check your connection and try again.");
+      } finally {
+        setIsHolding(false);
+        setIsReleasing(false);
       }
-
-      // RFC 7807 problem+json (docs/07-API.md). `detail` on a 409 is already
-      // the exact "Unit is held by Ravi (A-0042)." string, verbatim, from the
-      // route -- shown as-is, never replaced with a generic message.
-      const problem = (await response.json().catch(() => null)) as { detail?: string } | null;
-      setHoldError(problem?.detail ?? `Hold failed (HTTP ${response.status}).`);
-    } catch (caught) {
-      setHoldError(
-        controller.signal.aborted
-          ? "Hold request timed out."
-          : caught instanceof Error
-            ? caught.message
-            : "Hold failed.",
-      );
-    } finally {
-      clearTimeout(timeoutId);
-      setIsHolding(false);
-    }
-  }, [projectId, selectedUnitId, refreshNow]);
+    },
+    [projectId, selectedUnitId],
+  );
+  const handleTakeHold = useCallback(() => runHoldAction("hold"), [runHoldAction]);
+  const handleRelease = useCallback(() => runHoldAction("release"), [runHoldAction]);
 
   const handleClearFilters = useCallback(() => setFilters(EMPTY_FILTERS), []);
 
@@ -369,6 +345,8 @@ export function InventoryBoard({
   // a delta has overwritten its state the holder is unknown, because the delta
   // payload has no identity in it.
   const holderIsFromSnapshot = selectedUnit !== null && live[selectedUnit.id] === undefined;
+  // The viewer's own live hold, known only while the plot is as the server sent it.
+  const selectedIsMine = selectedUnit !== null && selectedUnit.isMine && holderIsFromSnapshot && selectedStatus === "HELD";
 
   const activeFilterCount = countActiveFilters(filters);
   const syncedClock = formatIstClock(lastSyncedAt);
@@ -576,10 +554,13 @@ export function InventoryBoard({
           canHold={canHold}
           manageHref={manageHref}
           bookHref={
-            canHold && (selectedStatus === "AVAILABLE" || (selectedStatus === "HELD" && !holderIsFromSnapshot))
+            canHold && (selectedStatus === "AVAILABLE" || selectedIsMine)
               ? `/inventory/${encodeURIComponent(projectId)}/${encodeURIComponent(selectedUnit.id)}/book`
               : null
           }
+          isMine={selectedIsMine}
+          isReleasing={isReleasing}
+          onRelease={handleRelease}
           onHold={handleTakeHold}
         />
       ) : null}
