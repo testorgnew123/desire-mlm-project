@@ -37,6 +37,9 @@ describe.skipIf(!hasSh)("migrate-on-deploy.sh", () => {
         "#!/bin/sh",
         `{ echo "args: $*"; echo "DATABASE_URL=\${DATABASE_URL-unset}"; echo "--"; } >> "${recordPath}"`,
         'case "$*" in',
+        "  *ensure-admin-associates*)",
+        '    if [ -n "${FAKE_PNPM_FAIL_PROFILES:-}" ]; then exit 6; fi',
+        "    ;;",
         "  *sync-roles*)",
         `    n=$(cat "${counterPath}" 2>/dev/null || echo 0)`,
         `    echo $((n + 1)) > "${counterPath}"`,
@@ -54,7 +57,7 @@ describe.skipIf(!hasSh)("migrate-on-deploy.sh", () => {
 
   function run(vars: Record<string, string>) {
     const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const key of ["CONTEXT", "DATABASE_URL", "DATABASE_URL_UNPOOLED", "FAKE_PNPM_EXIT", "FAKE_PNPM_FAIL_FIRST"]) {
+    for (const key of ["CONTEXT", "DATABASE_URL", "DATABASE_URL_UNPOOLED", "FAKE_PNPM_EXIT", "FAKE_PNPM_FAIL_FIRST", "FAKE_PNPM_FAIL_PROFILES"]) {
       delete env[key];
     }
     Object.assign(env, { ROLE_SYNC_RETRY_SLEEP: "0" }, vars, { PATH: `${dir}${delimiter}${process.env.PATH ?? ""}` });
@@ -115,10 +118,21 @@ describe.skipIf(!hasSh)("migrate-on-deploy.sh", () => {
     const result = run({ CONTEXT: "production", DATABASE_URL_UNPOOLED: UNPOOLED, DATABASE_URL: POOLED });
     expect(result.status).toBe(0);
     const calls = (result.pnpmCall ?? "").split("--\n").filter((block) => block.trim() !== "");
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0]).toContain("prisma migrate deploy");
     expect(calls[1]).toContain("args: --filter @desire/db exec tsx scripts/sync-roles.ts --apply --allow-remote");
     expect(calls[1]).toContain(`DATABASE_URL=${UNPOOLED}`);
+    // ...then gives admins an associate profile, also on the unpooled URL.
+    expect(calls[2]).toContain("ensure-admin-associates.ts --apply --allow-remote");
+    expect(calls[2]).toContain(`DATABASE_URL=${UNPOOLED}`);
+  });
+
+  it("does not fail the build when the admin associate profiles cannot be made", () => {
+    // Every pnpm call exits 3 from the migration on would stop at the migration, so
+    // fail only the profile step: it is the last call and the script must still exit 0.
+    const result = run({ CONTEXT: "production", DATABASE_URL_UNPOOLED: UNPOOLED, FAKE_PNPM_FAIL_PROFILES: "1" });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toMatch(/could not create the admin associate profiles/);
   });
 
   it("tries the role sync again when it fails, and the build passes if a later try works", () => {

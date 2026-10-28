@@ -24,6 +24,11 @@
 # idempotent; a failure fails the build, so the previous deploy keeps serving.
 # The first connect can hit a Neon database that is still waking, so it is tried
 # up to three times (ROLE_SYNC_RETRY_SLEEP seconds apart).
+#
+# Last, every Admin and Super Admin without an associate profile is given one
+# (apps/web/scripts/ensure-admin-associates.ts), so they can hold and book plots.
+# Add-only and idempotent. Unlike the role sync it is NOT fatal: a failure only
+# means an admin cannot hold yet, which is not worth withholding a deploy for.
 set -eu
 
 if [ "${CONTEXT:-}" != "production" ]; then
@@ -55,3 +60,8 @@ until DATABASE_URL="$DATABASE_URL_UNPOOLED" pnpm --filter @desire/db exec tsx sc
   echo "migrate-on-deploy: the role sync failed; trying again ($attempt of 3)..." >&2
   sleep "${ROLE_SYNC_RETRY_SLEEP:-5}"
 done
+
+echo "migrate-on-deploy: giving admins an associate profile so they can hold and book (add-only)..."
+if ! DATABASE_URL="$DATABASE_URL_UNPOOLED" pnpm --filter @desire/db exec tsx ../../apps/web/scripts/ensure-admin-associates.ts --apply --allow-remote; then
+  echo "migrate-on-deploy: could not create the admin associate profiles; continuing (re-run on the next deploy)." >&2
+fi

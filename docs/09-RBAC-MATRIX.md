@@ -16,6 +16,13 @@
 >   `rbac.manage`, which only SUPER_ADMIN holds.
 > - **ASSOCIATE** browses plots, holds one and drafts a booking. It cannot confirm:
 >   the seller never confirms their own sale.
+> - **ADMIN and SUPER_ADMIN also hold and book plots** (2026-10-28). Each has their own
+>   associate profile (lowest-rank grade, its hold quota), created when the account is
+>   made or its role changed and, for existing accounts, by the deploy step
+>   `apps/web/scripts/ensure-admin-associates.ts`. Their sales are credited to them and
+>   show as their own row in the sales report. Because they also hold `booking.confirm`,
+>   an admin can confirm a booking they made themselves; the seller-never-confirms rule
+>   is the associate's.
 > - A key for a switched-off feature is held by SUPER_ADMIN alone.
 > - Moving an existing database to this matrix is `packages/db/scripts/narrow-roles.ts`
 >   (dry run by default).

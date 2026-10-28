@@ -37,6 +37,10 @@ export interface UnitDrawerProps {
   canHold: boolean;
   /** Link to the Plots screen, for viewers who may block plots; null otherwise. */
   manageHref: string | null;
+  /** The booking form for this plot, when the viewer can hold and the plot is free
+   *  or held by someone not yet known (it may be their own); null otherwise. The
+   *  form itself says if another associate holds it. */
+  bookHref: string | null;
   onHold: () => void;
 }
 
@@ -65,6 +69,7 @@ export function UnitDrawer({
   holdError,
   canHold,
   manageHref,
+  bookHref,
   onHold,
 }: UnitDrawerProps) {
   const headingId = useId();
@@ -196,6 +201,14 @@ export function UnitDrawer({
             <section>
               <a className={styles.inlineButton} href={manageHref}>
                 {status === "BLOCKED" ? "Unblock on the Plots screen" : "Block or mark corner on the Plots screen"}
+              </a>
+            </section>
+          ) : null}
+
+          {bookHref ? (
+            <section>
+              <a className={styles.primaryButton} href={bookHref}>
+                Book this plot
               </a>
             </section>
           ) : null}

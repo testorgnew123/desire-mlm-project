@@ -20,9 +20,16 @@ import { Prisma } from "@desire/db";
 import type { PrismaClient, User, UserStatus } from "@desire/db";
 import { ROLE_CODES, type RoleCode } from "@desire/db";
 export type { User };
+export { NoDefaultGradeError, ensureAssociateProfile } from "./associate-profile";
+export type { EnsuredAssociate } from "./associate-profile";
 import { sendCredentialsEmail } from "./account-mail";
 import { hashPassword } from "./password";
 import { writeAuditLog, type AuditContext } from "./audit";
+import {
+  ROLES_THAT_SELL,
+  ensureAdminAssociateProfile,
+  ensureAssociateProfile,
+} from "./associate-profile";
 import { revokeAllSessions } from "./auth";
 import { ForbiddenError, getSessionPermissions } from "./rbac";
 
@@ -92,15 +99,6 @@ export class LastSuperAdminError extends Error {
   }
 }
 
-/** A new associate needs a grade to hold plots under (holdQuota); with none
- *  configured they could never hold anything. */
-export class NoDefaultGradeError extends Error {
-  constructor() {
-    super("No grade is configured for this organisation, so an associate profile cannot be created.");
-    this.name = "NoDefaultGradeError";
-  }
-}
-
 // ── Shared helpers (duplicated per file -- this codebase's own convention)
 
 function requireActor(audit: AuditContext): string {
@@ -148,59 +146,19 @@ function normaliseEmail(email: string): string {
 
 // ── Associate profile ──────────────────────────────────────────────────
 
-export interface EnsuredAssociate {
-  associateId: string;
-  code: string;
-  created: boolean;
-}
-
-/** Gives a user the Associate profile holds and bookings are made under.
- *  Idempotent. Nothing else in the app creates one, so without this an account
- *  made on the admin screen could log in and then do nothing: a hold needs the
- *  profile and a grade whose holdQuota is above zero.
- *
- *  Engagement type CHANNEL_PARTNER and the lowest-rank grade are the defaults;
- *  the tax path the first drives is unused while payouts are off. No hierarchy
- *  row: commission is off and OWN scope short-circuits without one. */
-export async function ensureAssociateProfile(
+/** An associate always gets a profile (and fails without a grade to put them
+ *  under). An Admin or Super Admin gets one too, because they hold and book plots
+ *  as well, but without a grade the account is still made and they simply cannot
+ *  hold yet. */
+async function ensureProfileFor(
   tx: Prisma.TransactionClient,
-  params: { userId: string; audit: AuditContext },
-): Promise<EnsuredAssociate> {
-  const existing = await tx.associate.findUnique({ where: { userId: params.userId }, select: { id: true, code: true } });
-  if (existing) return { associateId: existing.id, code: existing.code, created: false };
-
-  const orgId = params.audit.orgId;
-  const grade = await tx.grade.findFirst({
-    where: { orgId, isActive: true },
-    orderBy: { rank: "asc" },
-    select: { id: true },
-  });
-  if (!grade) throw new NoDefaultGradeError();
-
-  // Next A-0001 style code. Non-sequential codes (seeded demo associates) are
-  // ignored. The (orgId, code) unique index is the backstop for two admins
-  // creating at the same instant: one of them gets an error and retries.
-  const taken = await tx.associate.findMany({ where: { orgId, code: { startsWith: "A-" } }, select: { code: true } });
-  let highest = 0;
-  for (const { code } of taken) {
-    const match = /^A-(\d+)$/.exec(code);
-    if (match) highest = Math.max(highest, Number(match[1]));
-  }
-  const code = `A-${String(highest + 1).padStart(4, "0")}`;
-
-  const now = new Date();
-  const associate = await tx.associate.create({
-    data: { orgId, userId: params.userId, code, engagementType: "CHANNEL_PARTNER", status: "ACTIVE", joinDate: now },
-  });
-  await tx.associateGrade.create({ data: { associateId: associate.id, gradeId: grade.id, validFrom: now } });
-
-  await writeAuditLog(tx, params.audit, {
-    action: "CREATE",
-    entity: "Associate",
-    entityId: associate.id,
-    after: { userId: params.userId, code, engagementType: "CHANNEL_PARTNER", gradeId: grade.id },
-  });
-  return { associateId: associate.id, code, created: true };
+  roleCode: RoleCode,
+  userId: string,
+  audit: AuditContext,
+): Promise<{ code: string } | null> {
+  if (roleCode === ASSOCIATE_ROLE) return ensureAssociateProfile(tx, { userId, audit });
+  if (ROLES_THAT_SELL.includes(roleCode)) return ensureAdminAssociateProfile(tx, { userId, audit });
+  return null;
 }
 
 // ── Read ───────────────────────────────────────────────────────────────
@@ -329,10 +287,7 @@ export async function createUser(db: PrismaClient, params: CreateUserParams): Pr
 
     await tx.userRole.create({ data: { userId: user.id, roleId: role.id, projectId: null, assignedBy: actorId } });
 
-    const associate =
-      params.roleCode === ASSOCIATE_ROLE
-        ? await ensureAssociateProfile(tx, { userId: user.id, audit: params.audit })
-        : null;
+    const associate = await ensureProfileFor(tx, params.roleCode, user.id, params.audit);
 
     await writeAuditLog(tx, params.audit, {
       action: "CREATE",
@@ -341,7 +296,14 @@ export async function createUser(db: PrismaClient, params: CreateUserParams): Pr
       after: { email: user.email, name: user.name, roleCode: params.roleCode },
     });
 
-    return { userId: user.id, email: user.email, name: user.name, associateCode: associate?.code ?? null };
+    // The code is reported (and mailed) for an associate account only: an admin's
+    // profile is there so they can hold and book, not something to tell them about.
+    return {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      associateCode: params.roleCode === ASSOCIATE_ROLE ? (associate?.code ?? null) : null,
+    };
   });
 
   const mail = await sendCredentialsEmail({
@@ -472,9 +434,7 @@ export async function updateUserRoles(db: PrismaClient, params: UpdateUserRolesP
 
     await tx.userRole.deleteMany({ where: { userId: user.id } });
     await tx.userRole.create({ data: { userId: user.id, roleId: role.id, projectId: null, assignedBy: actorId } });
-    if (params.roleCode === ASSOCIATE_ROLE) {
-      await ensureAssociateProfile(tx, { userId: user.id, audit: params.audit });
-    }
+    await ensureProfileFor(tx, params.roleCode, user.id, params.audit);
     await revokeAllSessions(tx, user.id);
 
     await writeAuditLog(tx, params.audit, {

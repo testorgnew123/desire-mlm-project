@@ -25,6 +25,7 @@ import {
   resetUserPassword,
   updateUserRoles,
 } from "../src/admin";
+import { ensureAdminAssociateProfiles } from "../src/associate-profile";
 import type { AuditContext } from "../src/audit";
 
 // No test here may reach a real SMTP server: sendEmail is replaced by a recorder
@@ -363,7 +364,8 @@ describe("createUser", () => {
     const granted = await getSessionPermissions(db, created.userId);
     for (const code of ["booking.read", "booking.confirm", "booking.cancel", "user.manage"]) expect(granted.has(code)).toBe(true);
     expect(granted.has("rbac.manage")).toBe(false);
-    expect(granted.has("booking.create")).toBe(false);
+    // An admin holds and books plots too (they are given an associate profile).
+    for (const code of ["hold.create", "booking.create"]) expect(granted.has(code)).toBe(true);
 
     await updateUserRoles(db, { userId: associate.userId, roleCode: "ADMIN", audit: asOwner });
     expect(await rolesOf(associate.userId)).toEqual(["ADMIN"]);
@@ -398,12 +400,13 @@ describe("createUser", () => {
       expect(await db.user.count({ where: { orgId: ORG, email: "boss@test.local" } })).toBe(0);
     });
 
-    it.each(["ADMIN", "SUPER_ADMIN"] as const)("lets a SUPER_ADMIN create a %s, with no associate profile", async (roleCode) => {
+    it.each(["ADMIN", "SUPER_ADMIN"] as const)("lets a SUPER_ADMIN create a %s, who also gets an associate profile to hold and book with", async (roleCode) => {
       const f = await seedFixture();
       const result = await createUser(db, { email: "boss@test.local", name: "Boss", roleCode, audit: ctx(ORG, f.owner.id, "owner") });
       expect(await rolesOf(result.userId)).toEqual([roleCode]);
+      // Reported as no associate code (it is not mailed to an admin), though the profile exists.
       expect(result.associateCode).toBeNull();
-      expect(await db.associate.count({ where: { userId: result.userId } })).toBe(0);
+      expect(await db.associate.count({ where: { userId: result.userId } })).toBe(1);
     });
   });
 
@@ -448,6 +451,79 @@ describe("createUser", () => {
         createUser(db, { email: "seller@test.local", name: "Seller", roleCode: "ASSOCIATE", audit: ctx(ORG, f.owner.id, "owner") }),
       ).rejects.toThrow(NoDefaultGradeError);
       expect(await db.user.count({ where: { orgId: ORG, email: "seller@test.local" } })).toBe(0);
+    });
+  });
+});
+
+describe("admins hold and book plots, so they get an associate profile", () => {
+  const profileOf = (userId: string) => db.associate.findUnique({ where: { userId } });
+
+  it.each(["ADMIN", "SUPER_ADMIN"] as const)("creating a %s user gives them a profile under the lowest grade", async (roleCode) => {
+    const f = await seedFixture();
+    const created = await createUser(db, { email: `x-${roleCode}@test.local`, name: "X", roleCode, audit: ctx(ORG, f.owner.id, "owner") });
+
+    const associate = await profileOf(created.userId);
+    expect(associate).toMatchObject({ code: "A-0001", status: "ACTIVE" });
+    const grade = await db.associateGrade.findFirstOrThrow({ where: { associateId: associate!.id }, include: { grade: true } });
+    expect(grade.grade.code).toBe("G1");
+  });
+
+  it("still creates an admin when no grade is configured, just without a profile", async () => {
+    const f = await seedFixture(ORG, { grade: false });
+    const created = await createUser(db, { email: "adm@test.local", name: "Adm", roleCode: "ADMIN", audit: ctx(ORG, f.owner.id, "owner") });
+
+    expect(await rolesOf(created.userId)).toEqual(["ADMIN"]);
+    expect(await profileOf(created.userId)).toBeNull();
+  });
+
+  it("changing a user to admin gives them a profile, and keeps the one they already had", async () => {
+    const f = await seedFixture();
+    const seller = await createUser(db, { email: "seller@test.local", name: "Seller", roleCode: "ASSOCIATE", audit: ctx(ORG, f.owner.id, "owner") });
+    const before = await profileOf(seller.userId);
+
+    await updateUserRoles(db, { userId: seller.userId, roleCode: "ADMIN", audit: ctx(ORG, f.owner.id, "owner") });
+
+    expect((await profileOf(seller.userId))?.id).toBe(before!.id);
+    expect(await db.associate.count({ where: { orgId: ORG } })).toBe(1);
+  });
+
+  describe("ensureAdminAssociateProfiles (the deploy-time backfill)", () => {
+    it("lists who would get a profile on a dry run and writes nothing", async () => {
+      const f = await seedFixture();
+
+      const outcomes = await ensureAdminAssociateProfiles(db, { apply: false, orgId: ORG });
+
+      expect(outcomes.map((o) => [o.email, o.result])).toEqual([
+        [f.admin.email, "would create"],
+        [f.owner.email, "would create"],
+      ]);
+      expect(await db.associate.count({ where: { orgId: ORG } })).toBe(0);
+    });
+
+    it("gives every admin and super admin a profile once, and nobody else", async () => {
+      const f = await seedFixture();
+      await ensureAdminAssociateProfiles(db, { apply: true, orgId: ORG });
+
+      const owner = await profileOf(f.owner.id);
+      const admin = await profileOf(f.admin.id);
+      expect([owner?.code, admin?.code].sort()).toEqual(["A-0001", "A-0002"]);
+      expect(await profileOf(f.noPerms.id)).toBeNull();
+
+      const again = await ensureAdminAssociateProfiles(db, { apply: true, orgId: ORG });
+      expect(again).toEqual([]);
+      expect(await db.associate.count({ where: { orgId: ORG } })).toBe(2);
+      const audit = await db.auditLog.findFirst({ where: { orgId: ORG, entity: "Associate", entityId: owner!.id } });
+      expect(audit?.actorId).toBeNull();
+    });
+
+    it("does not touch a plain associate, and skips with a message when there is no grade", async () => {
+      const f = await seedFixture(ORG, { grade: false });
+
+      const outcomes = await ensureAdminAssociateProfiles(db, { apply: true, orgId: ORG });
+
+      expect(outcomes.map((o) => o.result)).toEqual(["skipped (no grade)", "skipped (no grade)"]);
+      expect(await db.associate.count({ where: { orgId: ORG } })).toBe(0);
+      void f;
     });
   });
 });
@@ -503,11 +579,12 @@ describe("updateUserRoles: close-and-replace, never additive", () => {
   it("gives an account moved to ASSOCIATE the associate profile it needs", async () => {
     const f = await seedFixture();
     const created = await createUser(db, { email: "demoted@test.local", name: "Demoted", roleCode: "ADMIN", audit: ctx(ORG, f.owner.id, "owner") });
-    expect(await db.associate.count({ where: { userId: created.userId } })).toBe(0);
+    const adminProfile = await db.associate.findUniqueOrThrow({ where: { userId: created.userId } });
 
     await updateUserRoles(db, { userId: created.userId, roleCode: "ASSOCIATE", audit: ctx(ORG, f.owner.id, "owner") });
 
-    expect(await db.associate.count({ where: { userId: created.userId } })).toBe(1);
+    // The profile the admin already had is the one they keep, not a second one.
+    expect((await db.associate.findUniqueOrThrow({ where: { userId: created.userId } })).id).toBe(adminProfile.id);
   });
 
   it("keeps an existing associate profile (and so their holds and bookings) across a round trip", async () => {
