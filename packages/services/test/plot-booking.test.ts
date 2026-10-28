@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import { HoldQuotaExceededError, UnitNotAvailableError, UnitNotFoundError, acquireHold } from "../src/holds";
-import { confirmBooking } from "../src/bookings";
+import { InvalidPriceOverrideError, confirmBooking } from "../src/bookings";
 import { InvalidCustomerError } from "../src/customers";
 import {
   HoldHasDraftError,
@@ -564,5 +564,44 @@ describe("the associate drafts, an admin confirms", () => {
       confirmBooking(db, { bookingId: booked.bookingId, audit: ctx(ORG, f.seller.user, "seller") }),
     ).rejects.toThrow(ForbiddenError);
     expect((await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } })).status).toBe("DRAFT");
+  });
+});
+
+describe("an agreed price when booking a plot", () => {
+  it("is refused to an associate before a hold or customer exists", async () => {
+    const f = await seedFixture();
+
+    await expect(
+      bookPlot(db, { unitId: f.plots[0]!.id, customer, priceOverride: "1000", audit: ctx(ORG, f.seller.user, "seller") }),
+    ).rejects.toThrow(ForbiddenError);
+
+    expect(await db.unitHold.count({ where: { orgId: ORG } })).toBe(0);
+    expect(await db.customer.count({ where: { orgId: ORG } })).toBe(0);
+  });
+
+  it("is applied for someone who holds booking.set_price", async () => {
+    const f = await seedFixture();
+    const boss = await makeUser(ORG, "pricedboss", ["booking.create", "hold.create", "booking.set_price"], { associate: true });
+
+    const booked = await bookPlot(db, { unitId: f.plots[0]!.id, customer, priceOverride: "4,750,000", audit: ctx(ORG, boss.user, "boss") });
+
+    const booking = await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } });
+    expect(booking.agreementValue.toString()).toBe("4750000");
+    expect(booking.priceOverride?.toString()).toBe("4750000");
+  });
+
+  it("a blank price is simply the list price", async () => {
+    const f = await seedFixture();
+    const booked = await bookPlot(db, { unitId: f.plots[0]!.id, customer, priceOverride: "  ", audit: ctx(ORG, f.seller.user, "seller") });
+    expect((await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } })).priceOverride).toBeNull();
+  });
+
+  it("a malformed price is refused before anything is written", async () => {
+    const f = await seedFixture();
+    const boss = await makeUser(ORG, "pricedboss2", ["booking.create", "hold.create", "booking.set_price"], { associate: true });
+    await expect(
+      bookPlot(db, { unitId: f.plots[0]!.id, customer, priceOverride: "lots", audit: ctx(ORG, boss.user, "boss") }),
+    ).rejects.toThrow(InvalidPriceOverrideError);
+    expect(await db.unitHold.count({ where: { orgId: ORG } })).toBe(0);
   });
 });

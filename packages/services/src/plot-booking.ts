@@ -11,7 +11,7 @@
 // attempt does not leave a plot held for a day with nothing booked against it.
 import type { PrismaClient } from "@desire/db";
 import type { AuditContext } from "./audit";
-import { createDraftBooking } from "./bookings";
+import { createDraftBooking, parsePriceOverride } from "./bookings";
 import { createCustomer, parseCustomerInput, type CustomerInput } from "./customers";
 import { UnitNotFoundError, acquireHold, isHoldLive, releaseHold } from "./holds";
 import { assertPermission, ForbiddenError } from "./rbac";
@@ -131,6 +131,9 @@ async function ownLiveHold(
 export interface BookPlotParams {
   unitId: string;
   customer: CustomerInput;
+  /** An agreed final price replacing the price list's; needs booking.set_price
+   *  (Admin, Super Admin). Blank means the list price. */
+  priceOverride?: string | null;
   audit: AuditContext;
   now?: Date;
 }
@@ -153,6 +156,9 @@ export async function bookPlot(db: PrismaClient, params: BookPlotParams): Promis
   parseCustomerInput(params.customer);
 
   await assertPermission(db, actorId, "booking.create");
+  // Like the customer above: refused before a hold or a customer exists.
+  const priceOverride = parsePriceOverride(params.priceOverride);
+  if (priceOverride) await assertPermission(db, actorId, "booking.set_price");
 
   const associate = await db.associate.findUnique({ where: { userId: actorId }, select: { id: true } });
   if (!associate) {
@@ -180,6 +186,7 @@ export async function bookPlot(db: PrismaClient, params: BookPlotParams): Promis
       customerId: customer.id,
       audit: params.audit,
       bookingDate: now,
+      priceOverride,
     });
     return {
       bookingId: booking.id,

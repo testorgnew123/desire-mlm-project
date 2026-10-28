@@ -66,6 +66,7 @@ is confined to their own towers.
 | `booking.create` | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | – |
 | `booking.confirm` | ✓ | – | – | ✓ | ✓ | – | – | – |
 | `booking.cancel` | ✓ | – | – | ✓ | – | – | – | – |
+| `booking.set_price` | ✓ | – | – | – | – | – | – | – |
 | `discount.request` | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | – |
 | `discount.approve` | ✓ | band | – | ✓ | – | band | – | – |
 | `demand.raise` | ✓ | ✓ | – | – | ✓ | – | – | – |

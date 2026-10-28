@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
-import { cancelBooking, confirmBooking } from "@desire/services/bookings";
+import { cancelBooking, confirmBooking, setBookingPriceOverride } from "@desire/services/bookings";
 import { requireSession } from "@/lib/session";
 
 /** Same try/catch-and-redirect-with-message pattern as projects/[projectId]'s
@@ -55,6 +55,40 @@ export async function cancelBookingAction(formData: FormData): Promise<void> {
     cancelBooking(db, {
       bookingId,
       reason: String(formData.get("reason") ?? ""),
+      audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
+    }).then(() => undefined),
+  );
+}
+
+/** Sets the agreed final price on a draft. Blank is refused here rather than read
+ *  as "clear": clearing is its own button, so an empty box cannot silently
+ *  undo an agreed price. */
+export async function setPriceOverrideAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const bookingId = String(formData.get("bookingId") ?? "");
+  const price = String(formData.get("price") ?? "").trim();
+  const db = getPrismaClient();
+
+  await runAction(bookingId, async () => {
+    if (price === "") throw new Error("Enter the agreed price, or use the list price.");
+    await setBookingPriceOverride(db, {
+      bookingId,
+      price,
+      audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
+    });
+  });
+}
+
+/** Goes back to the price list's price. */
+export async function clearPriceOverrideAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  const bookingId = String(formData.get("bookingId") ?? "");
+  const db = getPrismaClient();
+
+  await runAction(bookingId, () =>
+    setBookingPriceOverride(db, {
+      bookingId,
+      price: null,
       audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
     }).then(() => undefined),
   );

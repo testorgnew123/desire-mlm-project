@@ -20,6 +20,7 @@ import { effectiveUnitStatus, isHoldLive } from "./holds";
 import { assertValidTransition } from "./unit-transitions";
 import { resolveUnitAreas, type UnitTypeAreas } from "./projects";
 import {
+  MAX_PRICE_OVERRIDE,
   computeCostSheet,
   parsePlcCharges,
   type ChargeHeadSpec,
@@ -33,6 +34,7 @@ import { accrueCommission } from "./commission";
 
 const CREATE_PERMISSION = "booking.create";
 const CONFIRM_PERMISSION = "booking.confirm";
+const SET_PRICE_PERMISSION = "booking.set_price";
 const CANCEL_PERMISSION = "booking.cancel";
 const READ_PERMISSION = "booking.read";
 const SCOPED_ROLE_CODES: ReadonlySet<string> = new Set(["ASSOCIATE", "TEAM_LEAD"]);
@@ -184,7 +186,13 @@ async function resolveSellingAssociateId(
  *  this is re-run, not read back. */
 async function buildCostSheetInput(
   tx: PrismaNS.TransactionClient,
-  params: { orgId: string; unitId: string; priceListId: string; discount: Prisma.Decimal },
+  params: {
+    orgId: string;
+    unitId: string;
+    priceListId: string;
+    discount: Prisma.Decimal;
+    priceOverride?: Prisma.Decimal | null;
+  },
 ) {
   const unit = await tx.unit.findUniqueOrThrow({
     where: { id: params.unitId },
@@ -248,9 +256,43 @@ async function buildCostSheetInput(
       otherCharges,
       discount: params.discount,
       chargeHeads,
+      priceOverride: params.priceOverride ?? null,
     },
     areas,
   };
+}
+
+/** An agreed price arrives as text from a form or a Decimal from code. Blank or
+ *  absent means "no override". Anything that is not a plain positive number is
+ *  refused here, before it can reach the database; the range check is
+ *  computeCostSheet's. */
+export function parsePriceOverride(value: Prisma.Decimal | string | null | undefined): Prisma.Decimal | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const text = value.trim().replace(/,/g, "");
+    if (text === "") return null;
+    if (!/^\d+(\.\d{1,2})?$/.test(text)) {
+      throw new InvalidPriceOverrideError(`"${value.trim()}" is not a price: use a number such as 4800000 or 4800000.50.`);
+    }
+    return checkedPrice(new Prisma.Decimal(text));
+  }
+  return checkedPrice(value);
+}
+
+function checkedPrice(price: Prisma.Decimal): Prisma.Decimal {
+  if (price.lessThanOrEqualTo(0) || price.greaterThan(MAX_PRICE_OVERRIDE)) {
+    throw new InvalidPriceOverrideError(
+      `The agreed price must be more than 0 and at most ${MAX_PRICE_OVERRIDE.toString()}.`,
+    );
+  }
+  return price;
+}
+
+export class InvalidPriceOverrideError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidPriceOverrideError";
+  }
 }
 
 // ── Draft ──────────────────────────────────────────────────────────────
@@ -263,6 +305,9 @@ export interface CreateDraftBookingParams {
   sellingAssociateId?: string;
   paymentPlanId?: string | null;
   bookingDate?: Date;
+  /** An agreed final price replacing the price list's. Needs booking.set_price,
+   *  which an associate does not hold: they quote the list. */
+  priceOverride?: Prisma.Decimal | string | null;
   audit: AuditContext;
 }
 
@@ -275,6 +320,8 @@ export async function createDraftBooking(
 
   return db.$transaction(async (tx) => {
     await assertPermission(tx, actorId, CREATE_PERMISSION);
+    const priceOverride = parsePriceOverride(params.priceOverride);
+    if (priceOverride) await assertPermission(tx, actorId, SET_PRICE_PERMISSION);
 
     const sellingAssociateId = await resolveSellingAssociateId(tx, {
       callerUserId: actorId,
@@ -317,6 +364,7 @@ export async function createDraftBooking(
       unitId: unit.id,
       priceListId: params.priceListId,
       discount: D(0), // fixed at 0 this slice -- see the file header.
+      priceOverride,
     });
     const preview = computeCostSheet(input);
 
@@ -357,6 +405,7 @@ export async function createDraftBooking(
             registrationAmount: preview.registrationAmount,
             agreementValue: preview.agreementValue,
             commissionableValue: preview.commissionableValue,
+            priceOverride,
             saleableAreaAtBooking: areas.saleableArea,
             carpetAreaAtBooking: areas.carpetArea,
             paymentPlanId: params.paymentPlanId ?? undefined,
@@ -452,6 +501,8 @@ export async function confirmBooking(
       unitId: booking.unitId,
       priceListId: booking.priceListId,
       discount: booking.discountAmount,
+      // The agreed price, if an admin set one on the draft, survives the freeze.
+      priceOverride: booking.priceOverride,
     });
     const final = computeCostSheet(input);
 
@@ -610,6 +661,65 @@ function serializeClawbackLine(line: Awaited<ReturnType<typeof computeClawbackLi
     nettedAgainstPending: line.result.nettedAgainstPending.toFixed(2),
     recoveryAmount: line.result.recoveryAmount.toFixed(2),
   };
+}
+
+/** Sets or clears the agreed price on a booking that is still a draft. An admin
+ *  (booking.set_price) agrees a different price with the customer; the draft's
+ *  amounts are worked out again from it, and confirming keeps it. Pass null to go
+ *  back to the price list. A confirmed booking is frozen, so it is refused. */
+export async function setBookingPriceOverride(
+  db: PrismaClient,
+  params: { bookingId: string; price: Prisma.Decimal | string | null; audit: AuditContext },
+): Promise<Booking> {
+  const actorId = requireActor(params.audit);
+  const priceOverride = parsePriceOverride(params.price);
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "bookings" WHERE "id" = ${params.bookingId} FOR UPDATE`;
+    const booking = await tx.booking.findUnique({ where: { id: params.bookingId } });
+    if (!booking) throw new BookingNotFoundError(params.bookingId);
+    if (booking.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`Booking ${params.bookingId} belongs to another organisation.`);
+    }
+    await assertPermission(tx, actorId, SET_PRICE_PERMISSION, { projectId: booking.projectId });
+    if (booking.status !== "DRAFT") {
+      throw new InvalidBookingStateError(booking.id, booking.status, "DRAFT");
+    }
+
+    const { input } = await buildCostSheetInput(tx, {
+      orgId: booking.orgId,
+      unitId: booking.unitId,
+      priceListId: booking.priceListId,
+      discount: booking.discountAmount,
+      priceOverride,
+    });
+    const preview = computeCostSheet(input);
+
+    const before = auditSnapshot(booking);
+    const updated = await tx.booking.update({
+      where: { id: booking.id },
+      data: {
+        priceOverride,
+        baseAmount: preview.baseAmount,
+        plcAmount: preview.plcAmount,
+        otherChargesAmount: preview.otherChargesAmount,
+        discountAmount: preview.discountAmount,
+        stampDutyAmount: preview.stampDutyAmount,
+        registrationAmount: preview.registrationAmount,
+        agreementValue: preview.agreementValue,
+        commissionableValue: preview.commissionableValue,
+      },
+    });
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "Booking",
+      entityId: booking.id,
+      before,
+      after: auditSnapshot(updated),
+      reason: priceOverride ? "agreed price set" : "agreed price cleared",
+    });
+    return updated;
+  });
 }
 
 /** Read-only: no transaction, no mutation, no lock -- shows the UI "who

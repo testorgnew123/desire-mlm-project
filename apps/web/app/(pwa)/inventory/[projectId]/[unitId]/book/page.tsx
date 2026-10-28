@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { CircleAlert } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { isHoldLive } from "@desire/services/holds";
-import { getSession } from "@/lib/session";
+import { getCachedSessionPermissions, getSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,7 @@ export default async function BookPlotPage({
   if (!session) notFound();
   const db = getPrismaClient();
 
-  const [unit, associate] = await Promise.all([
+  const [unit, associate, permissions] = await Promise.all([
     db.unit.findFirst({
       where: { id: unitId, projectId, orgId: session.user.orgId },
       select: {
@@ -52,6 +52,7 @@ export default async function BookPlotPage({
       },
     }),
     db.associate.findUnique({ where: { userId: session.user.id }, select: { id: true } }),
+    getCachedSessionPermissions(db, session.user.id),
   ]);
   if (!unit) notFound();
 
@@ -108,6 +109,15 @@ export default async function BookPlotPage({
             <Label htmlFor="email">Email (optional)</Label>
             <Input id="email" name="email" type="email" autoComplete="off" />
           </div>
+          {permissions.has("booking.set_price") ? (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="priceOverride">Agreed price, ₹ (optional)</Label>
+              <Input id="priceOverride" name="priceOverride" inputMode="decimal" autoComplete="off" placeholder="Leave empty for the list price" />
+              <p className="text-xs text-muted-foreground">
+                Replaces the price list&rsquo;s price for this plot, whatever the corner premium or other charges would be.
+              </p>
+            </div>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             {heldByMe && hold
               ? `You are holding this plot until ${formatDateTime(hold.expiresAt)}. `

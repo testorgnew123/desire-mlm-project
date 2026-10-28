@@ -127,7 +127,16 @@ export interface CostSheetInput {
   discount: Prisma.Decimal;
   /** The org's charge head catalogue. */
   chargeHeads: readonly ChargeHeadSpec[];
+  /** An agreed final price for the plot (an admin's), replacing the whole
+   *  computation: it IS the base amount and the agreement value, and no corner
+   *  premium, other charge or discount is added to it. Null or omitted prices the
+   *  plot from the price list as usual. */
+  priceOverride?: Prisma.Decimal | null;
 }
+
+/** The most an agreed price can be: a sanity bound against a slipped finger
+ *  (a stray extra zero is still far below it), well inside Decimal(18,2). */
+export const MAX_PRICE_OVERRIDE = new Prisma.Decimal("100000000000");
 
 /** Shaped for a CostSheetLine row (packages/db schema) so the caller that
  *  freezes the sheet onto a booking can persist these directly. */
@@ -193,6 +202,33 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
 
   // ── Base (BSP). Saleable area, never carpet (docs/19-GLOSSARY.md).
   const baseHead = requireHeadByCategory(input.chargeHeads, "BASE_PRICE");
+
+  // An agreed price replaces everything below: one line, and the agreement value
+  // is exactly that figure. Commission still follows the BSP head's flag.
+  if (input.priceOverride !== undefined && input.priceOverride !== null) {
+    const price = round2(input.priceOverride);
+    if (price.lessThanOrEqualTo(0) || price.greaterThan(MAX_PRICE_OVERRIDE)) {
+      throw new CostSheetInputError(
+        `The agreed price must be more than 0 and at most ${MAX_PRICE_OVERRIDE.toString()}, got ${price.toString()}.`,
+      );
+    }
+    if (!input.discount.isZero()) {
+      throw new CostSheetInputError("A discount cannot be combined with an agreed price.");
+    }
+    return {
+      lines: [buildLine(baseHead, { description: "Agreed price", quantity: null, rate: null, amount: price })],
+      saleableArea: input.saleableArea,
+      carpetArea: input.carpetArea,
+      baseAmount: price,
+      plcAmount: zero(),
+      otherChargesAmount: zero(),
+      discountAmount: zero(),
+      stampDutyAmount: zero(),
+      registrationAmount: zero(),
+      agreementValue: price,
+      commissionableValue: baseHead.countsTowardCommission ? price : zero(),
+    };
+  }
   const baseAmount = round2(input.saleableArea.mul(input.baseRate));
   lines.push(
     buildLine(baseHead, {

@@ -57,6 +57,7 @@ export const PERMISSION_CODES = [
   "booking.create",
   "booking.confirm",
   "booking.cancel",
+  "booking.set_price",
   "discount.request",
   "discount.approve",
   "demand.raise",
@@ -106,6 +107,9 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "booking.create": ["SUPER_ADMIN", "ASSOCIATE"],
   "booking.confirm": ["SUPER_ADMIN", "ADMIN"],
   "booking.cancel": ["SUPER_ADMIN", "ADMIN"],
+  // Replace the price-list price of a plot with an agreed one, while booking it or
+  // while its draft waits. Admin and Super Admin only: an associate quotes the list.
+  "booking.set_price": ["SUPER_ADMIN", "ADMIN"],
 
   // ── User administration: ON ─────────────────────────────────────────────
   // RBAC itself (who may be an admin or superadmin) stays with SUPER_ADMIN.
