@@ -1312,6 +1312,11 @@ model Booking {
   agreementValue      Decimal @db.Decimal(18, 2)
   commissionableValue Decimal @db.Decimal(18, 2)
 
+  /// An admin's agreed final price for the plot, replacing the price list's. Null
+  /// means the booking is priced from the list. While set, baseAmount and
+  /// agreementValue equal it, and no corner premium or other charge is added.
+  priceOverride Decimal? @db.Decimal(18, 2)
+
   /// Overpayment parked here and auto-applied to the next demand raised.
   /// Buyers pay round numbers; the demand schedule does not.
   creditBalance Decimal @default(0) @db.Decimal(18, 2)

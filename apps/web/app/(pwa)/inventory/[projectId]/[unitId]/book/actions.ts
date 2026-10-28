@@ -29,6 +29,8 @@ export async function bookPlotAction(formData: FormData): Promise<void> {
         phone: String(formData.get("phone") ?? ""),
         email: String(formData.get("email") ?? ""),
       },
+      // Only an admin has the permission; the service refuses anyone else who sends one.
+      priceOverride: String(formData.get("priceOverride") ?? ""),
       audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
     });
     destination = `/my-bookings?booked=${encodeURIComponent(booked.bookingNumber)}`;

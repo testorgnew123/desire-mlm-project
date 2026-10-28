@@ -79,6 +79,7 @@ describe("what each role can do today", () => {
       "booking.create",
       "booking.confirm",
       "booking.cancel",
+      "booking.set_price",
       "user.manage",
     ]);
   });
@@ -100,6 +101,10 @@ describe("what each role can do today", () => {
   it("admins hold and book plots as well as associates (each has an associate profile)", () => {
     expect(PERMISSION_MATRIX["hold.create"]).toEqual(["SUPER_ADMIN", "ADMIN", "ASSOCIATE"]);
     expect(PERMISSION_MATRIX["booking.create"]).toEqual(["SUPER_ADMIN", "ADMIN", "ASSOCIATE"]);
+  });
+
+  it("only an admin can set an agreed price on a booking; an associate quotes the list", () => {
+    expect(PERMISSION_MATRIX["booking.set_price"]).toEqual(["SUPER_ADMIN", "ADMIN"]);
   });
 
   it("an associate cannot create or edit a project, plot or price list", () => {

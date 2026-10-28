@@ -147,6 +147,14 @@ otherCharges = Σ(fixed charges: parking, club, IFMS, ...)
 gross        = baseAmount + plcAmount + otherCharges − discount
 agreementValue = gross + stampDuty + registration
 
+**Agreed price (2026-10-28).** An admin (`booking.set_price`: Admin, Super Admin) can replace
+all of the above with one agreed final price for a plot, when booking it or while the
+draft waits (never after confirming). The price IS `baseAmount` and `agreementValue`: no
+corner premium, fixed charge, stamp duty, registration or discount is added to it, and
+the cost sheet shows one line, "Agreed price". It is stored on `Booking.priceOverride`
+(null = priced from the list), survives confirming, and is cleared to go back to the list.
+Commission follows the BSP head's `countsTowardCommission` flag as usual.
+
 commissionableValue = Σ(lines where chargeHead.countsTowardCommission)
                       adjusted per scheme.baseDefinition
                       (netOfDiscount)

@@ -317,3 +317,51 @@ describe("percentage and per-area charges on the same sheet", () => {
     ).toThrow(UnpricedPlcTagError);
   });
 });
+
+describe("an agreed price replaces the price list's", () => {
+  it("is the base amount and the whole agreement value, with no corner premium on top", () => {
+    const r = computeCostSheet(plotInput({ priceOverride: D("4800000") }));
+    expect(r.baseAmount.toString()).toBe("4800000");
+    expect(r.plcAmount.toString()).toBe("0");
+    expect(r.otherChargesAmount.toString()).toBe("0");
+    expect(r.agreementValue.toString()).toBe("4800000");
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toMatchObject({ chargeHeadCode: "BSP", description: "Agreed price" });
+    expect(r.lines[0]!.quantity).toBeNull();
+  });
+
+  it("drops the fixed charges and stamp duty the list would have added", () => {
+    const r = computeCostSheet(
+      plotInput({
+        priceOverride: D("4800000"),
+        otherCharges: [
+          { chargeHeadCode: "PARKING", amount: D(300_000) },
+          { chargeHeadCode: "STAMP", amount: D(350_000) },
+        ],
+      }),
+    );
+    expect(r.agreementValue.toString()).toBe("4800000");
+    expect(r.stampDutyAmount.toString()).toBe("0");
+  });
+
+  it("stays commissionable as the BSP head says, and is rounded to the paisa", () => {
+    const r = computeCostSheet(plotInput({ priceOverride: D("4800000.456") }));
+    expect(r.agreementValue.toString()).toBe("4800000.46");
+    expect(r.commissionableValue.toString()).toBe("4800000.46");
+  });
+
+  it("null or omitted prices from the list as before", () => {
+    expect(computeCostSheet(plotInput({ priceOverride: null })).agreementValue.toString()).toBe("5500000");
+    expect(computeCostSheet(plotInput()).agreementValue.toString()).toBe("5500000");
+  });
+
+  it.each(["0", "-5", "100000000001"])("refuses the price %s", (price) => {
+    expect(() => computeCostSheet(plotInput({ priceOverride: D(price) }))).toThrow(CostSheetInputError);
+  });
+
+  it("refuses a discount on top of an agreed price", () => {
+    expect(() => computeCostSheet(plotInput({ priceOverride: D("4800000"), discount: D(1000) }))).toThrow(
+      /discount cannot be combined/,
+    );
+  });
+});

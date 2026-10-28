@@ -14,12 +14,14 @@ import {
   HeldByAnotherAssociateError,
   InvalidBookingStateError,
   InvalidPriceListError,
+  InvalidPriceOverrideError,
   UnitNotHeldError,
   confirmBooking,
   createDraftBooking,
   getBooking,
   getBookingForActor,
   listBookings,
+  setBookingPriceOverride,
 } from "../src/bookings";
 import type { AuditContext } from "../src/audit";
 
@@ -804,5 +806,130 @@ describe("getBookingForActor: scope", () => {
     const f = await seedScopeFixture();
     const result = await getBookingForActor(db, { orgId: ORG, actorId: f.admin.user.id, bookingId: f.strangerBooking.id });
     expect(result?.id).toBe(f.strangerBooking.id);
+  });
+});
+
+describe("an admin's agreed price", () => {
+  async function heldDraft() {
+    const f = await seedFixture();
+    await acquireHold(db, {
+      orgId: ORG,
+      unitId: f.unit.id,
+      associateId: f.seller.associate!.id,
+      audit: ctx(ORG, f.seller.user.id, "seller"),
+    });
+    const draft = await createDraftBooking(db, {
+      unitId: f.unit.id,
+      priceListId: f.priceList.id,
+      customerId: f.customer.id,
+      audit: ctx(ORG, f.seller.user.id, "seller"),
+    });
+    const pricer = await makeUser(ORG, "pricer", ["booking.set_price", "booking.confirm"]);
+    return { ...f, draft, pricer };
+  }
+
+  it("is set on a draft, repricing it, and survives confirming", async () => {
+    const f = await heldDraft();
+    const listPrice = f.draft.agreementValue;
+
+    const set = await setBookingPriceOverride(db, {
+      bookingId: f.draft.id,
+      price: "4,800,000",
+      audit: ctx(ORG, f.pricer.user.id, "pricer"),
+    });
+    expect(set.priceOverride?.toString()).toBe("4800000");
+    expect(set.baseAmount.toString()).toBe("4800000");
+    expect(set.agreementValue.toString()).toBe("4800000");
+    expect(set.agreementValue.equals(listPrice)).toBe(false);
+
+    const confirmed = await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.pricer.user.id, "pricer") });
+    expect(confirmed.agreementValue.toString()).toBe("4800000");
+    const lines = await db.costSheetLine.findMany({ where: { bookingId: f.draft.id } });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ chargeHeadCode: "BSP", description: "Agreed price" });
+  });
+
+  it("can be cleared, going back to the price list", async () => {
+    const f = await heldDraft();
+    const listPrice = f.draft.agreementValue;
+    await setBookingPriceOverride(db, { bookingId: f.draft.id, price: "4800000", audit: ctx(ORG, f.pricer.user.id, "pricer") });
+
+    const cleared = await setBookingPriceOverride(db, { bookingId: f.draft.id, price: null, audit: ctx(ORG, f.pricer.user.id, "pricer") });
+
+    expect(cleared.priceOverride).toBeNull();
+    expect(cleared.agreementValue.equals(listPrice)).toBe(true);
+  });
+
+  it("writes an audit row with the before and after, and the reason", async () => {
+    const f = await heldDraft();
+    await setBookingPriceOverride(db, { bookingId: f.draft.id, price: "4800000", audit: ctx(ORG, f.pricer.user.id, "pricer") });
+
+    const row = await db.auditLog.findFirstOrThrow({ where: { entity: "Booking", entityId: f.draft.id, reason: "agreed price set" } });
+    expect(row.actorId).toBe(f.pricer.user.id);
+    expect((row.before as Record<string, unknown>).priceOverride).toBeNull();
+    expect((row.after as Record<string, unknown>).priceOverride).toBe("4800000");
+  });
+
+  it("is refused to a user without booking.set_price (the seller, for one), and changes nothing", async () => {
+    const f = await heldDraft();
+    await expect(
+      setBookingPriceOverride(db, { bookingId: f.draft.id, price: "1", audit: ctx(ORG, f.seller.user.id, "seller") }),
+    ).rejects.toThrow(ForbiddenError);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: f.draft.id } })).priceOverride).toBeNull();
+  });
+
+  it("is refused once the booking is confirmed", async () => {
+    const f = await heldDraft();
+    await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.pricer.user.id, "pricer") });
+    await expect(
+      setBookingPriceOverride(db, { bookingId: f.draft.id, price: "4800000", audit: ctx(ORG, f.pricer.user.id, "pricer") }),
+    ).rejects.toThrow(InvalidBookingStateError);
+  });
+
+  it("is refused for a booking of another organisation", async () => {
+    const f = await heldDraft();
+    await expect(
+      setBookingPriceOverride(db, { bookingId: f.draft.id, price: "4800000", audit: ctx("org_elsewhere", f.pricer.user.id, "pricer") }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it.each(["abc", "0", "-5", "12.345", "1e6"])("refuses the price %j before touching the booking", async (price) => {
+    const f = await heldDraft();
+    await expect(
+      setBookingPriceOverride(db, { bookingId: f.draft.id, price, audit: ctx(ORG, f.pricer.user.id, "pricer") }),
+    ).rejects.toThrow(InvalidPriceOverrideError);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: f.draft.id } })).priceOverride).toBeNull();
+  });
+
+  it("can be given when the draft is made, by someone who holds the permission", async () => {
+    const f = await seedFixture();
+    const both = await makeUser(ORG, "sellerpricer", ["booking.create", "hold.create", "booking.set_price"], { associate: true });
+    await acquireHold(db, { orgId: ORG, unitId: f.unit.id, associateId: both.associate!.id, audit: ctx(ORG, both.user.id, "sp") });
+
+    const draft = await createDraftBooking(db, {
+      unitId: f.unit.id,
+      priceListId: f.priceList.id,
+      customerId: f.customer.id,
+      priceOverride: "4750000",
+      audit: ctx(ORG, both.user.id, "sp"),
+    });
+    expect(draft.agreementValue.toString()).toBe("4750000");
+    expect(draft.priceOverride?.toString()).toBe("4750000");
+  });
+
+  it("cannot be given at draft time by an associate: they quote the list", async () => {
+    const f = await seedFixture();
+    await acquireHold(db, { orgId: ORG, unitId: f.unit.id, associateId: f.seller.associate!.id, audit: ctx(ORG, f.seller.user.id, "seller") });
+
+    await expect(
+      createDraftBooking(db, {
+        unitId: f.unit.id,
+        priceListId: f.priceList.id,
+        customerId: f.customer.id,
+        priceOverride: "1000",
+        audit: ctx(ORG, f.seller.user.id, "seller"),
+      }),
+    ).rejects.toThrow(ForbiddenError);
+    expect(await db.booking.count({ where: { orgId: ORG } })).toBe(0);
   });
 });

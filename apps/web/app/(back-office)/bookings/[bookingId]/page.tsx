@@ -10,7 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { StatusBadge } from "@/components/status-badge";
 import { bookingStatusTone } from "@/lib/status-tone";
-import { cancelBookingAction, confirmBookingAction } from "./actions";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cancelBookingAction, clearPriceOverrideAction, confirmBookingAction, setPriceOverrideAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +73,7 @@ export default async function BookingDetailPage({
   });
 
   const priceRows: [label: string, amount: typeof booking.baseAmount, show: boolean][] = [
-    ["Base price", booking.baseAmount, true],
+    [booking.priceOverride ? "Agreed price" : "Base price", booking.baseAmount, true],
     ["Preferential location charge", booking.plcAmount, booking.plcAmount.gt(0)],
     ["Other charges", booking.otherChargesAmount, booking.otherChargesAmount.gt(0)],
     ["Discount", booking.discountAmount, booking.discountAmount.gt(0)],
@@ -113,6 +115,32 @@ export default async function BookingDetailPage({
                 : "The associate's hold on this plot has lapsed, so it can no longer be confirmed. They need to book it again."}
             </p>
             {confirmNote ? <p className="text-muted-foreground">{confirmNote}</p> : null}
+            {permissions.has("booking.set_price") ? (
+              <form action={setPriceOverrideAction} className="flex flex-col gap-2 border-t border-border pt-3">
+                <input type="hidden" name="bookingId" value={booking.id} />
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  Agreed price (₹), replaces the price list
+                  <Input
+                    name="price"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    defaultValue={booking.priceOverride?.toFixed(2) ?? ""}
+                    placeholder="e.g. 4800000"
+                    className="max-w-xs"
+                  />
+                </label>
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" variant="outline">
+                    Set agreed price
+                  </Button>
+                  {booking.priceOverride ? (
+                    <Button type="submit" size="sm" variant="ghost" formAction={clearPriceOverrideAction}>
+                      Use the list price
+                    </Button>
+                  ) : null}
+                </div>
+              </form>
+            ) : null}
             {canConfirm ? (
               <form action={confirmBookingAction}>
                 <input type="hidden" name="bookingId" value={booking.id} />
