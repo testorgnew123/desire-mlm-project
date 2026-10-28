@@ -38,9 +38,12 @@ export interface UnitDrawerProps {
   /** Link to the Plots screen, for viewers who may block plots; null otherwise. */
   manageHref: string | null;
   /** The booking form for this plot, when the viewer can hold and the plot is free
-   *  or held by someone not yet known (it may be their own); null otherwise. The
-   *  form itself says if another associate holds it. */
+   *  or held by them; null otherwise. */
   bookHref: string | null;
+  /** The plot is held by the viewer: they can book it or give it back. */
+  isMine: boolean;
+  isReleasing: boolean;
+  onRelease: () => void;
   onHold: () => void;
 }
 
@@ -70,6 +73,9 @@ export function UnitDrawer({
   canHold,
   manageHref,
   bookHref,
+  isMine,
+  isReleasing,
+  onRelease,
   onHold,
 }: UnitDrawerProps) {
   const headingId = useId();
@@ -159,7 +165,7 @@ export function UnitDrawer({
                 .filter(Boolean)
                 .join(" ")}
             >
-              <h3 className={styles.detailHeading}>Hold</h3>
+              <h3 className={styles.detailHeading}>{isMine ? "Your hold" : "Hold"}</h3>
               <p className={styles.holdCountdown}>
                 {countdown ?? "00:00"}
                 <span className={styles.holdCountdownUnit}> left</span>
@@ -210,6 +216,19 @@ export function UnitDrawer({
               <a className={styles.primaryButton} href={bookHref}>
                 Book this plot
               </a>
+            </section>
+          ) : null}
+
+          {isMine ? (
+            <section>
+              <button type="button" className={styles.secondaryButton} onClick={onRelease} disabled={isReleasing}>
+                {isReleasing ? "Releasing…" : "Release hold"}
+              </button>
+              {holdError ? (
+                <p className={styles.errorStrip} role="alert">
+                  {holdError}
+                </p>
+              ) : null}
             </section>
           ) : null}
 

@@ -25,6 +25,7 @@ async function run(
     // response, with a new server time, which also drops the delta overlay that
     // would otherwise show your own fresh hold as "taken by someone".
     revalidatePath(`/inventory/${projectId}`);
+    revalidatePath(`/board/${projectId}`);
     revalidatePath("/my-bookings");
     return { ok: true, message };
   } catch (error) {

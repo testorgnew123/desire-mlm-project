@@ -151,7 +151,7 @@ export default async function InventoryBoardPage({
           id: true,
           expiresAt: true,
           releasedAt: true,
-          associate: { select: { code: true, user: { select: { name: true } } } },
+          associate: { select: { code: true, userId: true, user: { select: { name: true } } } },
         },
       })
     : [];
@@ -172,6 +172,9 @@ export default async function InventoryBoardPage({
       kind: tower.kind,
     })),
     now: readStartedAt,
+    // Marks the holds that are this viewer's own, so the drawer can offer them Book and
+    // Release. An admin who holds a plot is the viewer here too.
+    viewerUserId: session.user.id,
   });
 
   return (
