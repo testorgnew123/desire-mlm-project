@@ -145,7 +145,7 @@ export async function runCollectionsSweep(db: PrismaClient, params: { now?: Date
 
   const openDemands = await db.demand.findMany({
     where: { status: { in: ["RAISED", "PARTIALLY_PAID"] } },
-    select: { id: true, orgId: true, dueDate: true, amount: true, gstAmount: true, interestRatePctPerAnnum: true, bookingId: true },
+    select: { id: true, orgId: true, dueDate: true, amount: true, interestRatePctPerAnnum: true, bookingId: true },
     take: 2000,
   });
 
@@ -172,7 +172,7 @@ export async function runCollectionsSweep(db: PrismaClient, params: { now?: Date
       // is idempotent without needing a separate "last accrued" field.
       if (fresh.interestRatePctPerAnnum && daysUntilDue < 0) {
         const allocated = await allocatedTotalForDemand(tx, fresh.id);
-        const outstanding = fresh.amount.plus(fresh.gstAmount).minus(allocated);
+        const outstanding = fresh.amount.minus(allocated);
         if (outstanding.greaterThan(0)) {
           const daysOverdue = -daysUntilDue;
           const accrued = round2(outstanding.times(fresh.interestRatePctPerAnnum).dividedBy(100).times(daysOverdue).dividedBy(365));
@@ -190,7 +190,7 @@ export async function runCollectionsSweep(db: PrismaClient, params: { now?: Date
       });
       if (openPromises.length > 0) {
         const allocated = await allocatedTotalForDemand(tx, fresh.id);
-        const outstanding = fresh.amount.plus(fresh.gstAmount).minus(allocated);
+        const outstanding = fresh.amount.minus(allocated);
         if (outstanding.greaterThan(0)) {
           for (const promise of openPromises) {
             await tx.paymentFollowUp.update({ where: { id: promise.id }, data: { promiseBrokenAt: now } });
@@ -348,7 +348,7 @@ export async function getCollectionsConsole(db: PrismaClient, params: Collection
 
   const rows = demands.map((d) => {
     const allocated = d.allocations.reduce((sum, a) => sum.plus(a.amount), D(0));
-    const outstanding = d.amount.plus(d.gstAmount).minus(allocated);
+    const outstanding = d.amount.minus(allocated);
     const daysOverdue = Math.max(0, Math.floor((now.getTime() - d.dueDate.getTime()) / DAY_MS));
     const lastFollowUp = d.followUps[0];
     return {

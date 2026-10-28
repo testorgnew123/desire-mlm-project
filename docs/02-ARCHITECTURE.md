@@ -25,7 +25,7 @@ apps/web
   app/api/jobs/           job handlers, secret-guarded, idempotent
 packages/db               Prisma schema, migrations, seed
 packages/commission       PURE. No I/O. The engine.
-packages/tax              India tax rules: GST, TDS 192/194H/194J
+packages/tax              India tax rules: TDS 192/194H/194J
 packages/services         business logic; the only layer that touches the DB
 packages/ui               shared components
 ```

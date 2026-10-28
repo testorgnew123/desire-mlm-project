@@ -155,7 +155,7 @@ async function syncDemandStatus(tx: PrismaNS.TransactionClient, demandId: string
   if (demand.status === "WAIVED") return;
 
   const allocated = await allocatedTotalForDemand(tx, demandId);
-  const owed = demand.amount.plus(demand.gstAmount);
+  const owed = demand.amount;
   const nextStatus = allocated.greaterThanOrEqualTo(owed) && owed.greaterThan(0) ? "PAID" : allocated.greaterThan(0) ? "PARTIALLY_PAID" : "RAISED";
   if (nextStatus !== demand.status) {
     await tx.demand.update({ where: { id: demand.id }, data: { status: nextStatus } });
@@ -488,7 +488,7 @@ export async function allocateReceipt(db: PrismaClient, params: AllocateReceiptP
       }
 
       const demandAllocated = await allocatedTotalForDemand(tx, demand.id);
-      const demandOutstanding = demand.amount.plus(demand.gstAmount).minus(demandAllocated);
+      const demandOutstanding = demand.amount.minus(demandAllocated);
       if (target.amount.greaterThan(demandOutstanding)) {
         throw new AllocationExceedsDemandError(demand.id, demandOutstanding.toString(), target.amount.toString());
       }
@@ -532,7 +532,7 @@ async function resolveOldestUnpaidFirst(
   for (const demand of demands) {
     if (remaining.lessThanOrEqualTo(0)) break;
     const allocated = await allocatedTotalForDemand(tx, demand.id);
-    const outstanding = demand.amount.plus(demand.gstAmount).minus(allocated);
+    const outstanding = demand.amount.minus(allocated);
     if (outstanding.lessThanOrEqualTo(0)) continue;
     const take = Prisma.Decimal.min(outstanding, remaining);
     targets.push({ demandId: demand.id, amount: take });
@@ -556,7 +556,7 @@ export async function applyCreditBalanceToNewDemand(tx: PrismaNS.TransactionClie
 
   const demand = await tx.demand.findUniqueOrThrow({ where: { id: params.demandId } });
   const demandAllocated = await allocatedTotalForDemand(tx, demand.id);
-  let remaining = Prisma.Decimal.min(booking.creditBalance, demand.amount.plus(demand.gstAmount).minus(demandAllocated));
+  let remaining = Prisma.Decimal.min(booking.creditBalance, demand.amount.minus(demandAllocated));
   if (remaining.lessThanOrEqualTo(0)) return;
 
   const clearedReceipts = await tx.receipt.findMany({

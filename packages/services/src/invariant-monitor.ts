@@ -200,16 +200,16 @@ const collectionsChecks: Check[] = [
     name: "collections.allocations_not_exceed_demand",
     async run(db) {
       const rows = await db.$queryRaw<Array<{ demandId: string; allocated: Prisma.Decimal; owed: Prisma.Decimal }>>`
-        SELECT ra."demandId", SUM(ra.amount) AS allocated, (d.amount + d."gstAmount") AS owed
+        SELECT ra."demandId", SUM(ra.amount) AS allocated, d.amount AS owed
         FROM receipt_allocations ra
         JOIN demands d ON d.id = ra."demandId"
         WHERE ra."reversedAt" IS NULL
-        GROUP BY ra."demandId", d.amount, d."gstAmount"
-        HAVING SUM(ra.amount) > (d.amount + d."gstAmount")
+        GROUP BY ra."demandId", d.amount
+        HAVING SUM(ra.amount) > d.amount
       `;
       return rows.map((r) => ({
         invariant: "collections.allocations_not_exceed_demand",
-        detail: `Demand ${r.demandId}: allocated ${r.allocated.toString()} exceeds amount+GST ${r.owed.toString()}.`,
+        detail: `Demand ${r.demandId}: allocated ${r.allocated.toString()} exceeds the amount ${r.owed.toString()}.`,
       }));
     },
   },

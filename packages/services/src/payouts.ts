@@ -10,7 +10,7 @@ import { Prisma } from "@desire/db";
 import type { PrismaClient, Prisma as PrismaNS, PayoutBatch, PayoutBatchStatus, TdsSection, PayoutLine, Recovery, RecoveryStatus, Adjustment, CommissionEntry } from "@desire/db";
 export type { PayoutBatch, PayoutLine, Recovery, Adjustment };
 import Decimal from "decimal.js";
-import { resolveTdsSection, resolveEffectiveTdsRate, computeTds, gstApplies, computeGst, GST_RATE_PCT_IF_REGISTERED } from "@desire/tax";
+import { resolveTdsSection, resolveEffectiveTdsRate, computeTds } from "@desire/tax";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { toCsv } from "./export";
 import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
@@ -219,7 +219,7 @@ export async function prepareBatch(db: PrismaClient, params: PrepareBatchParams)
         where: { orgId: params.orgId, status: "PAYABLE", accruedAt: { gte: params.periodStart, lt: params.periodEnd } },
         include: {
           beneficiary: {
-            select: { id: true, engagementType: true, isGstRegistered: true, bankAccountLast4: true, bankIfsc: true, panEncrypted: true },
+            select: { id: true, engagementType: true, bankAccountLast4: true, bankIfsc: true, panEncrypted: true },
           },
         },
       });
@@ -249,7 +249,6 @@ export async function prepareBatch(db: PrismaClient, params: PrepareBatchParams)
 
       let totalGross = D(0);
       let totalTds = D(0);
-      let totalGst = D(0);
       let totalRecovery = D(0);
       let totalNetPayable = D(0);
 
@@ -274,10 +273,6 @@ export async function prepareBatch(db: PrismaClient, params: PrepareBatchParams)
         );
         const tdsRatePct = D(effectiveTdsRatePct.toString());
         const tdsAmount = D(computeTds(new Decimal(grossAmount.toString()), effectiveTdsRatePct).toString());
-
-        const applyGst = gstApplies(beneficiary.engagementType, beneficiary.isGstRegistered);
-        const gstRatePct = applyGst ? D(GST_RATE_PCT_IF_REGISTERED.toString()) : null;
-        const gstAmount = applyGst ? D(computeGst(new Decimal(grossAmount.toString())).toString()) : D(0);
 
         // Recovery deduction, capped so nobody's take-home drops to zero
         // without a conversation first: at most PAYOUT_RECOVERY_MAX_DEDUCTION_PCT
@@ -307,7 +302,7 @@ export async function prepareBatch(db: PrismaClient, params: PrepareBatchParams)
           recoveryAdjustment = recoveryAdjustment.plus(applied);
         }
 
-        const netPayable = grossAmount.plus(gstAmount).minus(tdsAmount).minus(recoveryAdjustment);
+        const netPayable = grossAmount.minus(tdsAmount).minus(recoveryAdjustment);
 
         const line = await tx.payoutLine.create({
           data: {
@@ -317,8 +312,6 @@ export async function prepareBatch(db: PrismaClient, params: PrepareBatchParams)
             tdsSection: section,
             tdsRatePct,
             tdsAmount,
-            gstRatePct: gstRatePct ?? undefined,
-            gstAmount,
             recoveryAdjustment,
             netPayable,
             bankAccountLast4: beneficiary.bankAccountLast4 ?? undefined,
@@ -331,14 +324,13 @@ export async function prepareBatch(db: PrismaClient, params: PrepareBatchParams)
 
         totalGross = totalGross.plus(grossAmount);
         totalTds = totalTds.plus(tdsAmount);
-        totalGst = totalGst.plus(gstAmount);
         totalRecovery = totalRecovery.plus(recoveryAdjustment);
         totalNetPayable = totalNetPayable.plus(netPayable);
       }
 
       await tx.payoutBatch.update({
         where: { id: batch.id },
-        data: { totalGross, totalTds, totalGst, totalRecovery, totalNetPayable },
+        data: { totalGross, totalTds, totalRecovery, totalNetPayable },
       });
 
       await writeAuditLog(tx, params.audit, {

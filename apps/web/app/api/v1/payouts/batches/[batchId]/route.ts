@@ -91,7 +91,6 @@ export async function GET(
         associateName: line.associate.user.name,
         grossAmount: line.grossAmount.toString(),
         tdsAmount: line.tdsAmount.toString(),
-        gstAmount: line.gstAmount.toString(),
         netPayable: line.netPayable.toString(),
       })),
     },

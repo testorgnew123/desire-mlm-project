@@ -153,7 +153,7 @@ async function makeBooking(
       orgId, projectId, unitId: unit.id, customerId: customer.id, leadId, priceListId: priceList.id,
       bookingNumber: `BK-${leadId.slice(-6)}`, bookingDate: new Date(), status, sellingAssociateId,
       baseAmount: "100.00", plcAmount: "0.00", otherChargesAmount: "0.00", discountAmount: "0.00",
-      gstAmount: "0.00", stampDutyAmount: "0.00", registrationAmount: "0.00", agreementValue: "100.00",
+      stampDutyAmount: "0.00", registrationAmount: "0.00", agreementValue: "100.00",
       commissionableValue: "100.00", saleableAreaAtBooking: "975.00", carpetAreaAtBooking: "650.00",
     },
   });

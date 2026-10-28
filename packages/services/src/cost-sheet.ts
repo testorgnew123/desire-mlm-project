@@ -13,9 +13,8 @@
 //
 // Commission discipline (docs/19-GLOSSARY.md): commissionableValue is almost
 // never the agreement value. It is the sum of line AMOUNTS whose ChargeHead
-// says countsTowardCommission -- GST never counts, and refundable heads such as
-// IFMS normally do not either, but that is read off the flag rather than
-// hardcoded, so an org that decides otherwise changes a row, not this file.
+// says countsTowardCommission. Refundable heads such as IFMS normally do not
+// count, but that is read off the flag rather than hardcoded, so an org that decides otherwise changes a row, not this file.
 import { Prisma } from "@desire/db";
 import type { ChargeCategory, PrismaClient } from "@desire/db";
 import {
@@ -44,7 +43,7 @@ export class ChargeHeadNotConfiguredError extends Error {
 }
 
 /** The head exists but its configuration cannot produce a correct line -- e.g.
- *  taxable with no GST rate, or a computed category supplied as a fixed charge. */
+ *  a computed category supplied as a fixed charge. */
 export class ChargeHeadMisconfiguredError extends Error {
   constructor(
     public readonly chargeHeadCode: string,
@@ -99,8 +98,6 @@ export interface ChargeHeadSpec {
   code: string;
   name: string;
   category: ChargeCategory;
-  isTaxable: boolean;
-  gstRatePct: Prisma.Decimal | null;
   countsTowardCommission: boolean;
   displayOrder: number;
 }
@@ -140,8 +137,6 @@ export interface CostSheetLineResult {
   quantity: Prisma.Decimal | null;
   rate: Prisma.Decimal | null;
   amount: Prisma.Decimal;
-  gstRatePct: Prisma.Decimal | null;
-  gstAmount: Prisma.Decimal;
   countsTowardCommission: boolean;
   displayOrder: number;
 }
@@ -155,7 +150,6 @@ export interface CostSheetResult {
   plcAmount: Prisma.Decimal;
   otherChargesAmount: Prisma.Decimal;
   discountAmount: Prisma.Decimal;
-  gstAmount: Prisma.Decimal;
   stampDutyAmount: Prisma.Decimal;
   registrationAmount: Prisma.Decimal;
   agreementValue: Prisma.Decimal;
@@ -171,7 +165,6 @@ const DISCOUNT_LINE_CODE = "DISCOUNT";
 const COMPUTED_CATEGORIES: ReadonlySet<ChargeCategory> = new Set<ChargeCategory>([
   "BASE_PRICE",
   "PLC",
-  "GST",
 ]);
 
 /**
@@ -181,8 +174,7 @@ const COMPUTED_CATEGORIES: ReadonlySet<ChargeCategory> = new Set<ChargeCategory>
  *   plcAmount      = saleableArea x sum(plcCharges[tag] for tag in plcTags)
  *   otherCharges   = sum of fixed charges (parking, club, IFMS, ...)
  *   gross          = baseAmount + plcAmount + otherCharges - discount
- *   gst            = sum over taxable lines of (amount x gstRatePct)
- *   agreementValue = gross + gst + stampDuty + registration
+ *   agreementValue = gross + stampDuty + registration
  *
  * Stamp duty and registration are pulled out of the supplied fixed charges by
  * ChargeHead category and reported separately: they sit OUTSIDE gross in the
@@ -288,13 +280,7 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
     );
   }
   if (!discountAmount.isZero()) {
-    // Carries no GST: the spec's formula computes GST per taxable line and the
-    // discount is a deduction from gross, not a taxable line. That means GST
-    // here is charged on the pre-discount amounts -- a deliberate reading of
-    // docs/06-INVENTORY-SPEC.md section 5, flagged because it is a tax
-    // treatment worth confirming with the client rather than assuming.
-    //
-    // Never commissionable either: whether commission is computed before or
+    // Never commissionable: whether commission is computed before or
     // after a discount is CommissionScheme.baseDefinition's decision
     // (netOfDiscount), not this function's.
     lines.push({
@@ -303,8 +289,6 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
       quantity: null,
       rate: null,
       amount: discountAmount.negated(),
-      gstRatePct: null,
-      gstAmount: zero(),
       countsTowardCommission: false,
       displayOrder: maxDisplayOrder(lines) + 1,
     });
@@ -312,13 +296,11 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
 
   lines.sort((a, b) => a.displayOrder - b.displayOrder);
 
-  const gstAmount = lines.reduce((sum, line) => sum.plus(line.gstAmount), zero());
   const gross = baseAmount.plus(plcAmount).plus(otherChargesAmount).minus(discountAmount);
-  const agreementValue = gross.plus(gstAmount).plus(stampDutyAmount).plus(registrationAmount);
+  const agreementValue = gross.plus(stampDutyAmount).plus(registrationAmount);
 
-  // Sums line.amount and NEVER line.gstAmount: GST is never commissionable
-  // (docs/19-GLOSSARY.md). Refundable heads like IFMS are excluded by their
-  // countsTowardCommission flag being false, not by a hardcoded category list.
+  // Refundable heads like IFMS are excluded by their countsTowardCommission
+  // flag being false, not by a hardcoded category list.
   const commissionableValue = lines
     .filter((line) => line.countsTowardCommission)
     .reduce((sum, line) => sum.plus(line.amount), zero());
@@ -331,7 +313,6 @@ export function computeCostSheet(input: CostSheetInput): CostSheetResult {
     plcAmount,
     otherChargesAmount,
     discountAmount,
-    gstAmount,
     stampDutyAmount,
     registrationAmount,
     agreementValue,
@@ -414,8 +395,6 @@ export async function buildCostSheetForUnit(
       code: true,
       name: true,
       category: true,
-      isTaxable: true,
-      gstRatePct: true,
       countsTowardCommission: true,
       displayOrder: true,
     },
@@ -515,24 +494,12 @@ function buildLine(
     amount: Prisma.Decimal;
   },
 ): CostSheetLineResult {
-  if (head.isTaxable && head.gstRatePct === null) {
-    throw new ChargeHeadMisconfiguredError(
-      head.code,
-      `Charge head "${head.code}" is taxable but has no gstRatePct; it would silently charge no GST.`,
-    );
-  }
-  const gstRatePct = head.isTaxable ? head.gstRatePct : null;
-  const gstAmount =
-    gstRatePct === null ? zero() : round2(parts.amount.mul(gstRatePct).div(100));
-
   return {
     chargeHeadCode: head.code,
     description: parts.description,
     quantity: parts.quantity,
     rate: parts.rate,
     amount: parts.amount,
-    gstRatePct,
-    gstAmount,
     countsTowardCommission: head.countsTowardCommission,
     displayOrder: head.displayOrder,
   };

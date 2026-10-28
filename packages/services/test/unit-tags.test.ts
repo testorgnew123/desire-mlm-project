@@ -87,8 +87,8 @@ async function seed(opts: { cornerRate?: boolean } = {}) {
   }
   await db.chargeHead.createMany({
     data: [
-      { orgId: ORG, code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
-      { orgId: ORG, code: "PLC", name: "Preferential location", category: "PLC", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 2 },
+      { orgId: ORG, code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
+      { orgId: ORG, code: "PLC", name: "Preferential location", category: "PLC", countsTowardCommission: true, isRefundable: false, displayOrder: 2 },
     ],
   });
   await db.priceList.create({

@@ -71,7 +71,7 @@ export async function createSchemeAction(formData: FormData): Promise<void> {
       projectId,
       name: String(formData.get("name") ?? ""),
       validFrom: new Date(),
-      baseDefinition: { chargeHeadCodes: ["BSP"], netOfDiscount: true, netOfGst: true },
+      baseDefinition: { chargeHeadCodes: ["BSP"], netOfDiscount: true },
       maxTotalPct: String(formData.get("maxTotalPct") ?? "3"),
       gradeRates,
       levelRates,

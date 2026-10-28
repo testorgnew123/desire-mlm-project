@@ -63,7 +63,7 @@ company argues about arithmetic instead of selling.
 - Automated collections escalation ladder
 - Associate hierarchy (admin-assigned), effective-dated grades, auto-qualification
 - Commission engine: accrual, configurable release, clawback, recovery, simulator
-- Payout batches with TDS/GST, statements, bank export
+- Payout batches with TDS, statements, bank export
 - Role-scoped dashboards, reporting, notifications
 - Associate PWA
 - Audit log and separation-of-duties controls
@@ -104,7 +104,7 @@ and none of them should need a release.
 
 ## Constraints
 
-- **India / RERA.** Carpet area disclosure, project registration, GST, TDS by engagement type, DPDP for KYC data.
+- **India / RERA.** Carpet area disclosure, project registration, TDS by engagement type, DPDP for KYC data.
 - **Mobile-first for associates.** They work standing up, on 4G, on cheap Android phones. They will never open the desktop app.
 - **No India region on Neon** — see [ADR-0001](adr/0001-nextjs-netlify-neon.md) and [11-COMPLIANCE-INDIA](11-COMPLIANCE-INDIA.md).
 - **Rates unconfirmed.** Grade ladder, commission rates, level percentages and hold durations are all `PLACEHOLDER`.

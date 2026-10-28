@@ -85,12 +85,6 @@ function StatementDocument({ statement }: { statement: PayoutLineStatement }) {
           <Text>TDS ({line.tdsSection}, {line.tdsRatePct.toString()}%)</Text>
           <Text>-{formatMoney(line.tdsAmount.toString())}</Text>
         </View>
-        {line.gstAmount.toString() !== "0" ? (
-          <View style={styles.totalsRow}>
-            <Text>GST ({line.gstRatePct?.toString()}%)</Text>
-            <Text>+{formatMoney(line.gstAmount.toString())}</Text>
-          </View>
-        ) : null}
         {line.recoveryAdjustment.toString() !== "0" ? (
           <View style={styles.totalsRow}>
             <Text>Recovery adjustment</Text>

@@ -145,7 +145,7 @@ export interface CreateSchemeParams {
   projectId: string;
   name: string;
   validFrom: Date;
-  /** { chargeHeadCodes: ["BSP"], netOfDiscount: true, netOfGst: true } --
+  /** { chargeHeadCodes: ["BSP"], netOfDiscount: true } --
    *  metadata only. The actual commissionable value is already correctly
    *  resolved by computeCostSheet and frozen onto Booking.commissionableValue
    *  at confirm time; this documents the rule, it does not implement it. */

@@ -78,13 +78,13 @@ async function makeAssociate(
   orgId: string,
   label: string,
   engagementType: "EMPLOYEE" | "CONSULTANT" | "CHANNEL_PARTNER",
-  opts: { isGstRegistered?: boolean; hasPan?: boolean; bankAccountNumber?: string; bankIfsc?: string; bankName?: string } = {},
+  opts: { hasPan?: boolean; bankAccountNumber?: string; bankIfsc?: string; bankName?: string } = {},
 ) {
   const user = await makeUser(orgId, label, []);
   return db.associate.create({
     data: {
       orgId, userId: user.id, code: `A-${label}`, engagementType, joinDate: new Date("2020-01-01"),
-      status: "ACTIVE", isGstRegistered: opts.isGstRegistered ?? false,
+      status: "ACTIVE",
       panEncrypted: opts.hasPan ? encryptField("ABCDE1234F") : undefined,
       bankAccountEncrypted: opts.bankAccountNumber ? encryptField(opts.bankAccountNumber) : undefined,
       bankIfsc: opts.bankIfsc,
@@ -173,9 +173,9 @@ describe("prepareBatch: tax resolved per engagementType, PayoutLineEntry provena
     expect(provenance.map((p) => p.entryId).sort()).toEqual([e1.id, e2.id].sort());
   });
 
-  it("applies GST for a GST-registered CONSULTANT, not for an EMPLOYEE", async () => {
+  it("deducts TDS under Sec. 194J for a CONSULTANT", async () => {
     const { booking, scheme } = await seedBookingAndScheme(ORG);
-    const consultant = await makeAssociate(ORG, "cons", "CONSULTANT", { isGstRegistered: true });
+    const consultant = await makeAssociate(ORG, "cons", "CONSULTANT");
     await db.taxRate.create({ data: { orgId: ORG, section: "SEC_194J", ratePct: "10.00", validFrom: new Date("2020-01-01") } });
     await seedEntry(ORG, booking.id, scheme.id, consultant.id, "100000", new Date("2026-01-15"));
     const preparer = await makeUser(ORG, "preparer", ["payout.prepare"]);
@@ -183,9 +183,7 @@ describe("prepareBatch: tax resolved per engagementType, PayoutLineEntry provena
     const result = await prepareBatch(db, { orgId: ORG, periodStart: PERIOD_START, periodEnd: PERIOD_END, audit: ctx(ORG, preparer.id, "preparer") });
     const line = await db.payoutLine.findFirstOrThrow({ where: { batchId: result.batchId, associateId: consultant.id } });
     expect(line.tdsSection).toBe("SEC_194J");
-    expect(line.gstRatePct?.toString()).toBe("18");
-    expect(line.gstAmount.toString()).toBe("18000");
-    expect(line.netPayable.toString()).toBe("108000"); // 100000 + 18000 gst - 10000 tds
+    expect(line.netPayable.toString()).toBe("90000"); // 100000 - 10000 tds
   });
 
   it("applies the higher Sec. 206AA rate when the beneficiary has no PAN on file", async () => {

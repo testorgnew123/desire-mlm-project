@@ -87,9 +87,9 @@ async function seedFixture() {
   });
 
   const bspHead: ChargeHeadSpec & { isRefundable: boolean } = {
-    code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: D("5.00"), countsTowardCommission: true, displayOrder: 1, isRefundable: false,
+    code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, displayOrder: 1, isRefundable: false,
   };
-  await db.chargeHead.create({ data: { orgId: ORG, ...bspHead, gstRatePct: "5.00" } });
+  await db.chargeHead.create({ data: { orgId: ORG, ...bspHead } });
 
   const priceList = await db.priceList.create({
     data: {

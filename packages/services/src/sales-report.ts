@@ -5,7 +5,7 @@
 // beside it as "waiting" so the report explains the gap, and cancelled ones are
 // counted but never summed. Both the base price and the agreement value are
 // shown: the base is what the plot was priced at, the agreement value is what the
-// customer signs for (with the corner premium, GST and the other charges).
+// customer signs for (with the corner premium and the other charges).
 //
 // Who sees what is decided here from the actor, never from a parameter: an admin
 // sees every associate, an associate only their own row (resolveBookingScope).

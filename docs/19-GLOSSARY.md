@@ -22,7 +22,7 @@ carpet-area price against a saleable-area rate misprices a unit by ~35%.
 | **BSP** (Basic Sale Price) | Base rate × saleable area. The core price before anything is added |
 | **PLC** (Preferential Location Charge) | Premium for corner, park-facing, higher floor, etc. Priced per sqft, keyed off `Unit.plcTags` |
 | **IFMS** (Interest-Free Maintenance Security) | Refundable deposit held for maintenance. Refundable, so normally excluded from commission |
-| **Agreement value** | Total the customer owes: BSP + PLC + parking + club + IFMS + GST + stamp duty + registration |
+| **Agreement value** | Total the customer owes: BSP + PLC + parking + club + IFMS + stamp duty + registration |
 | **Commissionable value** | **The subset commission is computed on.** Almost never the agreement value — usually BSP only, or BSP + PLC. Defined by `CommissionScheme.baseDefinition`, resolved once at booking confirmation, then frozen on the booking |
 | **Net realization** | What the developer actually keeps after discount. Not currently a commission base, but the term appears in client conversations |
 

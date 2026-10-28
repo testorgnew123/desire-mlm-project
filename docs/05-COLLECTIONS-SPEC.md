@@ -22,7 +22,7 @@ finance catches it drifting they stop trusting the system.
 
 ```sql
 -- outstanding on a demand
-SELECT d.amount + d.gst_amount - COALESCE(SUM(ra.amount), 0)
+SELECT d.amount - COALESCE(SUM(ra.amount), 0)
 FROM demands d
 LEFT JOIN receipt_allocations ra
   ON ra.demand_id = d.id AND ra.reversed_at IS NULL
@@ -140,7 +140,7 @@ not the associate for selling.
 
 ```
 Σ(allocations per receipt)   ≤  receipt.amount
-Σ(allocations per demand)    ≤  demand.amount + demand.gstAmount
+Σ(allocations per demand)    ≤  demand.amount
 Σ(cleared receipts)          =  Σ(active allocations) + booking.creditBalance
 ∀ demand, rung:  at most one CollectionAlert
 ∀ receipt:       enteredById ≠ verifiedById, and neither is the
