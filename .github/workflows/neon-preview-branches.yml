@@ -114,6 +114,13 @@ jobs:
           DATABASE_URL: ${{ steps.neon.outputs.db_url }}
         run: pnpm --filter @desire/db exec tsx scripts/sync-roles.ts --apply --allow-remote
 
+      # Same step scripts/migrate-on-deploy.sh ends with: admins get an associate
+      # profile, so the preview shows an admin who can hold and book.
+      - name: Give admins on the preview branch an associate profile
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+        run: pnpm --filter @desire/db exec tsx ../../apps/web/scripts/ensure-admin-associates.ts --apply --allow-remote
+
       # `branch:<git branch>` scopes these to THIS PR's deploy preview only.
       # The context parameter is the PR's head branch (the branch Netlify
       # actually builds), not the Neon branch name -- two unrelated strings.

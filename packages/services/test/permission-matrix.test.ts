@@ -65,7 +65,7 @@ describe("structural invariants", () => {
 });
 
 describe("what each role can do today", () => {
-  it("ADMIN runs projects, price lists, confirmations and associate accounts", () => {
+  it("ADMIN runs projects, price lists, confirmations and associate accounts, and holds and books plots too", () => {
     expect(permissionsForRole("ADMIN")).toEqual([
       "project.read",
       "project.write",
@@ -73,8 +73,10 @@ describe("what each role can do today", () => {
       "pricelist.approve",
       "unit.read",
       "unit.block",
+      "hold.create",
       "hold.force_release",
       "booking.read",
+      "booking.create",
       "booking.confirm",
       "booking.cancel",
       "user.manage",
@@ -91,13 +93,13 @@ describe("what each role can do today", () => {
     ]);
   });
 
-  it("the seller cannot confirm their own sale: whoever drafts is not who confirms", () => {
-    expect(PERMISSION_MATRIX["booking.create"]).not.toContain("ADMIN");
+  it("an associate cannot confirm their own sale: they draft, an admin confirms", () => {
     expect(PERMISSION_MATRIX["booking.confirm"]).not.toContain("ASSOCIATE");
   });
 
-  it("only an associate (with a profile) holds a plot; ADMIN has no associate profile to hold with", () => {
-    expect(PERMISSION_MATRIX["hold.create"]).toEqual(["SUPER_ADMIN", "ASSOCIATE"]);
+  it("admins hold and book plots as well as associates (each has an associate profile)", () => {
+    expect(PERMISSION_MATRIX["hold.create"]).toEqual(["SUPER_ADMIN", "ADMIN", "ASSOCIATE"]);
+    expect(PERMISSION_MATRIX["booking.create"]).toEqual(["SUPER_ADMIN", "ADMIN", "ASSOCIATE"]);
   });
 
   it("an associate cannot create or edit a project, plot or price list", () => {

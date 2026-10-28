@@ -566,3 +566,49 @@ describe("the associate drafts, an admin confirms", () => {
     expect((await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } })).status).toBe("DRAFT");
   });
 });
+
+describe("an admin with an associate profile", () => {
+  // What the Admin role holds once it is given hold.create and booking.create, and
+  // what ensureAdminAssociateProfile gives the account: the same path an associate
+  // takes, under the admin's own profile and grade.
+  async function makeSellingAdmin(_f: Awaited<ReturnType<typeof seedFixture>>) {
+    return makeUser(ORG, "bossadmin", ["booking.create", "hold.create", "booking.confirm", "booking.read"], { associate: true });
+  }
+
+  it("holds and books a plot as themselves, counted against their own quota", async () => {
+    const f = await seedFixture();
+    const boss = await makeSellingAdmin(f);
+
+    const held = await holdPlot(db, { unitId: f.plots[0]!.id, audit: ctx(ORG, boss.user, "boss") });
+    expect(held.tookHold).toBe(true);
+
+    const booked = await bookPlot(db, { unitId: f.plots[0]!.id, customer, audit: ctx(ORG, boss.user, "boss") });
+    expect(booked.tookHold).toBe(false);
+    const booking = await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } });
+    expect(booking.sellingAssociateId).toBe(boss.associate!.id);
+
+    const mine = await getMyHolds(db, { actorId: boss.user.id });
+    expect(mine).toMatchObject({ quota: 5, live: 1 });
+    // ...and not against anyone else's.
+    expect((await getMyHolds(db, { actorId: f.seller.user.id }))?.live).toBe(0);
+  });
+
+  it("is refused a plot another associate holds, like anyone else", async () => {
+    const f = await seedFixture();
+    const boss = await makeSellingAdmin(f);
+    await holdPlot(db, { unitId: f.plots[0]!.id, audit: ctx(ORG, f.seller.user, "seller") });
+
+    await expect(holdPlot(db, { unitId: f.plots[0]!.id, audit: ctx(ORG, boss.user, "boss") })).rejects.toThrow(
+      UnitNotAvailableError,
+    );
+  });
+
+  it("can confirm the booking they made: the seller-never-confirms rule is the associate's, not the admin's", async () => {
+    const f = await seedFixture();
+    const boss = await makeSellingAdmin(f);
+    const booked = await bookPlot(db, { unitId: f.plots[0]!.id, customer, audit: ctx(ORG, boss.user, "boss") });
+
+    const confirmed = await confirmBooking(db, { bookingId: booked.bookingId, audit: ctx(ORG, boss.user, "boss") });
+    expect(confirmed.status).toBe("CONFIRMED");
+  });
+});

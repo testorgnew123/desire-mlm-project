@@ -575,6 +575,11 @@ export function InventoryBoard({
           holdError={holdError}
           canHold={canHold}
           manageHref={manageHref}
+          bookHref={
+            canHold && (selectedStatus === "AVAILABLE" || (selectedStatus === "HELD" && !holderIsFromSnapshot))
+              ? `/inventory/${encodeURIComponent(projectId)}/${encodeURIComponent(selectedUnit.id)}/book`
+              : null
+          }
           onHold={handleTakeHold}
         />
       ) : null}
