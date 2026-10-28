@@ -6,7 +6,7 @@
 // not configured must not turn that into an error: the caller gets an outcome and
 // decides what to tell the person (admin.ts shows the admin the temporary
 // password once when the mail did not go).
-import { EmailConfigError, sendEmail } from "./email";
+import { EmailConfigError, describeMailError, mailSettingsStatus, sendEmail } from "./email";
 
 export interface MailOutcome {
   sent: boolean;
@@ -51,6 +51,60 @@ async function deliver(
       return { sent: false, note: "The email server did not answer in time." };
     }
     return { sent: false, note: "The email server did not accept the message." };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Any plain message, with the same deadline and the same "never throws" answer as
+ *  the account mail. For the booking mail. */
+export function sendMail(
+  params: { to: string; subject: string; text: string },
+  deadlineMs?: number,
+): Promise<MailOutcome> {
+  return deliver(params, deadlineMs);
+}
+
+export interface TestMailResult {
+  sent: boolean;
+  /** What happened, in words to act on. */
+  message: string;
+  settings: ReturnType<typeof mailSettingsStatus>;
+}
+
+/** Sends one test message and says exactly why it did not go, for the admin screen
+ *  that proves the settings work on the live site. Unlike every other mail this
+ *  reports the cause (refused login, unreachable server, ...), because the person
+ *  asking is the one who can fix it. */
+export async function sendTestEmail(params: { to: string; requestedBy: string }): Promise<TestMailResult> {
+  const settings = mailSettingsStatus();
+  const missing = settings.filter((setting) => setting.required && !setting.set).map((setting) => setting.name);
+  if (missing.length > 0) {
+    return { sent: false, message: `Not set up yet: ${missing.join(", ")} are not set on this server.`, settings };
+  }
+  const to = params.to.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return { sent: false, message: `"${params.to.trim()}" is not a valid email address.`, settings };
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      sendEmail({
+        to,
+        subject: "Desire test email",
+        text: [
+          "This is a test email from Desire.",
+          "",
+          `It was sent by ${params.requestedBy}. If you are reading it, email on this server works: new-user mail, password resets and booking mail will reach people.`,
+        ].join("\n"),
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })), 15_000);
+      }),
+    ]);
+    return { sent: true, message: `Sent to ${to}. Check that inbox (and its spam folder).`, settings };
+  } catch (error) {
+    return { sent: false, message: describeMailError(error), settings };
   } finally {
     clearTimeout(timer);
   }
