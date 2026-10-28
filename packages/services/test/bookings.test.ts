@@ -111,10 +111,10 @@ async function makeUser(
  *  real ChargeHead rows -- bookings.ts loads the catalogue from the DB, it
  *  does not accept it as a pure input the way computeCostSheet itself does. */
 async function seedChargeHeads(orgId: string) {
-  const heads: Array<Omit<ChargeHeadSpec, "gstRatePct"> & { gstRatePct: string | null }> = [
-    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, displayOrder: 1 },
-    { code: "PLC", name: "Preferential Location Charge", category: "PLC", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, displayOrder: 2 },
-    { code: "PARKING", name: "Car Parking", category: "PARKING", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: false, displayOrder: 3 },
+  const heads: ChargeHeadSpec[] = [
+    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, displayOrder: 1 },
+    { code: "PLC", name: "Preferential Location Charge", category: "PLC", countsTowardCommission: true, displayOrder: 2 },
+    { code: "PARKING", name: "Car Parking", category: "PARKING", countsTowardCommission: false, displayOrder: 3 },
   ];
   for (const h of heads) {
     await db.chargeHead.create({ data: { orgId, ...h, isRefundable: false } });
@@ -241,7 +241,7 @@ async function seedScopeFixture(orgId: string = ORG) {
       data: {
         orgId, projectId: project.id, unitId: unit.id, customerId: customer.id, priceListId: priceList.id,
         bookingNumber: `BK-${suffix}`, bookingDate: new Date(), status: "CONFIRMED", sellingAssociateId,
-        baseAmount: "100.00", plcAmount: "0", otherChargesAmount: "0", discountAmount: "0", gstAmount: "0",
+        baseAmount: "100.00", plcAmount: "0", otherChargesAmount: "0", discountAmount: "0",
         stampDutyAmount: "0", registrationAmount: "0", agreementValue: "100.00", commissionableValue: "100.00",
         saleableAreaAtBooking: "975.00", carpetAreaAtBooking: "650.00",
       },
@@ -266,9 +266,9 @@ function expectedCostSheet() {
     otherCharges: [{ chargeHeadCode: "PARKING", amount: D(300000) }],
     discount: D(0),
     chargeHeads: [
-      { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: D("5.00"), countsTowardCommission: true, displayOrder: 1 },
-      { code: "PLC", name: "Preferential Location Charge", category: "PLC", isTaxable: true, gstRatePct: D("5.00"), countsTowardCommission: true, displayOrder: 2 },
-      { code: "PARKING", name: "Car Parking", category: "PARKING", isTaxable: true, gstRatePct: D("5.00"), countsTowardCommission: false, displayOrder: 3 },
+      { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, displayOrder: 1 },
+      { code: "PLC", name: "Preferential Location Charge", category: "PLC", countsTowardCommission: true, displayOrder: 2 },
+      { code: "PARKING", name: "Car Parking", category: "PARKING", countsTowardCommission: false, displayOrder: 3 },
     ],
   });
 }

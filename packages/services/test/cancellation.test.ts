@@ -97,8 +97,8 @@ async function makeUser(
 }
 
 async function seedChargeHeads(orgId: string) {
-  const heads: Array<Omit<ChargeHeadSpec, "gstRatePct"> & { gstRatePct: string | null }> = [
-    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, displayOrder: 1 },
+  const heads: ChargeHeadSpec[] = [
+    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, displayOrder: 1 },
   ];
   for (const h of heads) {
     await db.chargeHead.create({ data: { orgId, ...h, isRefundable: false } });

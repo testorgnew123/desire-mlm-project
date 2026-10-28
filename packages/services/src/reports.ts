@@ -254,7 +254,7 @@ export async function getCommissionLiabilityReport(
 
 /** Gated on audit.read, not report.read -- this report exposes every
  *  actor's every action, a materially more sensitive surface than the other
- *  five. Deliberately does not touch TDS/GST/Form 16A reports: those stay
+ *  five. Deliberately does not touch TDS/Form 16A reports: those stay
  *  declined, same as Phase 4 (no CA, no confirmed rates -- see
  *  docs/11-COMPLIANCE-INDIA.md). */
 export async function getAuditTrailReport(

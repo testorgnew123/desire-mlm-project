@@ -67,7 +67,7 @@ describe("POST /api/v1/bookings (draft)", () => {
     expect(json).toMatchObject({ status: "DRAFT", unitId, customerId: c.id, sellingAssociateId: w.seller.associateId });
     expect(String(json.bookingNumber)).toMatch(/^WEB-\d{4}$/);
     // Money crosses the wire as a string, never a float.
-    expect(json.agreementValue).toBe("5250000");
+    expect(json.agreementValue).toBe("5000000");
     expect(typeof json.auditId).toBe("string");
   });
 

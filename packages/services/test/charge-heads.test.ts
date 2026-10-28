@@ -10,7 +10,6 @@ import {
   ChargeHeadReasonRequiredError,
   DuplicateChargeCategoryError,
   DuplicateChargeHeadCodeError,
-  InvalidGstRateError,
   createChargeHead,
   deleteChargeHead,
   setCommissionableFlag,
@@ -67,12 +66,6 @@ function ctx(orgId: string, userId: string | null, label: string): AuditContext 
   return { orgId, actorId: userId, actorLabel: label };
 }
 
-/** Non-taxable by default -- most tests here are not about GST, and
- *  createChargeHead defaults isTaxable to true, which requires a rate. */
-function nonTaxableHead<T extends object>(overrides: T): T & { isTaxable: false } {
-  return { isTaxable: false, ...overrides };
-}
-
 beforeEach(reset);
 afterAll(async () => {
   await reset();
@@ -85,12 +78,10 @@ describe("createChargeHead", () => {
     const writer = await makeUser(ORG, "writer", ["project.write"]);
 
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({
-        code: "IFMS",
+      code: "IFMS",
         name: "Interest-Free Maintenance Security",
         category: "IFMS",
         countsTowardCommission: false,
-      }),
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -110,7 +101,7 @@ describe("createChargeHead", () => {
 
     await expect(
       createChargeHead(db, {
-        ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" }),
+        code: "PARKING", name: "Car Parking", category: "PARKING",
         audit: ctx(ORG, nobody.id, "nobody"),
       }),
     ).rejects.toThrow(ForbiddenError);
@@ -120,7 +111,7 @@ describe("createChargeHead", () => {
     await seedOrg(ORG, "CH Test Org");
     await expect(
       createChargeHead(db, {
-        ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" }),
+        code: "PARKING", name: "Car Parking", category: "PARKING",
         audit: ctx(ORG, null, "system"),
       }),
     ).rejects.toThrow(ForbiddenError);
@@ -130,7 +121,7 @@ describe("createChargeHead", () => {
     await seedOrg(ORG, "CH Test Org");
     const writer = await makeUser(ORG, "writer", ["project.write"]);
     const params = {
-      ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" as const }),
+      code: "PARKING", name: "Car Parking", category: "PARKING" as const,
       audit: ctx(ORG, writer.id, "writer"),
     };
     await createChargeHead(db, params);
@@ -144,11 +135,11 @@ describe("createChargeHead", () => {
     const writer2 = await makeUser(OTHER_ORG, "writer2", ["project.write"]);
 
     await createChargeHead(db, {
-      ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" }),
+      code: "PARKING", name: "Car Parking", category: "PARKING",
       audit: ctx(ORG, writer1.id, "writer1"),
     });
     const head2 = await createChargeHead(db, {
-      ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" }),
+      code: "PARKING", name: "Car Parking", category: "PARKING",
       audit: ctx(OTHER_ORG, writer2.id, "writer2"),
     });
     expect(head2.orgId).toBe(OTHER_ORG);
@@ -159,17 +150,15 @@ describe("createChargeHead", () => {
       await seedOrg(ORG, "CH Test Org");
       const writer = await makeUser(ORG, "writer", ["project.write"]);
       await createChargeHead(db, {
-        ...nonTaxableHead({ code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE" }),
+        code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE",
         audit: ctx(ORG, writer.id, "writer"),
       });
 
       await expect(
         createChargeHead(db, {
-          ...nonTaxableHead({
-            code: "BSP2",
+          code: "BSP2",
             name: "Basic Sale Price (duplicate)",
             category: "BASE_PRICE",
-          }),
           audit: ctx(ORG, writer.id, "writer"),
         }),
       ).rejects.toThrow(DuplicateChargeCategoryError);
@@ -179,76 +168,17 @@ describe("createChargeHead", () => {
       await seedOrg(ORG, "CH Test Org");
       const writer = await makeUser(ORG, "writer", ["project.write"]);
       await createChargeHead(db, {
-        ...nonTaxableHead({ code: "PARKING-COVERED", name: "Covered Parking", category: "PARKING" }),
+        code: "PARKING-COVERED", name: "Covered Parking", category: "PARKING",
         audit: ctx(ORG, writer.id, "writer"),
       });
       const second = await createChargeHead(db, {
-        ...nonTaxableHead({ code: "PARKING-OPEN", name: "Open Parking", category: "PARKING" }),
+        code: "PARKING-OPEN", name: "Open Parking", category: "PARKING",
         audit: ctx(ORG, writer.id, "writer"),
       });
       expect(second.code).toBe("PARKING-OPEN");
     });
   });
 
-  describe("GST consistency", () => {
-    it("refuses a taxable head with no GST rate", async () => {
-      await seedOrg(ORG, "CH Test Org");
-      const writer = await makeUser(ORG, "writer", ["project.write"]);
-      await expect(
-        createChargeHead(db, {
-          code: "CLUB",
-          name: "Club Membership",
-          category: "CLUB_MEMBERSHIP",
-          isTaxable: true,
-          audit: ctx(ORG, writer.id, "writer"),
-        }),
-      ).rejects.toThrow(InvalidGstRateError);
-    });
-
-    it("refuses a non-taxable head carrying a GST rate", async () => {
-      await seedOrg(ORG, "CH Test Org");
-      const writer = await makeUser(ORG, "writer", ["project.write"]);
-      await expect(
-        createChargeHead(db, {
-          code: "STAMP",
-          name: "Stamp Duty",
-          category: "STAMP_DUTY",
-          isTaxable: false,
-          gstRatePct: "5.00",
-          audit: ctx(ORG, writer.id, "writer"),
-        }),
-      ).rejects.toThrow(InvalidGstRateError);
-    });
-
-    it("refuses a GST rate outside 0-100", async () => {
-      await seedOrg(ORG, "CH Test Org");
-      const writer = await makeUser(ORG, "writer", ["project.write"]);
-      await expect(
-        createChargeHead(db, {
-          code: "CLUB",
-          name: "Club Membership",
-          category: "CLUB_MEMBERSHIP",
-          isTaxable: true,
-          gstRatePct: "150.00",
-          audit: ctx(ORG, writer.id, "writer"),
-        }),
-      ).rejects.toThrow(InvalidGstRateError);
-    });
-
-    it("accepts a taxable head with a valid rate, rounded half-up to 2dp", async () => {
-      await seedOrg(ORG, "CH Test Org");
-      const writer = await makeUser(ORG, "writer", ["project.write"]);
-      const head = await createChargeHead(db, {
-        code: "CLUB",
-        name: "Club Membership",
-        category: "CLUB_MEMBERSHIP",
-        isTaxable: true,
-        gstRatePct: "18.005",
-        audit: ctx(ORG, writer.id, "writer"),
-      });
-      expect(head.gstRatePct?.toString()).toBe("18.01");
-    });
-  });
 });
 
 describe("updateChargeHead", () => {
@@ -259,8 +189,6 @@ describe("updateChargeHead", () => {
       code: "CLUB",
       name: "Club Membership",
       category: "CLUB_MEMBERSHIP",
-      isTaxable: true,
-      gstRatePct: "18.00",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -287,8 +215,6 @@ describe("updateChargeHead", () => {
       code: "CLUB",
       name: "Club Membership",
       category: "CLUB_MEMBERSHIP",
-      isTaxable: true,
-      gstRatePct: "18.00",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -300,58 +226,15 @@ describe("updateChargeHead", () => {
     expect(auditRows).toHaveLength(0);
   });
 
-  it("refuses turning isTaxable off while a GST rate is still set", async () => {
-    await seedOrg(ORG, "CH Test Org");
-    const writer = await makeUser(ORG, "writer", ["project.write"]);
-    const head = await createChargeHead(db, {
-      code: "CLUB",
-      name: "Club Membership",
-      category: "CLUB_MEMBERSHIP",
-      isTaxable: true,
-      gstRatePct: "18.00",
-      audit: ctx(ORG, writer.id, "writer"),
-    });
-
-    await expect(
-      updateChargeHead(db, {
-        chargeHeadId: head.id,
-        isTaxable: false,
-        audit: ctx(ORG, writer.id, "writer"),
-      }),
-    ).rejects.toThrow(InvalidGstRateError);
-  });
-
-  it("allows turning isTaxable off when the rate is cleared in the same call", async () => {
-    await seedOrg(ORG, "CH Test Org");
-    const writer = await makeUser(ORG, "writer", ["project.write"]);
-    const head = await createChargeHead(db, {
-      code: "CLUB",
-      name: "Club Membership",
-      category: "CLUB_MEMBERSHIP",
-      isTaxable: true,
-      gstRatePct: "18.00",
-      audit: ctx(ORG, writer.id, "writer"),
-    });
-
-    const updated = await updateChargeHead(db, {
-      chargeHeadId: head.id,
-      isTaxable: false,
-      gstRatePct: null,
-      audit: ctx(ORG, writer.id, "writer"),
-    });
-    expect(updated.isTaxable).toBe(false);
-    expect(updated.gstRatePct).toBeNull();
-  });
-
   it("refuses moving a head into a singleton category already taken", async () => {
     await seedOrg(ORG, "CH Test Org");
     const writer = await makeUser(ORG, "writer", ["project.write"]);
     await createChargeHead(db, {
-      ...nonTaxableHead({ code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE" }),
+      code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE",
       audit: ctx(ORG, writer.id, "writer"),
     });
     const other = await createChargeHead(db, {
-      ...nonTaxableHead({ code: "OTHER", name: "Something Else", category: "OTHER" }),
+      code: "OTHER", name: "Something Else", category: "OTHER",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -368,7 +251,7 @@ describe("updateChargeHead", () => {
     await seedOrg(ORG, "CH Test Org");
     const writer = await makeUser(ORG, "writer", ["project.write"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({ code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE" }),
+      code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -399,7 +282,7 @@ describe("updateChargeHead", () => {
     const writer = await makeUser(ORG, "writer", ["project.write"]);
     const outsider = await makeUser(OTHER_ORG, "outsider", ["project.write"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" }),
+      code: "PARKING", name: "Car Parking", category: "PARKING",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -418,12 +301,10 @@ describe("setCommissionableFlag", () => {
     await seedOrg(ORG, "CH Test Org");
     const approver = await makeUser(ORG, "approver", ["project.write", "scheme.prepare"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({
-        code: "BSP",
+      code: "BSP",
         name: "Basic Sale Price",
         category: "BASE_PRICE",
         countsTowardCommission: false,
-      }),
       audit: ctx(ORG, approver.id, "approver"),
     });
 
@@ -441,12 +322,10 @@ describe("setCommissionableFlag", () => {
     await seedOrg(ORG, "CH Test Org");
     const writer = await makeUser(ORG, "writer", ["project.write"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({
-        code: "BSP",
+      code: "BSP",
         name: "Basic Sale Price",
         category: "BASE_PRICE",
         countsTowardCommission: false,
-      }),
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -464,12 +343,10 @@ describe("setCommissionableFlag", () => {
     await seedOrg(ORG, "CH Test Org");
     const approver = await makeUser(ORG, "approver", ["project.write", "scheme.prepare"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({
-        code: "PARKING",
+      code: "PARKING",
         name: "Car Parking",
         category: "PARKING",
         countsTowardCommission: false,
-      }),
       audit: ctx(ORG, approver.id, "approver"),
     });
 
@@ -495,12 +372,10 @@ describe("setCommissionableFlag", () => {
     await seedOrg(ORG, "CH Test Org");
     const approver = await makeUser(ORG, "approver", ["project.write", "scheme.prepare"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({
-        code: "BSP",
+      code: "BSP",
         name: "Basic Sale Price",
         category: "BASE_PRICE",
         countsTowardCommission: true,
-      }),
       audit: ctx(ORG, approver.id, "approver"),
     });
 
@@ -524,7 +399,7 @@ describe("deleteChargeHead", () => {
     await seedOrg(ORG, "CH Test Org");
     const writer = await makeUser(ORG, "writer", ["project.write"]);
     const head = await createChargeHead(db, {
-      ...nonTaxableHead({ code: "PARKING", name: "Car Parking", category: "PARKING" }),
+      code: "PARKING", name: "Car Parking", category: "PARKING",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -540,8 +415,6 @@ describe("deleteChargeHead", () => {
       code: "PARKING",
       name: "Car Parking",
       category: "PARKING",
-      isTaxable: true,
-      gstRatePct: "5.00",
       audit: ctx(ORG, writer.id, "writer"),
     });
 
@@ -559,9 +432,6 @@ describe("deleteChargeHead", () => {
     });
     expect(auditRow?.reason).toBe("retired charge head");
     expect((auditRow?.before as Record<string, unknown> | null)?.code).toBe("PARKING");
-    // Decimal(5,2)'s toString() drops trailing zeros -- 5.00 and 5 are the
-    // same value, and toAuditValue calls .toString(), not .toFixed(2).
-    expect((auditRow?.before as Record<string, unknown> | null)?.gstRatePct).toBe("5");
   });
 
   it("throws for a head that does not exist", async () => {

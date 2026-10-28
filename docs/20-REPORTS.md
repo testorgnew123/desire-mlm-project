@@ -47,7 +47,7 @@ a download link. Every export writes `AuditAction.EXPORT`.
 |---|---|---|
 | **Commission liability** | Finance | **Accrued vs released vs paid.** What finance provisions against |
 | **Associate earnings statement** | Own + Finance | Per-entry, with the explain drill-down. The associate-facing artifact |
-| **Payout batch summary** | Finance | Gross, TDS, GST, recoveries, net, by associate |
+| **Payout batch summary** | Finance | Gross, TDS, recoveries, net, by associate |
 | **Override distribution** | Head, Super | Who earns overrides and at which levels. Surfaces an unhealthy tree shape |
 | **Breakage report** | Finance | Override money nobody qualified for, retained by the company. **Do not let this be invisible** |
 | **Commission cost %** | Super, Finance | Total commission as a percentage of revenue, by project |

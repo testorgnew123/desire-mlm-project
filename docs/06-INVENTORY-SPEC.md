@@ -145,12 +145,11 @@ baseAmount   = saleableArea × baseRatePerSqft
 plcAmount    = saleableArea × Σ(plcCharges[tag] for tag in unit.plcTags)
 otherCharges = Σ(fixed charges: parking, club, IFMS, ...)
 gross        = baseAmount + plcAmount + otherCharges − discount
-gst          = Σ(line × line.gstRatePct) for taxable lines
-agreementValue = gross + gst + stampDuty + registration
+agreementValue = gross + stampDuty + registration
 
 commissionableValue = Σ(lines where chargeHead.countsTowardCommission)
                       adjusted per scheme.baseDefinition
-                      (netOfDiscount, netOfGst)
+                      (netOfDiscount)
 ```
 
 Both `agreementValue` and `commissionableValue` are **frozen onto the booking** at

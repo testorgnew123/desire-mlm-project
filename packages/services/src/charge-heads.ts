@@ -1,8 +1,7 @@
 // Charge-head master data -- the components a cost sheet is built from
 // (docs/06-INVENTORY-SPEC.md section 5, docs/03-DATA-MODEL.md). Small table,
 // outsized consequences: `countsTowardCommission` on these rows is what
-// defines the commissionable value every associate is paid on, and
-// `gstRatePct` is what the tax lines are computed from.
+// defines the commissionable value every associate is paid on.
 //
 // Note on scope: docs/09-RBAC-MATRIX.md has no chargehead.* permission code.
 // Charge heads are org-level configuration loaded alongside projects
@@ -59,17 +58,6 @@ export class DuplicateChargeCategoryError extends Error {
   }
 }
 
-/** A taxable head with no rate contributes zero GST silently, and a
- *  non-taxable head carrying a rate is a contradiction a reader of the cost
- *  sheet cannot resolve (docs/06-INVENTORY-SPEC.md section 5:
- *  `gst = Σ(line × line.gstRatePct) for taxable lines`). */
-export class InvalidGstRateError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidGstRateError";
-  }
-}
-
 export class ChargeHeadReasonRequiredError extends Error {
   constructor(operation: string) {
     super(`${operation} requires a reason.`);
@@ -86,29 +74,6 @@ function requireActor(audit: AuditContext): string {
     throw new ForbiddenError("Charge-head mutations require a user actor, not a system actor.");
   }
   return audit.actorId;
-}
-
-/** Rates arrive as a Decimal or a fixed-point string, never a number -- the
- *  column is Decimal(5,2) and a binary float cannot hold 12.35 exactly.
- *  Rounded half-up to the 2dp actually stored, so the validation below sees
- *  the same value Postgres will. */
-function toRate(value: Prisma.Decimal | string): Prisma.Decimal {
-  return new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-}
-
-function assertGstConsistent(isTaxable: boolean, gstRatePct: Prisma.Decimal | null): void {
-  if (isTaxable) {
-    if (gstRatePct === null) {
-      throw new InvalidGstRateError("A taxable charge head must carry a GST rate.");
-    }
-    if (gstRatePct.lt(0) || gstRatePct.gt(100)) {
-      throw new InvalidGstRateError(`GST rate ${gstRatePct.toFixed(2)}% is outside 0-100.`);
-    }
-    return;
-  }
-  if (gstRatePct !== null) {
-    throw new InvalidGstRateError("A non-taxable charge head must not carry a GST rate.");
-  }
 }
 
 /** Decimals do not survive a JSON column as themselves; a fixed-point string
@@ -188,8 +153,6 @@ export interface CreateChargeHeadParams {
   code: string;
   name: string;
   category: ChargeCategory;
-  isTaxable?: boolean;
-  gstRatePct?: Prisma.Decimal | string | null;
   countsTowardCommission?: boolean;
   isRefundable?: boolean;
   displayOrder?: number;
@@ -201,14 +164,6 @@ export async function createChargeHead(
   params: CreateChargeHeadParams,
 ): Promise<ChargeHead> {
   const actorId = requireActor(params.audit);
-
-  // Schema defaults, restated here because the GST consistency check has to
-  // run against the values that will actually be stored, not against the
-  // caller's undefineds.
-  const isTaxable = params.isTaxable ?? true;
-  const gstRatePct =
-    params.gstRatePct === null || params.gstRatePct === undefined ? null : toRate(params.gstRatePct);
-  assertGstConsistent(isTaxable, gstRatePct);
 
   try {
     return await db.$transaction(async (tx) => {
@@ -222,8 +177,6 @@ export async function createChargeHead(
         code: params.code,
         name: params.name,
         category: params.category,
-        isTaxable,
-        gstRatePct,
         countsTowardCommission: params.countsTowardCommission ?? false,
         isRefundable: params.isRefundable ?? false,
         displayOrder: params.displayOrder ?? 0,
@@ -262,8 +215,6 @@ export interface UpdateChargeHeadParams {
   chargeHeadId: string;
   name?: string;
   category?: ChargeCategory;
-  isTaxable?: boolean;
-  gstRatePct?: Prisma.Decimal | string | null;
   isRefundable?: boolean;
   displayOrder?: number;
   reason?: string;
@@ -280,19 +231,6 @@ export async function updateChargeHead(
     const existing = await loadChargeHeadInOrg(tx, params.chargeHeadId, params.audit.orgId);
     await assertPermission(tx, actorId, CRUD_PERMISSION);
 
-    // isTaxable and gstRatePct are only meaningful as a pair, so both are
-    // resolved against the stored row before either is checked. Turning
-    // isTaxable off without also clearing the rate therefore fails, rather
-    // than leaving a non-taxable head carrying a rate nothing will apply.
-    const isTaxable = params.isTaxable ?? existing.isTaxable;
-    const gstRatePct =
-      params.gstRatePct === undefined
-        ? existing.gstRatePct
-        : params.gstRatePct === null
-          ? null
-          : toRate(params.gstRatePct);
-    assertGstConsistent(isTaxable, gstRatePct);
-
     // Moving an existing head into BASE_PRICE or PLC breaks pricing exactly as
     // creating a second one does, so the same guard applies on the way in.
     // Re-sending the category a head already has is not a move and is left
@@ -305,8 +243,6 @@ export async function updateChargeHead(
     const data: Prisma.ChargeHeadUncheckedUpdateInput = {};
     if (params.name !== undefined) data.name = params.name;
     if (params.category !== undefined) data.category = params.category;
-    if (params.isTaxable !== undefined) data.isTaxable = params.isTaxable;
-    if (params.gstRatePct !== undefined) data.gstRatePct = gstRatePct;
     if (params.isRefundable !== undefined) data.isRefundable = params.isRefundable;
     if (params.displayOrder !== undefined) data.displayOrder = params.displayOrder;
 
@@ -409,7 +345,7 @@ export interface DeleteChargeHeadParams {
  *  change, not a service decision.
  *
  *  Sold bookings are safe: CostSheetLine stores `chargeHeadCode` as a string
- *  snapshot with its own gstRatePct and countsTowardCommission, so history
+ *  snapshot with its own countsTowardCommission, so history
  *  does not read through to this row. Live pricing is NOT protected the same
  *  way -- PriceListItem.otherCharges references heads by code inside a JSON
  *  column, which no foreign key can guard. Callers must confirm no active

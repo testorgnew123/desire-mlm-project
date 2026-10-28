@@ -78,7 +78,6 @@ function serializeBooking(booking: Booking) {
     plcAmount: booking.plcAmount.toString(),
     otherChargesAmount: booking.otherChargesAmount.toString(),
     discountAmount: booking.discountAmount.toString(),
-    gstAmount: booking.gstAmount.toString(),
     stampDutyAmount: booking.stampDutyAmount.toString(),
     registrationAmount: booking.registrationAmount.toString(),
     agreementValue: booking.agreementValue.toString(),

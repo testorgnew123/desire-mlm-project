@@ -98,7 +98,7 @@ async function makeBooking(params: { projectId: string; unitId: string; sellingA
       orgId: ORG, projectId: params.projectId, unitId: params.unitId, customerId: customer.id, priceListId: priceList.id,
       bookingNumber: `BK-${params.unitId.slice(-6)}`, bookingDate: new Date(), status: "CONFIRMED", sellingAssociateId: params.sellingAssociateId,
       baseAmount: "100.00", plcAmount: "0.00", otherChargesAmount: "0.00", discountAmount: "0.00",
-      gstAmount: "0.00", stampDutyAmount: "0.00", registrationAmount: "0.00",
+      stampDutyAmount: "0.00", registrationAmount: "0.00",
       agreementValue: params.agreementValue ?? "100.00", commissionableValue: "100.00", saleableAreaAtBooking: "975.00", carpetAreaAtBooking: "650.00",
     },
   });

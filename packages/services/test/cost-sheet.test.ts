@@ -23,13 +23,13 @@ const D = (v: string | number) => new Prisma.Decimal(v);
 const perArea = (v: string | number) => ({ basis: "PER_AREA" as const, value: D(v) });
 
 const HEADS: ChargeHeadSpec[] = [
-  { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: D(5), countsTowardCommission: true, displayOrder: 1 },
-  { code: "PLC", name: "Preferential Location Charge", category: "PLC", isTaxable: true, gstRatePct: D(5), countsTowardCommission: true, displayOrder: 2 },
-  { code: "PARKING", name: "Car Parking", category: "PARKING", isTaxable: true, gstRatePct: D(5), countsTowardCommission: false, displayOrder: 3 },
-  { code: "CLUB", name: "Club Membership", category: "CLUB_MEMBERSHIP", isTaxable: true, gstRatePct: D(18), countsTowardCommission: false, displayOrder: 4 },
-  { code: "IFMS", name: "Interest-Free Maintenance Security", category: "IFMS", isTaxable: false, gstRatePct: null, countsTowardCommission: false, displayOrder: 5 },
-  { code: "STAMP", name: "Stamp Duty", category: "STAMP_DUTY", isTaxable: false, gstRatePct: null, countsTowardCommission: false, displayOrder: 6 },
-  { code: "REG", name: "Registration", category: "REGISTRATION", isTaxable: false, gstRatePct: null, countsTowardCommission: false, displayOrder: 7 },
+  { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, displayOrder: 1 },
+  { code: "PLC", name: "Preferential Location Charge", category: "PLC", countsTowardCommission: true, displayOrder: 2 },
+  { code: "PARKING", name: "Car Parking", category: "PARKING", countsTowardCommission: false, displayOrder: 3 },
+  { code: "CLUB", name: "Club Membership", category: "CLUB_MEMBERSHIP", countsTowardCommission: false, displayOrder: 4 },
+  { code: "IFMS", name: "Interest-Free Maintenance Security", category: "IFMS", countsTowardCommission: false, displayOrder: 5 },
+  { code: "STAMP", name: "Stamp Duty", category: "STAMP_DUTY", countsTowardCommission: false, displayOrder: 6 },
+  { code: "REG", name: "Registration", category: "REGISTRATION", countsTowardCommission: false, displayOrder: 7 },
 ];
 
 function baseInput(overrides: Partial<CostSheetInput> = {}): CostSheetInput {
@@ -76,23 +76,11 @@ describe("computeCostSheet -- fully worked example, hand-computed from the spec"
     expect(r.registrationAmount.toString()).toBe("30000");
   });
 
-  // BSP 5,000,000 x 5%   = 250,000
-  // PLC   150,000 x 5%   =   7,500
-  // PLC   200,000 x 5%   =  10,000
-  // PARK  300,000 x 5%   =  15,000
-  // CLUB  100,000 x 18%  =  18,000
-  // IFMS / STAMP / REG   =       0 (not taxable)
-  //                        -------
-  //                        300,500
-  it("GST sums per taxable line at that line's own rate", () => {
-    expect(r.gstAmount.toString()).toBe("300500");
-  });
-
   // gross = 5,000,000 + 350,000 + 450,000 - 100,000 = 5,700,000
-  // agreementValue = gross + gst + stamp + registration
-  //                = 5,700,000 + 300,500 + 350,000 + 30,000 = 6,380,500
-  it("agreementValue = gross + gst + stampDuty + registration", () => {
-    expect(r.agreementValue.toString()).toBe("6380500");
+  // agreementValue = gross + stamp + registration
+  //                = 5,700,000 + 350,000 + 30,000 = 6,080,000
+  it("agreementValue = gross + stampDuty + registration", () => {
+    expect(r.agreementValue.toString()).toBe("6080000");
   });
 
   // Only heads flagged countsTowardCommission: BSP + both PLC lines.
@@ -101,10 +89,7 @@ describe("computeCostSheet -- fully worked example, hand-computed from the spec"
     expect(r.commissionableValue.toString()).toBe("5350000");
   });
 
-  it("commissionableValue EXCLUDES gst entirely", () => {
-    // The whole GST take is 300,500. If any of it leaked into the
-    // commissionable base, this equality would break.
-    expect(r.commissionableValue.plus(r.gstAmount).toString()).toBe("5650500");
+  it("commissionableValue is less than the agreement value", () => {
     expect(r.commissionableValue.lessThan(r.agreementValue)).toBe(true);
   });
 
@@ -206,8 +191,8 @@ describe("edge cases", () => {
     const r = computeCostSheet(
       baseInput({ plcTags: [], plcChargesByTag: {}, otherCharges: [], discount: D(0) }),
     );
-    // 5,000,000 + 5% GST = 5,250,000
-    expect(r.agreementValue.toString()).toBe("5250000");
+    // Nothing else on the sheet, so the agreement value is the base price.
+    expect(r.agreementValue.toString()).toBe("5000000");
     expect(r.commissionableValue.toString()).toBe("5000000");
   });
 });
@@ -263,17 +248,9 @@ describe("a corner plot priced as a percentage uplift", () => {
     expect(withParking.plcAmount.toString()).toBe("500000");
   });
 
-  // BSP 5,000,000 x 5% = 250,000
-  // PLC   500,000 x 5% =  25,000
-  //                      -------
-  //                      275,000
-  it("a percentage line is taxed like any other PLC line", () => {
-    expect(r.gstAmount.toString()).toBe("275000");
-  });
-
-  // gross = 5,000,000 + 500,000 = 5,500,000; + 275,000 GST
-  it("agreementValue = gross + gst", () => {
-    expect(r.agreementValue.toString()).toBe("5775000");
+  // gross = 5,000,000 + 500,000 = 5,500,000
+  it("agreementValue = gross", () => {
+    expect(r.agreementValue.toString()).toBe("5500000");
   });
 
   it("the uplift is commissionable, exactly as a per-area PLC line is", () => {

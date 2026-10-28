@@ -12,7 +12,7 @@
 | **1 — Inventory** | 3–4 wk | Projects, towers, units, versioned price lists, state machine, timed holds, live board | **Two users cannot hold the same unit — proven by the 50-way concurrency test.** Holds auto-expire. Board refreshes within the configured interval (60 s on free) |
 | **2 — Sales & Collections** | 4–5 wk | CRM, leads, bookings, discount approval, documents, payment plans, demands, receipt entry + verification, allocation, escalation ladder | A lead reaches a confirmed booking with a verified cleared receipt · an overdue demand escalates through every rung to the right people |
 | **3 — Commission** | 4–5 wk | Network tree, grades, scheme builder, simulator, accrual, release, clawback, recovery, explain drill-down | Golden-file tests pass · **the reproducibility test passes** · a full sale cycle produces correct entries for seller + 3 uplines |
-| **4 — Payouts** | 2–3 wk | Batches, TDS/GST, recoveries, maker-checker, statements, bank export, invariant monitor | One clean month-end run, reconciled to the rupee · CA has signed off the tax fixtures |
+| **4 — Payouts** | 2–3 wk | Batches, TDS, recoveries, maker-checker, statements, bank export, invariant monitor | One clean month-end run, reconciled to the rupee · CA has signed off the tax fixtures |
 | **5 — Scale** | 3–4 wk | Analytics, reports, PWA polish, WhatsApp, integrations, customer portal (flagged) | Load-tested at target concurrency · associates using it on site |
 
 **Total: 18–22 weeks.**

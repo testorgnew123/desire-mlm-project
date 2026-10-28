@@ -59,7 +59,6 @@ function serialize(demand: Demand) {
     milestoneRef: demand.milestoneRef,
     description: demand.description,
     amount: demand.amount.toString(),
-    gstAmount: demand.gstAmount.toString(),
     dueDate: demand.dueDate.toISOString(),
     raisedAt: demand.raisedAt?.toISOString() ?? null,
     status: demand.status,

@@ -134,7 +134,7 @@ export default async function SalesByAssociatePage({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground">
                 Base price is what the plot was priced at; agreement value is what the customer signs for,
-                with the corner premium, tax and other charges.
+                with the corner premium and other charges.
               </p>
               <div className="flex gap-2">
                 <Button

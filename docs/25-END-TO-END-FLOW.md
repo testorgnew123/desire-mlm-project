@@ -310,10 +310,9 @@ beneficiary, then computes tax and deductions:
 - TDS section resolved from engagement type; **a missing tax rate throws**
   rather than guessing
 - **Section 206AA higher no-PAN rate** applied where relevant
-- GST only where the engagement type and registration call for it
 - Outstanding recoveries deducted oldest-first, **capped at 50%** of that line's
   gross (`PLACEHOLDER`)
-- `netPayable = gross + gst − tds − recoveryAdjustment`
+- `netPayable = gross − tds − recoveryAdjustment`
 
 **Approve** (`payout.approve`) blocks the preparer — maker-checker — and marks
 every covered entry `PAID`.

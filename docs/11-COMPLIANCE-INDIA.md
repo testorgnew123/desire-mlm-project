@@ -4,6 +4,11 @@
 > client's CA and legal counsel before go-live. The engineering commitment is
 > that all of it is **configurable data**, not constants in code.
 
+> **GST removed (2026-10-27).** The client asked for GST to be taken out of the product. No GST is
+> charged on a booking, no GST is added to commission payouts, and the GST columns are dropped from the
+> database (migration `20261027200000_remove_gst`). The sections below describe the original design and are
+> kept for history only.
+
 ## RERA
 
 The Real Estate (Regulation and Development) Act 2016.

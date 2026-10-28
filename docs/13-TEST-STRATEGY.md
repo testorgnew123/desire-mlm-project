@@ -67,7 +67,7 @@ Asserted in integration tests and re-checked nightly in production
 ### Collections
 ```
 Σ(allocations per receipt)  ≤  receipt.amount
-Σ(allocations per demand)   ≤  demand.amount + demand.gstAmount
+Σ(allocations per demand)   ≤  demand.amount
 Σ(cleared receipts)         =  Σ(active allocations) + booking.creditBalance
 ∀ demand, rung:  at most one CollectionAlert
 ```

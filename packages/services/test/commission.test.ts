@@ -91,9 +91,9 @@ async function seedFixture() {
   const unit = await db.unit.create({ data: { orgId: ORG, projectId: project.id, unitTypeId: unitType.id, unitNumber: "B-1", floor: 1 } });
 
   const bspHead: ChargeHeadSpec & { isRefundable: boolean } = {
-    code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: D("5.00"), countsTowardCommission: true, displayOrder: 1, isRefundable: false,
+    code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, displayOrder: 1, isRefundable: false,
   };
-  await db.chargeHead.create({ data: { orgId: ORG, ...bspHead, gstRatePct: "5.00" } });
+  await db.chargeHead.create({ data: { orgId: ORG, ...bspHead } });
 
   const priceList = await db.priceList.create({
     data: {
@@ -135,7 +135,7 @@ async function publishTestScheme(
 ) {
   const draft = await createScheme(db, {
     projectId, name: "v1", validFrom: new Date("2020-01-01"),
-    baseDefinition: { chargeHeadCodes: ["BSP"], netOfDiscount: true, netOfGst: true },
+    baseDefinition: { chargeHeadCodes: ["BSP"], netOfDiscount: true },
     maxTotalPct: opts.maxTotalPct ?? "3.0",
     gradeRates: [{ gradeId, rateValue: "1.5" }],
     levelRates: [

@@ -142,17 +142,17 @@ async function seedDemoProject() {
 // callers; the two invariants it guards are upheld by hand below (exactly one
 // ACTIVE list, and preparer != approver).
 async function seedPricing() {
-  // PLACEHOLDER amounts and GST rates -- plan.md Open Item 6. Codes match the
+  // PLACEHOLDER amounts -- plan.md Open Item 6. Codes match the
   // catalogue in docs/06-INVENTORY-SPEC.md section 5.
   const chargeHeads = [
-    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
-    { code: "PLC", name: "Preferential Location Charge", category: "PLC", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 2 },
-    { code: "PARKING", name: "Car Parking", category: "PARKING", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: false, isRefundable: false, displayOrder: 3 },
-    { code: "CLUB", name: "Club Membership", category: "CLUB_MEMBERSHIP", isTaxable: true, gstRatePct: "18.00", countsTowardCommission: false, isRefundable: false, displayOrder: 4 },
+    { code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
+    { code: "PLC", name: "Preferential Location Charge", category: "PLC", countsTowardCommission: true, isRefundable: false, displayOrder: 2 },
+    { code: "PARKING", name: "Car Parking", category: "PARKING", countsTowardCommission: false, isRefundable: false, displayOrder: 3 },
+    { code: "CLUB", name: "Club Membership", category: "CLUB_MEMBERSHIP", countsTowardCommission: false, isRefundable: false, displayOrder: 4 },
     // Refundable, so it must never reach the commissionable base.
-    { code: "IFMS", name: "Interest-Free Maintenance Security", category: "IFMS", isTaxable: false, gstRatePct: null, countsTowardCommission: false, isRefundable: true, displayOrder: 5 },
-    { code: "STAMP", name: "Stamp Duty", category: "STAMP_DUTY", isTaxable: false, gstRatePct: null, countsTowardCommission: false, isRefundable: false, displayOrder: 6 },
-    { code: "REG", name: "Registration", category: "REGISTRATION", isTaxable: false, gstRatePct: null, countsTowardCommission: false, isRefundable: false, displayOrder: 7 },
+    { code: "IFMS", name: "Interest-Free Maintenance Security", category: "IFMS", countsTowardCommission: false, isRefundable: true, displayOrder: 5 },
+    { code: "STAMP", name: "Stamp Duty", category: "STAMP_DUTY", countsTowardCommission: false, isRefundable: false, displayOrder: 6 },
+    { code: "REG", name: "Registration", category: "REGISTRATION", countsTowardCommission: false, isRefundable: false, displayOrder: 7 },
   ] as const;
 
   for (const h of chargeHeads) {
@@ -219,7 +219,7 @@ async function seedPricing() {
 }
 
 // PLACEHOLDER TDS rates -- BLOCKED#11 (CA confirmation of engagement type /
-// TDS section / GST treatment) is still open, tracked in PROGRESS.md. Without
+// TDS section) is still open, tracked in PROGRESS.md. Without
 // a row here prepareBatch cannot run at all (NoTaxRateConfiguredError), so a
 // placeholder is seeded rather than leaving the feature undemoable.
 async function seedTaxRates() {
@@ -294,7 +294,6 @@ async function seedDemoPayoutBatch() {
       status: "PAID",
       totalGross: "50000.00",
       totalTds: "5000.00",
-      totalGst: "0.00",
       totalRecovery: "0.00",
       totalAdjustment: "0.00",
       totalNetPayable: "45000.00",
@@ -312,7 +311,6 @@ async function seedDemoPayoutBatch() {
             tdsSection: "SEC_192",
             tdsRatePct: "10.00",
             tdsAmount: "5000.00",
-            gstAmount: "0.00",
             recoveryAdjustment: "0.00",
             otherAdjustment: "0.00",
             netPayable: "45000.00",

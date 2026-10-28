@@ -68,10 +68,6 @@ export default async function PayoutBatchDetailPage({
             <p className="font-medium">{formatMoney(batch.totalTds)}</p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">GST</p>
-            <p className="font-medium">{formatMoney(batch.totalGst)}</p>
-          </div>
-          <div>
             <p className="text-xs text-muted-foreground">Recovery</p>
             <p className="font-medium">{formatMoney(batch.totalRecovery)}</p>
           </div>
@@ -136,7 +132,6 @@ export default async function PayoutBatchDetailPage({
                   <th className="py-1.5 pr-4">Associate</th>
                   <th className="py-1.5 pr-4 text-right">Gross</th>
                   <th className="py-1.5 pr-4 text-right">TDS</th>
-                  <th className="py-1.5 pr-4 text-right">GST</th>
                   <th className="py-1.5 pr-4 text-right">Net payable</th>
                   <th className="py-1.5 pr-4">Statement</th>
                 </tr>
@@ -151,7 +146,6 @@ export default async function PayoutBatchDetailPage({
                     </td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.grossAmount)}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.tdsAmount)}</td>
-                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.gstAmount)}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.netPayable)}</td>
                     <td className="py-1.5 pr-4">
                       <a

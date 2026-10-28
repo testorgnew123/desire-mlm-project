@@ -381,7 +381,7 @@ export interface EarningsSummary {
   blocked: Prisma.Decimal;
   /** The SAME entries' bookings' outstanding demand balance -- the exact
    *  canonical query docs/05-COLLECTIONS-SPEC.md already defines
-   *  (demand.amount + gstAmount - Σ non-reversed allocations), reusing
+   *  (demand.amount - Σ non-reversed allocations), reusing
    *  receipts.ts's allocatedTotalForDemand shape rather than re-deriving it. */
   pendingCollections: Prisma.Decimal;
 }
@@ -431,7 +431,7 @@ export async function getEarnings(db: PrismaClient, params: { associateId: strin
     });
     for (const demand of demands) {
       const allocated = demand.allocations.reduce((sum, a) => sum.plus(a.amount), D(0));
-      const owed = D(demand.amount).plus(demand.gstAmount).minus(allocated);
+      const owed = D(demand.amount).minus(allocated);
       if (owed.greaterThan(0)) pendingCollections = pendingCollections.plus(owed);
     }
   }

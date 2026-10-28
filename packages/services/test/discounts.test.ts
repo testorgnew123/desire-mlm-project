@@ -107,7 +107,7 @@ async function seedFixture(orgId: string = ORG) {
     data: { orgId, projectId: project.id, unitTypeId: unitType.id, unitNumber: "A-1", floor: 1 },
   });
   await db.chargeHead.create({
-    data: { orgId, code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
+    data: { orgId, code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
   });
   const priceList = await db.priceList.create({
     data: {

@@ -314,7 +314,7 @@ describe("wiring: the collections sweep queues real notifications when a rule is
     });
     const unit = await db.unit.create({ data: { orgId: ORG, projectId: project.id, unitTypeId: unitType.id, unitNumber: "A-1", floor: 1 } });
     await db.chargeHead.create({
-      data: { orgId: ORG, code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", isTaxable: true, gstRatePct: "5.00", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
+      data: { orgId: ORG, code: "BSP", name: "Basic Sale Price", category: "BASE_PRICE", countsTowardCommission: true, isRefundable: false, displayOrder: 1 },
     });
     const priceList = await db.priceList.create({
       data: {

@@ -76,7 +76,7 @@ function ctx(orgId: string, userId: string, label: string): AuditContext {
   return { orgId, actorId: userId, actorLabel: label };
 }
 
-const BASE_DEFINITION = { chargeHeadCodes: ["BSP"], netOfDiscount: true, netOfGst: true };
+const BASE_DEFINITION = { chargeHeadCodes: ["BSP"], netOfDiscount: true };
 
 function gradeRates(gradeId: string) {
   return [{ gradeId, rateValue: "1.5" }];

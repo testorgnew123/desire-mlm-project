@@ -75,7 +75,6 @@ export default async function BookingDetailPage({
     ["Preferential location charge", booking.plcAmount, booking.plcAmount.gt(0)],
     ["Other charges", booking.otherChargesAmount, booking.otherChargesAmount.gt(0)],
     ["Discount", booking.discountAmount, booking.discountAmount.gt(0)],
-    ["GST", booking.gstAmount, booking.gstAmount.gt(0)],
     ["Stamp duty", booking.stampDutyAmount, booking.stampDutyAmount.gt(0)],
     ["Registration", booking.registrationAmount, booking.registrationAmount.gt(0)],
   ];
@@ -177,7 +176,6 @@ export default async function BookingDetailPage({
                 <tr className="border-b border-border text-left text-xs text-muted-foreground">
                   <th className="py-1.5 pr-4">Charge</th>
                   <th className="py-1.5 pr-4 text-right">Amount</th>
-                  <th className="py-1.5 pr-4 text-right">GST</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -185,7 +183,6 @@ export default async function BookingDetailPage({
                   <tr key={line.chargeHeadCode}>
                     <td className="py-1.5 pr-4">{line.description}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.amount)}</td>
-                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatMoney(line.gstAmount)}</td>
                   </tr>
                 ))}
               </tbody>
