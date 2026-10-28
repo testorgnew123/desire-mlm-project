@@ -4,7 +4,8 @@
 // hold/unit state machine, and the freeze-vs-recompute distinction are
 // exactly what is under test.
 import "dotenv/config";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as EmailModule from "../src/email";
 import { Prisma, getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import { acquireHold } from "../src/holds";
@@ -16,6 +17,7 @@ import {
   InvalidPriceListError,
   InvalidPriceOverrideError,
   UnitNotHeldError,
+  cancelBooking,
   confirmBooking,
   createDraftBooking,
   getBooking,
@@ -24,6 +26,26 @@ import {
   setBookingPriceOverride,
 } from "../src/bookings";
 import type { AuditContext } from "../src/audit";
+import { formatRupees } from "../src/booking-mail";
+
+// No test here may reach a real SMTP server: sendEmail is replaced by a recorder
+// that can be told to fail or hang. isMailConfigured stays real, so the tests set
+// the SMTP variables to turn booking mail on.
+const outbox = vi.hoisted(() => ({
+  sent: [] as { to: string; subject: string; text: string }[],
+  mode: "ok" as "ok" | "refuse" | "hang",
+}));
+vi.mock("../src/email", async (importOriginal) => {
+  const original = await importOriginal<typeof EmailModule>();
+  return {
+    ...original,
+    sendEmail: async (params: { to: string; subject: string; text: string }) => {
+      if (outbox.mode === "hang") return new Promise<void>(() => undefined);
+      if (outbox.mode === "refuse") throw new Error("550 mailbox unavailable");
+      outbox.sent.push({ to: params.to, subject: params.subject, text: params.text });
+    },
+  };
+});
 
 const db = getPrismaClient();
 const ORG = "org_test_bookings";
@@ -931,5 +953,111 @@ describe("an admin's agreed price", () => {
       }),
     ).rejects.toThrow(ForbiddenError);
     expect(await db.booking.count({ where: { orgId: ORG } })).toBe(0);
+  });
+});
+
+describe("booking emails", () => {
+  const saved = { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, from: process.env.MAIL_FROM, base: process.env.APP_BASE_URL };
+  beforeEach(() => {
+    outbox.sent.length = 0;
+    outbox.mode = "ok";
+    process.env.SMTP_HOST = "smtp.test";
+    process.env.SMTP_PORT = "587";
+    process.env.MAIL_FROM = "noreply@test.local";
+    process.env.APP_BASE_URL = "https://desire.test";
+  });
+  afterEach(() => {
+    for (const [key, value] of [["SMTP_HOST", saved.host], ["SMTP_PORT", saved.port], ["MAIL_FROM", saved.from], ["APP_BASE_URL", saved.base]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  async function drafted() {
+    const f = await seedFixture();
+    await db.customer.update({ where: { id: f.customer.id }, data: { email: "buyer@test.local" } });
+    await acquireHold(db, { orgId: ORG, unitId: f.unit.id, associateId: f.seller.associate!.id, audit: ctx(ORG, f.seller.user.id, "seller") });
+    outbox.sent.length = 0;
+    const draft = await createDraftBooking(db, {
+      unitId: f.unit.id,
+      priceListId: f.priceList.id,
+      customerId: f.customer.id,
+      audit: ctx(ORG, f.seller.user.id, "seller"),
+    });
+    return { ...f, draft };
+  }
+
+  it("tells the admins who can confirm, not the associate who booked, that a booking is waiting", async () => {
+    const f = await drafted();
+    expect(outbox.sent.map((m) => m.to)).toEqual([f.admin.user.email]);
+    const mail = outbox.sent[0]!;
+    expect(mail.subject).toBe(`Booking ${f.draft.bookingNumber} needs confirming`);
+    expect(mail.text).toContain(`https://desire.test/bookings/${f.draft.id}`);
+    expect(mail.text).toContain("Test Buyer");
+  });
+
+  it("tells the customer and the associate when it is confirmed", async () => {
+    const f = await drafted();
+    outbox.sent.length = 0;
+
+    await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+
+    expect(outbox.sent.map((m) => m.to).sort()).toEqual(["buyer@test.local", f.seller.user.email].sort());
+    const customerMail = outbox.sent.find((m) => m.to === "buyer@test.local")!;
+    expect(customerMail.subject).toBe(`Your booking ${f.draft.bookingNumber} is confirmed`);
+    expect(customerMail.text).toContain(f.draft.bookingNumber);
+    expect(customerMail.text).toMatch(/₹[\d,]+\.\d\d/);
+  });
+
+  it("does not mail a customer who gave no email, only the associate", async () => {
+    const f = await drafted();
+    await db.customer.update({ where: { id: f.customer.id }, data: { email: null } });
+    outbox.sent.length = 0;
+
+    await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+
+    expect(outbox.sent.map((m) => m.to)).toEqual([f.seller.user.email]);
+  });
+
+  it("tells the associate, with the reason, when it is cancelled", async () => {
+    const f = await drafted();
+    await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+    outbox.sent.length = 0;
+    const canceller = await makeUser(ORG, "canceller", ["booking.cancel"]);
+
+    await cancelBooking(db, { bookingId: f.draft.id, reason: "Customer withdrew", audit: ctx(ORG, canceller.user.id, "canceller") });
+
+    expect(outbox.sent.map((m) => m.to)).toEqual([f.seller.user.email]);
+    expect(outbox.sent[0]!.text).toContain("Reason: Customer withdrew");
+  });
+
+  it("sends nothing, and reads nothing, when mail is not configured", async () => {
+    delete process.env.SMTP_HOST;
+    const f = await drafted();
+    await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+    expect(outbox.sent).toEqual([]);
+  });
+
+  it("still books and confirms when the mail server refuses everything", async () => {
+    outbox.mode = "refuse";
+    const f = await drafted();
+    const confirmed = await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+    expect(confirmed.status).toBe("CONFIRMED");
+  });
+
+  it("does not wait on a mail server that never answers: the confirm returns within the deadline", async () => {
+    outbox.mode = "hang";
+    const f = await drafted();
+    const started = Date.now();
+    const confirmed = await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+    expect(confirmed.status).toBe("CONFIRMED");
+    expect(Date.now() - started).toBeLessThan(8_000);
+  }, 15_000);
+
+  it("formats rupees with Indian grouping from the exact value", () => {
+    expect(formatRupees(new Prisma.Decimal("5200000"))).toBe("₹52,00,000.00");
+    expect(formatRupees(new Prisma.Decimal("999.5"))).toBe("₹999.50");
+    expect(formatRupees(new Prisma.Decimal("123456789.01"))).toBe("₹12,34,56,789.01");
+    expect(formatRupees(new Prisma.Decimal("0"))).toBe("₹0.00");
   });
 });

@@ -15,6 +15,7 @@ import type { PrismaClient, Prisma as PrismaNS, Booking, CostSheetLine, HoldRele
 // response serializers without a separate @desire/db import.
 export type { Booking, CostSheetLine };
 import { writeAuditLog, type AuditContext } from "./audit";
+import { notifyBookingCancelled, notifyBookingConfirmed, notifyBookingDrafted } from "./booking-mail";
 import { assertPermission, ForbiddenError, getAccessibleAssociateIds, type ScopeMode } from "./rbac";
 import { effectiveUnitStatus, isHoldLive } from "./holds";
 import { assertValidTransition } from "./unit-transitions";
@@ -318,7 +319,7 @@ export async function createDraftBooking(
   const actorId = requireActor(params.audit);
   const now = params.bookingDate ?? new Date();
 
-  return db.$transaction(async (tx) => {
+  const created = await db.$transaction(async (tx) => {
     await assertPermission(tx, actorId, CREATE_PERMISSION);
     const priceOverride = parsePriceOverride(params.priceOverride);
     if (priceOverride) await assertPermission(tx, actorId, SET_PRICE_PERMISSION);
@@ -436,6 +437,10 @@ export async function createDraftBooking(
 
     return booking;
   });
+
+  // After the commit, and never able to fail it: tell the admins it is waiting.
+  await notifyBookingDrafted(db, { bookingId: created.id, actorId });
+  return created;
 }
 
 // ── Confirm (the GATE) ───────────────────────────────────────────────────
@@ -453,7 +458,7 @@ export async function confirmBooking(
   const actorId = requireActor(params.audit);
   const now = params.now ?? new Date();
 
-  return db.$transaction(async (tx) => {
+  const confirmedBooking = await db.$transaction(async (tx) => {
     // Lock order for this slice: Booking, then Unit. No existing code in
     // this codebase locks both in one transaction yet (holds.ts only ever
     // locks a single Unit) -- this is the precedent, chosen so a caller
@@ -598,6 +603,9 @@ export async function confirmBooking(
 
     return { ...confirmed, costSheetLines };
   });
+
+  await notifyBookingConfirmed(db, { bookingId: confirmedBooking.id });
+  return confirmedBooking;
 }
 
 // ── Cancellation + clawback ──────────────────────────────────────────────
@@ -752,7 +760,7 @@ export async function cancelBooking(
     throw new CancellationReasonRequiredError(params.bookingId);
   }
 
-  return db.$transaction(async (tx) => {
+  const cancelledBooking = await db.$transaction(async (tx) => {
     // Same lock order as confirmBooking: Booking, then Unit.
     await tx.$queryRaw`SELECT "id" FROM "bookings" WHERE "id" = ${params.bookingId} FOR UPDATE`;
 
@@ -885,6 +893,9 @@ export async function cancelBooking(
 
     return { ...cancelled, clawback: lines.map(serializeClawbackLine) };
   });
+
+  await notifyBookingCancelled(db, { bookingId: cancelledBooking.id });
+  return cancelledBooking;
 }
 
 // ── Read ───────────────────────────────────────────────────────────────

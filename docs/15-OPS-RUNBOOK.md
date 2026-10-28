@@ -214,6 +214,40 @@ unpooled hosted URL run
 did apply (a non-transactional statement such as `CREATE INDEX CONCURRENTLY`),
 correct the schema by hand and use `--applied` instead.
 
+## Email
+
+Everything the app mails goes through one SMTP account (`packages/services/src/email.ts`):
+
+| Mail | When | Who gets it |
+|---|---|---|
+| Login ID and temporary password | An admin creates a user, or resets their password | The user |
+| Password-reset link | "Forgot password" on the sign-in page | The user |
+| Booking waiting | An associate (or admin) books a plot | Every active or invited user who can confirm bookings, except the person who booked |
+| Booking confirmed | An admin confirms | The customer (if an email was entered) and the selling associate |
+| Booking cancelled | An admin cancels | The selling associate |
+| Scheduled reports | The saved-report job | The recipients on the saved view |
+
+**Settings** (Netlify > Site configuration > Environment variables). Give them the **Functions** and **Runtime** scopes, not only *Builds*: the app reads them while serving requests, and a variable that exists only at build time looks set in the dashboard and is missing where mail is sent.
+
+| Variable | Needed | What |
+|---|---|---|
+| `SMTP_HOST` | yes | The provider's SMTP server |
+| `SMTP_PORT` | yes | `587` (STARTTLS) or `465` (SSL) |
+| `SMTP_USER`, `SMTP_PASSWORD` | usually | The login (an app password or SMTP key, not a personal password) |
+| `MAIL_FROM` | yes | The From address; the provider must allow sending as it (a verified sender or domain) |
+| `APP_BASE_URL` | yes | The site's public address, no trailing slash: password-reset links and the "open it" link in mail are built from it |
+
+A provider with a free tier, or the client's own mail hosting, is enough at this volume.
+
+**Proving it works:** sign in as an Admin or Super Admin and open **Admin > Email**. It shows which settings are set (never their values) and sends one real test message, saying exactly why it failed if it does: a refused login, an unreachable server, a name that does not resolve, a sender the server will not accept. Do this after setting or changing any variable, and after each deploy that touches mail. Then create a throwaway user and press "Forgot password" on the sign-in page.
+
+**Behaviour to know:**
+- Mail never blocks the action. A booking is still made and confirmed, an account still created, if the mail server is down or slow; the person just does not get the email. Account mail shows the admin the temporary password once when it could not be sent. Booking mail waits at most 4 seconds in total.
+- With no SMTP settings nothing is attempted and nothing is slowed.
+- Without `APP_BASE_URL` the forgot-password link cannot be sent.
+- The booking and account mails carry no document attachments and no KYC data.
+- To try mail without a provider: `node apps/web/scripts/smtp-sink.mjs`, run the app with `SMTP_HOST=127.0.0.1 SMTP_PORT=2525 MAIL_FROM=noreply@desire.test APP_BASE_URL=http://localhost:3000`, and read what was sent at `http://127.0.0.1:2526/last?to=<address>`.
+
 ## Health check
 
 `GET /api/health` returns database connectivity, the last successful run of each

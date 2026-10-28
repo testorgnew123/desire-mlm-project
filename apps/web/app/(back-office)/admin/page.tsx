@@ -13,6 +13,7 @@ export const metadata: Metadata = {
 
 const ADMIN_SECTIONS: { feature: FeatureKey; href: string; title: string; description: string }[] = [
   { feature: "adminUsers", href: "/admin/users", title: "Users & Roles", description: "Create accounts, assign roles" },
+  { feature: "adminUsers", href: "/admin/mail", title: "Email", description: "Check email works, send a test message" },
   { feature: "auditLog", href: "/admin/audit-log", title: "Audit log", description: "Every recorded action, filterable" },
   {
     feature: "notifications",
