@@ -134,7 +134,7 @@ gone (lazy), so correctness never depends on the cron. The 5-minute sweep only
 materialises the release row and the notification.
 
 > **Release is reachable for the holder (2026-10-27); extend and force-release are not.**
-> An associate can hold a free plot (the plot sheet's Hold button), book from that
+> An associate (or an Admin / Super Admin, who has an associate profile too) can hold a free plot (the plot sheet's Hold button), book from that
 > hold, or give it back (Release hold on the sheet, the book page and My bookings:
 > `releasePlotHold`, holder only, refused while a draft booking made from it waits for
 > an admin). `extendHold` still has **no route and no screen**, and the

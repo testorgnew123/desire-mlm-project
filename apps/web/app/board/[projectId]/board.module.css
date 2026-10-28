@@ -368,6 +368,22 @@
   cursor: pointer;
 }
 
+/* The booking link in the drawer: a link styled as the primary action. */
+.primaryButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 0 16px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: var(--ink);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .banner {
   display: flex;
   flex-wrap: wrap;

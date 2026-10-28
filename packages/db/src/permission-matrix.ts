@@ -97,13 +97,15 @@ export const PERMISSION_MATRIX: Record<PermissionCode, RoleCode[]> = {
   "unit.read": ["SUPER_ADMIN", "ADMIN", "ASSOCIATE"],
   "unit.block": ["SUPER_ADMIN", "ADMIN"],
   // An associate holds a plot for a customer. Holding needs an Associate profile
-  // (and a grade quota), which ADMIN does not have -- so ADMIN does not hold.
-  "hold.create": ["SUPER_ADMIN", "ASSOCIATE"],
+  // (and a grade quota); an ADMIN or SUPER_ADMIN is given one when the account is
+  // made or changed (services/associate-profile.ts), so they can hold too.
+  "hold.create": ["SUPER_ADMIN", "ADMIN", "ASSOCIATE"],
   "hold.force_release": ["SUPER_ADMIN", "ADMIN"],
   "booking.read": ["SUPER_ADMIN", "ADMIN", "ASSOCIATE"],
-  // The associate drafts the booking; ADMIN (or SUPER_ADMIN) confirms it, so the
-  // seller never confirms their own sale.
-  "booking.create": ["SUPER_ADMIN", "ASSOCIATE"],
+  // The associate drafts the booking; ADMIN (or SUPER_ADMIN) confirms it. An admin
+  // may also draft one, and nothing stops them confirming their own: the rule that
+  // a seller never confirms their own sale holds for associates only.
+  "booking.create": ["SUPER_ADMIN", "ADMIN", "ASSOCIATE"],
   "booking.confirm": ["SUPER_ADMIN", "ADMIN"],
   "booking.cancel": ["SUPER_ADMIN", "ADMIN"],
 

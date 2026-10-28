@@ -189,6 +189,14 @@ gets the same sync from `neon-preview-branches.yml`. To look without changing an
 `pnpm db:sync-roles` is a dry run; `-- --apply` performs it. Moving people off the old
 roles and removing grants is still `narrow-roles.ts`, by hand, with a go-ahead.
 
+Last, the script gives every Admin and Super Admin who has no associate profile one
+(`apps/web/scripts/ensure-admin-associates.ts`), because those roles can hold and book
+plots too and a hold is recorded against an associate profile. Add-only and
+idempotent, and **not** fatal: a failure (for example no grade exists yet) only means
+an admin cannot hold until the next deploy, so it never withholds a build. A preview
+branch gets the same step from the workflow. Dry run:
+`pnpm --filter @desire/db exec tsx ../../apps/web/scripts/ensure-admin-associates.ts`.
+
 Breaking schema changes use expand–contract: add column → backfill → switch reads
 → drop in a later release. Never a destructive migration in a single release. Because
 migrations now run before the new code is published, the OLD code must keep working
