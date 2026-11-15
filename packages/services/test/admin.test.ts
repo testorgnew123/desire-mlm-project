@@ -1,8 +1,9 @@
 // User/Role admin -- three roles (SUPER_ADMIN, ADMIN, ASSOCIATE). Runs against
 // LOCAL Docker Postgres. Under test: the role allowlist, the privilege ceiling
 // (ADMIN manages associates only), the self-change and last-super-admin guards,
-// session revocation on a role change, and the associate profile every new
-// associate needs before they can hold or book anything.
+// session revocation on a role change, the associate profile every new
+// associate needs before they can hold or book anything, and the company-email
+// rule (ALLOWED_EMAIL_DOMAINS) that applies to every role but Super Admin.
 import "dotenv/config";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyRoleSync, getPrismaClient, planRoleSync } from "@desire/db";
@@ -26,6 +27,7 @@ import {
   updateUserRoles,
 } from "../src/admin";
 import { ensureAdminAssociateProfiles } from "../src/associate-profile";
+import { EmailDomainNotAllowedError, EmailDomainsNotConfiguredError } from "../src/allowed-domains";
 import type { AuditContext } from "../src/audit";
 
 // No test here may reach a real SMTP server: sendEmail is replaced by a recorder
@@ -123,9 +125,13 @@ beforeEach(async () => {
   mail.sent.length = 0;
   mail.failWith = null;
   process.env.APP_BASE_URL = "https://app.test/";
+  // Every Admin and Associate made below is on @test.local; the tests of the rule
+  // itself change this per test.
+  process.env.ALLOWED_EMAIL_DOMAINS = "test.local";
   await reset();
 });
 afterAll(async () => {
+  delete process.env.ALLOWED_EMAIL_DOMAINS;
   await reset();
   await db.$disconnect();
 });
@@ -684,6 +690,158 @@ describe("updateUserRoles: close-and-replace, never additive", () => {
       ).rejects.toThrow(LastSuperAdminError);
       expect(await rolesOf(f.owner.id)).toEqual(["SUPER_ADMIN"]);
     });
+  });
+});
+
+// The client holds Super Admin and may use any address. Everyone else needs a
+// company one, and the list is server configuration the client cannot edit.
+describe("createUser: company email domains", () => {
+  it.each(["ADMIN", "ASSOCIATE"] as const)("refuses a %s on a non-company address and leaves no trace", async (roleCode) => {
+    const f = await seedFixture();
+    // The owner may create either role, so the address is the only thing in the way.
+    await expect(
+      createUser(db, { email: "boss@gmail.com", name: "Boss", roleCode, audit: ctx(ORG, f.owner.id, "owner") }),
+    ).rejects.toThrow('"gmail.com" is not allowed; use an address at: test.local.');
+
+    expect(await db.user.count({ where: { orgId: ORG, email: "boss@gmail.com" } })).toBe(0);
+    expect(await db.auditLog.count({ where: { orgId: ORG, entity: "User", action: "CREATE" } })).toBe(0);
+    expect(await db.associate.count({ where: { orgId: ORG } })).toBe(0);
+    expect(mail.sent).toEqual([]);
+  });
+
+  it("refuses an Associate on a non-company address when an Admin is the one creating it", async () => {
+    const f = await seedFixture();
+    await expect(
+      createUser(db, { email: "seller@gmail.com", name: "Seller", roleCode: "ASSOCIATE", audit: ctx(ORG, f.admin.id, "admin") }),
+    ).rejects.toThrow(EmailDomainNotAllowedError);
+  });
+
+  it("lets a Super Admin be created on any address, as the client's own account", async () => {
+    const f = await seedFixture();
+    const result = await createUser(db, {
+      email: "Client@Gmail.com", name: "Client", roleCode: "SUPER_ADMIN", audit: ctx(ORG, f.owner.id, "owner"),
+    });
+
+    expect(result.email).toBe("client@gmail.com");
+    expect(await rolesOf(result.userId)).toEqual(["SUPER_ADMIN"]);
+    expect(mail.sent.map((m) => m.to)).toEqual(["client@gmail.com"]);
+  });
+
+  it("takes any listed domain, and not a subdomain of one", async () => {
+    process.env.ALLOWED_EMAIL_DOMAINS = "test.local, example.org";
+    const f = await seedFixture();
+    const audit = ctx(ORG, f.owner.id, "owner");
+
+    await createUser(db, { email: "a@example.org", name: "A", roleCode: "ASSOCIATE", audit });
+    await createUser(db, { email: "b@test.local", name: "B", roleCode: "ASSOCIATE", audit });
+    await expect(
+      createUser(db, { email: "c@mail.example.org", name: "C", roleCode: "ASSOCIATE", audit }),
+    ).rejects.toThrow(EmailDomainNotAllowedError);
+  });
+
+  const UNUSABLE: [label: string, value: string | undefined][] = [
+    ["unset", undefined],
+    ["empty", ""],
+    ["malformed", "*.test.local"],
+  ];
+  it.each(UNUSABLE)("refuses Admin and Associate accounts when the setting is %s, but not a Super Admin", async (_label, value) => {
+    if (value === undefined) delete process.env.ALLOWED_EMAIL_DOMAINS;
+    else process.env.ALLOWED_EMAIL_DOMAINS = value;
+    const f = await seedFixture();
+    const audit = ctx(ORG, f.owner.id, "owner");
+
+    for (const roleCode of ["ADMIN", "ASSOCIATE"] as const) {
+      await expect(createUser(db, { email: "a@test.local", name: "A", roleCode, audit })).rejects.toThrow(
+        EmailDomainsNotConfiguredError,
+      );
+    }
+    expect(await db.user.count({ where: { orgId: ORG, email: "a@test.local" } })).toBe(0);
+
+    await expect(
+      createUser(db, { email: "boss@test.local", name: "Boss", roleCode: "SUPER_ADMIN", audit }),
+    ).resolves.toMatchObject({ email: "boss@test.local" });
+  });
+
+  it("reports a missing permission before the address", async () => {
+    const f = await seedFixture();
+    await expect(
+      createUser(db, { email: "x@gmail.com", name: "X", roleCode: "ASSOCIATE", audit: ctx(ORG, f.noPerms.id, "noperms") }),
+    ).rejects.toThrow(ForbiddenError);
+    await expect(
+      createUser(db, { email: "x@gmail.com", name: "X", roleCode: "ADMIN", audit: ctx(ORG, f.admin.id, "admin") }),
+    ).rejects.toThrow("Only a Super Admin");
+  });
+});
+
+// Moving an account to another role does not change its address, so only the one
+// move that would be a way round the rule is checked: Super Admin to anything else.
+describe("updateUserRoles: company email domains", () => {
+  async function clientOnGmail(f: Awaited<ReturnType<typeof seedFixture>>) {
+    return createUser(db, {
+      email: "client@gmail.com", name: "Client", roleCode: "SUPER_ADMIN", audit: ctx(ORG, f.owner.id, "owner"),
+    });
+  }
+
+  it.each(["ADMIN", "ASSOCIATE"] as const)("refuses to turn a Super Admin on a non-company address into a %s", async (roleCode) => {
+    const f = await seedFixture();
+    const client = await clientOnGmail(f);
+    await createSession(db, client.userId, {});
+
+    await expect(
+      updateUserRoles(db, { userId: client.userId, roleCode, audit: ctx(ORG, f.owner.id, "owner") }),
+    ).rejects.toThrow(EmailDomainNotAllowedError);
+
+    expect(await rolesOf(client.userId)).toEqual(["SUPER_ADMIN"]);
+    expect((await db.session.findMany({ where: { userId: client.userId } })).every((s) => s.revokedAt === null)).toBe(true);
+    expect(await db.auditLog.count({ where: { orgId: ORG, entity: "User", entityId: client.userId, action: "UPDATE" } })).toBe(0);
+  });
+
+  it.each(["ADMIN", "ASSOCIATE"] as const)("lets a Super Admin on a company address become a %s", async (roleCode) => {
+    const f = await seedFixture();
+    const second = await createUser(db, {
+      email: "second@test.local", name: "Second", roleCode: "SUPER_ADMIN", audit: ctx(ORG, f.owner.id, "owner"),
+    });
+
+    await updateUserRoles(db, { userId: second.userId, roleCode, audit: ctx(ORG, f.owner.id, "owner") });
+
+    expect(await rolesOf(second.userId)).toEqual([roleCode]);
+  });
+
+  it("refuses the move while the setting is unusable, even for a company address", async () => {
+    const f = await seedFixture();
+    const second = await createUser(db, {
+      email: "second@test.local", name: "Second", roleCode: "SUPER_ADMIN", audit: ctx(ORG, f.owner.id, "owner"),
+    });
+    delete process.env.ALLOWED_EMAIL_DOMAINS;
+
+    await expect(
+      updateUserRoles(db, { userId: second.userId, roleCode: "ADMIN", audit: ctx(ORG, f.owner.id, "owner") }),
+    ).rejects.toThrow(EmailDomainsNotConfiguredError);
+    expect(await rolesOf(second.userId)).toEqual(["SUPER_ADMIN"]);
+  });
+
+  it("does not check moves between Admin and Associate, or a move up to Super Admin", async () => {
+    const f = await seedFixture();
+    // An account that pre-dates the rule can sit on any address.
+    const old = await db.user.create({ data: { orgId: ORG, email: "old@gmail.com", name: "Old", passwordHash: "x", status: "ACTIVE" } });
+    const associate = await db.role.findUniqueOrThrow({ where: { orgId_code: { orgId: ORG, code: "ASSOCIATE" } } });
+    await db.userRole.create({ data: { userId: old.id, roleId: associate.id } });
+    const audit = ctx(ORG, f.owner.id, "owner");
+
+    for (const roleCode of ["ADMIN", "ASSOCIATE", "SUPER_ADMIN"] as const) {
+      await updateUserRoles(db, { userId: old.id, roleCode, audit });
+      expect(await rolesOf(old.id)).toEqual([roleCode]);
+    }
+  });
+
+  it("does nothing when a Super Admin on a non-company address is re-submitted as Super Admin", async () => {
+    const f = await seedFixture();
+    const client = await clientOnGmail(f);
+
+    await expect(
+      updateUserRoles(db, { userId: client.userId, roleCode: "SUPER_ADMIN", audit: ctx(ORG, f.owner.id, "owner") }),
+    ).resolves.toBeUndefined();
+    expect(await rolesOf(client.userId)).toEqual(["SUPER_ADMIN"]);
   });
 });
 

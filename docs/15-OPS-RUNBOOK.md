@@ -249,6 +249,25 @@ A provider with a free tier, or the client's own mail hosting, is enough at this
 - The booking and account mails carry no document attachments and no KYC data.
 - To try mail without a provider: `node apps/web/scripts/smtp-sink.mjs`, run the app with `SMTP_HOST=127.0.0.1 SMTP_PORT=2525 MAIL_FROM=noreply@desire.test APP_BASE_URL=http://localhost:3000`, and read what was sent at `http://127.0.0.1:2526/last?to=<address>`.
 
+## Allowed email domains
+
+New **Admin** and **Associate** accounts (and any role added later) must use an email address on a company domain. **Super Admin** accounts, which belong to the client, may use any address. Customers and leads are not accounts and are never checked.
+
+The list is one environment variable, set by whoever runs the deployment. It is deliberately on no screen, so the client's Super Admin cannot change it.
+
+| Variable | Needed | What |
+|---|---|---|
+| `ALLOWED_EMAIL_DOMAINS` | to create Admin or Associate accounts | Plain domains separated by commas, for example `example.org,example.net` |
+
+Set it in Netlify (Site configuration > Environment variables) with the **Functions** and **Runtime** scopes, as for the mail settings, **before** the change that introduces it is merged. A later change takes effect on the next deploy.
+
+**Behaviour to know:**
+- The match is exact: `mail.example.org` is not covered by `example.org`, so list it as well if it is wanted. Letter case does not matter and a leading `@` is ignored.
+- It is checked when an account is created, and when a Super Admin account is changed to Admin or Associate (otherwise creating a Super Admin on a Gmail address and then changing its role would be a way round). Other role changes are not checked.
+- Existing accounts are never blocked or changed, whatever their address, and taking a domain off the list does not touch accounts already on it.
+- If the variable is missing, empty, or holds an entry that is not a plain domain (a wildcard, a URL, an address, a port), no Admin or Associate account can be created and the form says why. Creating a Super Admin and signing in are unaffected. One bad entry spoils the whole list, so a typo cannot quietly drop a domain.
+- Code: `packages/services/src/allowed-domains.ts`, called from `createUser` and `updateUserRoles` in `admin.ts`. Anything new that creates an account or changes an email must call it too.
+
 ## Health check
 
 `GET /api/health` returns database connectivity, the last successful run of each
