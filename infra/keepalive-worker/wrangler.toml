@@ -32,4 +32,16 @@ HEALTH_URL = "https://crm.desirerealty.in/api/health"
 # and ~55 of Neon's 100 free CU-hours/month (the arithmetic is in
 # docs/21-TIER-LIMITS.md section 12). Weekday-hours-only is what makes it fit;
 # 24/7 would be 182 CU-h and would suspend the database mid-month.
-crons = ["*/4 4-13 * * 1-5"]
+#
+# WEEKDAYS BY NAME, NOT NUMBER. Cloudflare numbers the days 1 = Sunday to
+# 7 = Saturday (most cron systems use 0 = Sunday), so the numeric `1-5` this file
+# used to carry meant Sunday-Thursday: Fridays were never warmed and Sundays were
+# warmed for nobody. `mon-fri` says what it means. apps/web/test/keepalive-worker.test.ts
+# reads this line and fails if the window moves.
+crons = ["*/4 4-13 * * mon-fri"]
+
+[observability]
+# Keep the one JSON line each run logs (Workers Logs, a page in the dashboard) so the
+# "latency record" this Worker promises exists days later and not only while
+# `wrangler tail` happens to be running. About 150 lines a day.
+enabled = true
