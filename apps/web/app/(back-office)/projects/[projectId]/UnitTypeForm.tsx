@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
 import { createUnitTypeAction } from "./actions";
 
@@ -9,7 +9,7 @@ import { createUnitTypeAction } from "./actions";
  *  gone, and with nothing left to switch the form needs no client state. */
 export function UnitTypeForm({ projectId }: { projectId: string }) {
   return (
-    <form action={createUnitTypeAction} className="flex flex-col gap-2 border-t border-border pt-3">
+    <ActionForm action={createUnitTypeAction} className="flex flex-col gap-2 border-t border-border pt-3">
       <input type="hidden" name="projectId" value={projectId} />
 
       <div className="flex gap-2">
@@ -19,9 +19,7 @@ export function UnitTypeForm({ projectId }: { projectId: string }) {
 
       <Input name="saleableArea" inputMode="decimal" placeholder="Plot area (sq yd)" required />
 
-      <Button type="submit" size="sm">
-        Add plot type
-      </Button>
-    </form>
+      <SubmitButton size="sm">Add plot type</SubmitButton>
+    </ActionForm>
   );
 }

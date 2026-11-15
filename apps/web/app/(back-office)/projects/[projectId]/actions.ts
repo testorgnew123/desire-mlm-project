@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { Prisma, getPrismaClient } from "@desire/db";
 import { createUnit, createUnitType } from "@desire/services/projects";
 import { createBlockWithPlots } from "@desire/services/blocks";
@@ -10,6 +9,7 @@ import { createDraftPriceList, publishPriceList } from "@desire/services/price-l
 import type { PlcCharge } from "@desire/services/price-lists";
 import { requireSession } from "@/lib/session";
 import { parsePlotGroups } from "@/lib/plot-groups";
+import type { ActionResult } from "@/lib/action-result";
 
 function auditFor(orgId: string, actorId: string, actorLabel: string) {
   return { orgId, actorId, actorLabel };
@@ -21,21 +21,22 @@ function auditFor(orgId: string, actorId: string, actorLabel: string) {
  *  pricelist.approve or scheme.approve is not a hypothetical, it is any
  *  role this page's own sidebar link is reachable from that isn't also
  *  the approver. Letting that throw uncaught crashes to Next's generic
- *  error page; caught here and shown inline instead, same discipline as
- *  the login flow. These are internal back-office actors, so the real
- *  service error message is safe (and useful) to show verbatim. */
-async function runAction(projectId: string, run: () => Promise<void>): Promise<void> {
+ *  error page; it is returned instead and the ActionForm shows it under the
+ *  form. These are internal back-office actors, so the real service error
+ *  message is safe (and useful) to show verbatim.
+ *
+ *  No redirect, success or failure: see lib/action-result.ts. revalidatePath
+ *  alone makes the response carry the refreshed page. */
+async function runAction(projectId: string, run: () => Promise<void>): Promise<ActionResult> {
   try {
     await run();
   } catch (error) {
-    if (error instanceof Error) {
-      redirect(`/projects/${projectId}?error=${encodeURIComponent(error.message)}`);
-    }
+    if (error instanceof Error) return { ok: false, error: error.message };
     throw error;
   }
 
   revalidatePath(`/projects/${projectId}`);
-  redirect(`/projects/${projectId}`);
+  return { ok: true };
 }
 
 /** The service errors are accurate but written for logs. This says what happened
@@ -56,7 +57,7 @@ function describePlotFailure(error: unknown): unknown {
 /** Adds a plotted block, with its plots when a count is given. Only blocks can be
  *  created (SCOPE.plotsOnly): createBlockWithPlots always makes a BLOCK, so there
  *  is no kind to read from the form and nothing a hand-made POST could change. */
-export async function createTowerAction(formData: FormData): Promise<void> {
+export async function createTowerAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
@@ -66,7 +67,7 @@ export async function createTowerAction(formData: FormData): Promise<void> {
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
 
-  await runAction(projectId, async () => {
+  return runAction(projectId, async () => {
     // A block sends NO floor count -- createTower rejects a block that declares
     // floors, which is the point of the rule. It sends plot rows instead: one
     // (count, type) pair per size, so a block can mix sizes.
@@ -100,14 +101,14 @@ export async function createTowerAction(formData: FormData): Promise<void> {
 
 /** Single-unit entry. The bulk CSV import is the realistic path for a
  *  township of 300 plots; this exists for the correction afterwards. */
-export async function createUnitAction(formData: FormData): Promise<void> {
+export async function createUnitAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
 
   const towerId = String(formData.get("towerId") ?? "") || null;
 
-  await runAction(projectId, () =>
+  return runAction(projectId, () =>
     createUnit(db, {
       projectId,
       towerId,
@@ -123,12 +124,12 @@ export async function createUnitAction(formData: FormData): Promise<void> {
 /** Adds a plot type. The basis is fixed to square yards here rather than read
  *  from the form: only plot types can be created (SCOPE.plotsOnly), and a plot
  *  has one area -- no bedrooms, carpet or built-up. */
-export async function createUnitTypeAction(formData: FormData): Promise<void> {
+export async function createUnitTypeAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
 
-  await runAction(projectId, () =>
+  return runAction(projectId, () =>
     createUnitType(db, {
       projectId,
       code: String(formData.get("code") ?? ""),
@@ -183,7 +184,7 @@ function toDecimal(raw: string, label: string): Prisma.Decimal {
   }
 }
 
-export async function createDraftPriceListAction(formData: FormData): Promise<void> {
+export async function createDraftPriceListAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const db = getPrismaClient();
@@ -191,9 +192,19 @@ export async function createDraftPriceListAction(formData: FormData): Promise<vo
   const unitTypeIds = formData.getAll("unitTypeId").map(String);
 
   // Parsing happens INSIDE runAction so a malformed number lands on the same
-  // inline error banner as a rejected business rule, rather than on Next's
-  // generic error page.
-  await runAction(projectId, async () => {
+  // inline error as a rejected business rule, rather than on Next's generic
+  // error page.
+  return runAction(projectId, async () => {
+    // Codes only to name a plot type in a refusal ("Base rate for PLOT-200 must be
+    // a number"), where the form posts the id.
+    const codeById = new Map(
+      (
+        await db.unitType.findMany({
+          where: { projectId, id: { in: unitTypeIds } },
+          select: { id: true, code: true },
+        })
+      ).map((type) => [type.id, type.code]),
+    );
     const items = unitTypeIds
       .map((unitTypeId) => ({
         unitTypeId,
@@ -202,7 +213,7 @@ export async function createDraftPriceListAction(formData: FormData): Promise<vo
       .filter((item) => item.rawRate !== "")
       .map((item) => ({
         unitTypeId: item.unitTypeId,
-        baseRate: toDecimal(item.rawRate, `Base rate for unit type ${item.unitTypeId}`),
+        baseRate: toDecimal(item.rawRate, `Base rate for ${codeById.get(item.unitTypeId) ?? "a plot type"}`),
         plcCharges: readPlcCharges(formData, item.unitTypeId),
       }));
 
@@ -218,13 +229,13 @@ export async function createDraftPriceListAction(formData: FormData): Promise<vo
   });
 }
 
-export async function publishPriceListAction(formData: FormData): Promise<void> {
+export async function publishPriceListAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const priceListId = String(formData.get("priceListId") ?? "");
   const db = getPrismaClient();
 
-  await runAction(projectId, () =>
+  return runAction(projectId, () =>
     publishPriceList(db, {
       priceListId,
       audit: auditFor(session.user.orgId, session.user.id, session.user.name),

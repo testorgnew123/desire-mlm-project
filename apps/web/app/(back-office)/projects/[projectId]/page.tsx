@@ -6,10 +6,10 @@ import { UNIT_FACINGS } from "@desire/services/unit-import";
 import { getActivePriceList } from "@desire/services/price-lists";
 import { parsePlcCharges } from "@desire/services/cost-sheet";
 import { requireSession } from "@/lib/session";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { formatArea } from "@/lib/money";
 import { describeGroupCounts, groupNoun } from "@/lib/groups";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -241,7 +241,7 @@ export default async function ProjectDetailPage({
                   facings={[...UNIT_FACINGS]}
                 />
 
-                <form
+                <ActionForm
                   action={createUnitAction}
                   className="flex flex-col gap-2 border-t border-border pt-3"
                 >
@@ -273,10 +273,8 @@ export default async function ProjectDetailPage({
                       ))}
                     </select>
                   </div>
-                  <Button type="submit" size="sm">
-                    Add one plot
-                  </Button>
-                </form>
+                  <SubmitButton size="sm">Add one plot</SubmitButton>
+                </ActionForm>
               </>
             )}
           </CardContent>
@@ -297,13 +295,13 @@ export default async function ProjectDetailPage({
                     item(s))
                   </span>
                   {priceList.status === "DRAFT" || priceList.status === "PENDING_APPROVAL" ? (
-                    <form action={publishPriceListAction}>
+                    <ActionForm action={publishPriceListAction} resetOnSuccess={false} className="flex flex-col items-end gap-1">
                       <input type="hidden" name="projectId" value={project.id} />
                       <input type="hidden" name="priceListId" value={priceList.id} />
-                      <Button type="submit" size="xs" variant="outline">
+                      <SubmitButton size="xs" variant="outline" pendingLabel="Publishing…">
                         Publish
-                      </Button>
-                    </form>
+                      </SubmitButton>
+                    </ActionForm>
                   ) : null}
                 </div>
               ))}
@@ -311,16 +309,30 @@ export default async function ProjectDetailPage({
             {unitTypes.length === 0 ? (
               <p className="text-xs text-muted-foreground">Add a unit type first.</p>
             ) : (
-              <form action={createDraftPriceListAction} className="flex flex-col gap-2 border-t border-border pt-3">
+              <ActionForm action={createDraftPriceListAction} className="flex flex-col gap-2 border-t border-border pt-3">
                 <input type="hidden" name="projectId" value={project.id} />
-                <Input name="name" placeholder="Price list name (e.g. Launch pricing)" required />
+                <Input
+                  name="name"
+                  aria-label="Price list name"
+                  placeholder="Price list name (e.g. Launch pricing)"
+                  required
+                />
                 {unitTypes.map((unitType) => (
                   <div key={unitType.id} className="flex flex-col gap-1.5">
                     <div className="flex items-center gap-2">
                       <Label className="w-24 shrink-0 text-xs">{unitType.code}</Label>
                       <input type="hidden" name="unitTypeId" value={unitType.id} />
+                      {/* The aria-label is load-bearing, not decoration. This input
+                          had only the sibling <Label> above (not associated with it)
+                          and, in the production build, an unnamed input here kept
+                          the page from repainting after ANY action on this screen:
+                          the server answered with the new data, the browser kept
+                          the old screen. Measured on `next start` (dev hides it):
+                          dropping this input, or giving it a name, restored an
+                          update in ~300 ms. */}
                       <Input
                         name={`rate_${unitType.id}`}
+                        aria-label={`Base rate for ${unitType.code}`}
                         defaultValue={activeRate(unitType.id)}
                         placeholder={
                           unitType.areaBasis === "SQYD" ? "Rate per sq yd" : "Rate per sq ft"
@@ -377,10 +389,10 @@ export default async function ProjectDetailPage({
                   Corner plots are marked on the Plots screen of each block. A tag left blank is not
                   priced, and a plot with that tag cannot be booked until it is.
                 </p>
-                <Button type="submit" size="sm">
+                <SubmitButton size="sm" pendingLabel="Creating…">
                   Create draft price list
-                </Button>
-              </form>
+                </SubmitButton>
+              </ActionForm>
             )}
           </CardContent>
         </Card>

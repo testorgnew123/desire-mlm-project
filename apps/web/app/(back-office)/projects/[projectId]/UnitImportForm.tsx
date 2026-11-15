@@ -22,6 +22,28 @@ interface ImportReport {
 const TEMPLATE_HEADER =
   "unitNumber,unitTypeCode,floor,facing,plcTags,carpetAreaOverride,saleableAreaOverride";
 
+/** One line for the whole file, in the user's words. The service's own message
+ *  ("rejected under ALL_OR_NOTHING: 149 problem(s) across 150 row(s)") is written
+ *  for logs and counts a problem per field, so a file whose every row has one bad
+ *  cell reads as "problems across all rows". */
+function describeRejection(report: ImportReport): string {
+  const badRows = new Set(report.errors.map((error) => error.rowNumber)).size;
+  return `Nothing was imported: ${badRows} of ${report.skipped} row(s) have a problem. Fix the file and upload it again.`;
+}
+
+/** The same problems, one line per column instead of one per cell: a file where
+ *  every row has the same mistake (a plot type that does not exist, say) is one
+ *  thing to fix, not 150. */
+function summariseByField(errors: RowError[]): Array<{ field: string; rows: number; example: RowError }> {
+  const groups = new Map<string, { rows: Set<number>; example: RowError }>();
+  for (const error of errors) {
+    const group = groups.get(error.field) ?? { rows: new Set<number>(), example: error };
+    group.rows.add(error.rowNumber);
+    groups.set(error.field, group);
+  }
+  return [...groups.entries()].map(([field, group]) => ({ field, rows: group.rows.size, example: group.example }));
+}
+
 /** Quoted only when it has to be, so each note stays ONE cell in a spreadsheet
  *  even though it contains commas -- and so a round trip through Excel, which
  *  quotes such cells itself, still parses to the same thing. */
@@ -56,6 +78,9 @@ function buildTemplate(unitTypes: ReadonlyArray<{ code: string }>, facings: read
     ),
     note(
       "carpetAreaOverride and saleableAreaOverride (optional): only when this plot differs from its plot type. Leave empty to use the type's area.",
+    ),
+    note(
+      "Filling down in Excel: dragging a cell such as PLOT-100 counts it up (PLOT-101, PLOT-102, ...) and those types do not exist. Copy the cell (Ctrl+C) and paste it over the rows instead.",
     ),
     note("Example - a corner plot (choose its block as the import target):"),
     `#B-17,${csvCell(plotCode)},,N,CORNER,,`,
@@ -119,8 +144,12 @@ export function UnitImportForm({
         return;
       }
 
-      if (body?.report) setReport(body.report);
-      setMessage(body?.detail ?? `Import failed (HTTP ${response.status}).`);
+      if (body?.report) {
+        setReport(body.report);
+        setMessage(describeRejection(body.report));
+      } else {
+        setMessage(body?.detail ?? `Import failed (HTTP ${response.status}).`);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Import failed.");
     } finally {
@@ -174,6 +203,17 @@ export function UnitImportForm({
         <p role="status" className={report ? "text-sm text-danger" : "text-sm text-success"}>
           {message}
         </p>
+      ) : null}
+
+      {report && report.errors.length > 0 ? (
+        <ul className="flex flex-col gap-1 text-xs">
+          {summariseByField(report.errors).map((group) => (
+            <li key={group.field}>
+              <span className="font-medium">{group.field}</span>: {group.rows} row(s). For example, row{" "}
+              {group.example.rowNumber + 1}: {group.example.message}
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {report && report.errors.length > 0 ? (

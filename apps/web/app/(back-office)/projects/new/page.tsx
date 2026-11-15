@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { requireSession } from "@/lib/session";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -51,7 +52,7 @@ export default async function NewProjectPage({
         </p>
       ) : null}
 
-      <form action={createProjectAction} className="flex flex-col gap-4">
+      <ActionForm action={createProjectAction} resetOnSuccess={false} className="flex flex-col gap-4">
         <Card>
           <CardHeader>
             <CardTitle>Identity</CardTitle>
@@ -150,12 +151,12 @@ export default async function NewProjectPage({
         </Card>
 
         <div className="flex gap-2">
-          <Button type="submit">Create project</Button>
+          <SubmitButton pendingLabel="Creating…">Create project</SubmitButton>
           <Button variant="ghost" nativeButton={false} render={<Link href="/projects" />}>
             Cancel
           </Button>
         </div>
-      </form>
+      </ActionForm>
     </div>
   );
 }

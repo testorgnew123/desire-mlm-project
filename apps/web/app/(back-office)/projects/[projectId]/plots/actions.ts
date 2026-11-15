@@ -1,11 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { blockUnit, unblockUnit } from "@desire/services/units";
 import { setUnitPlcTag } from "@desire/services/unit-tags";
 import { requireSession } from "@/lib/session";
+import type { ActionResult } from "@/lib/action-result";
 
 /** The ids ticked on the plots table. Duplicates dropped; the services cap the
  *  count and check every id belongs to this project, so nothing is trusted here. */
@@ -13,42 +13,37 @@ function pickedUnitIds(formData: FormData): string[] {
   return [...new Set(formData.getAll("unitId").map(String).filter(Boolean))];
 }
 
-function backTo(projectId: string, towerId: string, params: Record<string, string>): string {
-  const query = new URLSearchParams({ ...(towerId ? { block: towerId } : {}), ...params });
-  return `/projects/${projectId}/plots?${query.toString()}`;
-}
-
-/** Runs one change and comes back to the same block with a message. A refusal is
- *  an expected business answer (held plot, no permission), so it is shown inline,
- *  never a crash. redirect() throws, hence it is called after the try. */
+/** Runs one change and answers with a message for the form. A refusal is an
+ *  expected business answer (held plot, no permission), so it is returned and shown
+ *  inline, never a crash. No redirect: see lib/action-result.ts. */
 async function run(
   formData: FormData,
   change: (ctx: { projectId: string; unitIds: string[]; audit: { orgId: string; actorId: string; actorLabel: string } }) => Promise<string>,
-): Promise<void> {
+): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
-  const towerId = String(formData.get("towerId") ?? "");
   const unitIds = pickedUnitIds(formData);
 
-  let destination: string;
+  let message: string;
   try {
     if (unitIds.length === 0) throw new Error("Tick at least one plot first.");
-    const notice = await change({
+    message = await change({
       projectId,
       unitIds,
       audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
     });
-    destination = backTo(projectId, towerId, { notice });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    destination = backTo(projectId, towerId, { error: error.message });
+    return { ok: false, error: error.message };
   }
 
-  // The board and the phone grid read these plots too.
+  // This screen, plus what else reads these plots: the project page, the board
+  // and the phone grid.
+  revalidatePath(`/projects/${projectId}/plots`);
   revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/board/${projectId}`);
   revalidatePath(`/inventory/${projectId}`);
-  redirect(destination);
+  return { ok: true, message };
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -56,9 +51,9 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** Takes the ticked plots off sale, with one reason for all. One at a time under
  *  the hood: a plot that cannot be blocked (sold, or with a booking waiting) is
  *  reported by name and the others still go through. */
-export async function blockPlotsAction(formData: FormData): Promise<void> {
+export async function blockPlotsAction(formData: FormData): Promise<ActionResult> {
   const reason = String(formData.get("reason") ?? "");
-  await run(formData, async ({ unitIds, audit }) => {
+  return run(formData, async ({ unitIds, audit }) => {
     const db = getPrismaClient();
     const names = new Map(
       (await db.unit.findMany({ where: { id: { in: unitIds } }, select: { id: true, unitNumber: true } })).map((u) => [
@@ -85,8 +80,8 @@ export async function blockPlotsAction(formData: FormData): Promise<void> {
   });
 }
 
-export async function unblockPlotsAction(formData: FormData): Promise<void> {
-  await run(formData, async ({ unitIds, audit }) => {
+export async function unblockPlotsAction(formData: FormData): Promise<ActionResult> {
+  return run(formData, async ({ unitIds, audit }) => {
     const db = getPrismaClient();
     let done = 0;
     let skipped = 0;
@@ -104,18 +99,18 @@ export async function unblockPlotsAction(formData: FormData): Promise<void> {
   });
 }
 
-async function mark(formData: FormData, present: boolean): Promise<void> {
-  await run(formData, async ({ projectId, unitIds, audit }) => {
+async function mark(formData: FormData, present: boolean): Promise<ActionResult> {
+  return run(formData, async ({ projectId, unitIds, audit }) => {
     const result = await setUnitPlcTag(getPrismaClient(), { projectId, unitIds, tag: "CORNER", present, audit });
     const verb = present ? "Marked" : "Cleared";
     return `${verb} ${plural(result.changed, "plot")} as corner${result.unchanged ? ` (${result.unchanged} already ${present ? "were" : "were not"})` : ""}.`;
   });
 }
 
-export async function markCornerAction(formData: FormData): Promise<void> {
-  await mark(formData, true);
+export async function markCornerAction(formData: FormData): Promise<ActionResult> {
+  return mark(formData, true);
 }
 
-export async function clearCornerAction(formData: FormData): Promise<void> {
-  await mark(formData, false);
+export async function clearCornerAction(formData: FormData): Promise<ActionResult> {
+  return mark(formData, false);
 }

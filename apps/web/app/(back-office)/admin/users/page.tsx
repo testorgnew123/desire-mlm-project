@@ -7,10 +7,9 @@ import { listUsers } from "@desire/services/admin";
 import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { createUserAction, resetUserPasswordAction, updateUserRolesAction } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -28,12 +27,6 @@ const PAGE_SIZE = 50;
 
 interface UsersSearchParams {
   page?: string;
-  error?: string;
-  issued?: "created" | "reset";
-  to?: string;
-  emailed?: string;
-  tempPassword?: string;
-  note?: string;
 }
 
 /** Who may do what here is decided by the service (admin.ts): a Super Admin
@@ -42,9 +35,10 @@ interface UsersSearchParams {
  *  they can hand out is Associate.
  *
  *  New accounts and resets email the login ID and a temporary password to the
- *  person. The admin sees the password here only when that email did not go. */
+ *  person. The admin sees the password, under the button that was pressed, only
+ *  when that email did not go. */
 export default async function AdminUsersPage({ searchParams }: { searchParams: Promise<UsersSearchParams> }) {
-  const { page: rawPage, error, issued, to, emailed, tempPassword, note } = await searchParams;
+  const { page: rawPage } = await searchParams;
   // Clamped so a hand-edited ?page= cannot ask the database for an offset it cannot hold.
   const page = Math.min(1000, Math.max(1, Math.floor(Number(rawPage)) || 1));
   const session = await requireSession();
@@ -63,7 +57,6 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
   });
   const users = fetched.slice(0, PAGE_SIZE);
   const hasNext = fetched.length > PAGE_SIZE;
-  const what = issued === "reset" ? "Password reset" : "Account created";
 
   return (
     <div className="flex flex-col gap-4">
@@ -74,33 +67,14 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
         </Link>
       </div>
 
-      {error ? (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-
-      {issued && to && emailed ? (
-        <p role="status" className="text-sm text-success">
-          {what} for {to}. Their login ID and a temporary password were emailed to them; they choose their own at first sign-in.
-        </p>
-      ) : null}
-
-      {issued && to && tempPassword ? (
-        <p role="status" className="text-sm text-success">
-          {what} for {to}, but the email was not sent{note ? ` (${note})` : ""}. Give them this one-time temporary password:{" "}
-          <span className="font-mono font-semibold">{tempPassword}</span> — copy it now, it will not be shown again.
-        </p>
-      ) : null}
-
       <Card>
         <CardHeader>
           <CardTitle>New user</CardTitle>
         </CardHeader>
         <CardContent>
-          <form action={createUserAction} className="grid gap-2 sm:grid-cols-4">
-            <Input name="email" type="email" placeholder="Email" required />
-            <Input name="name" placeholder="Full name" required />
+          <ActionForm action={createUserAction} className="grid gap-2 sm:grid-cols-4">
+            <Input name="email" type="email" aria-label="Email" placeholder="Email" required />
+            <Input name="name" aria-label="Full name" placeholder="Full name" required />
             {canManageRoles ? (
               <select name="roleCode" defaultValue="" required className={FIELD_CLASS}>
                 <option value="" disabled>
@@ -118,10 +92,10 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                 <p className="flex items-center text-sm text-muted-foreground">Role: {ROLE_NAMES.ASSOCIATE}</p>
               </>
             )}
-            <Button type="submit" size="sm">
+            <SubmitButton size="sm" pendingLabel="Creating…">
               Create
-            </Button>
-          </form>
+            </SubmitButton>
+          </ActionForm>
           <p className="mt-2 text-xs text-muted-foreground">
             The login ID and a temporary password are emailed to them automatically.
           </p>
@@ -152,7 +126,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                   <td className="py-1.5 pr-4 tabular-nums">{user.lastLoginAt ? formatDate(user.lastLoginAt) : "Never"}</td>
                   <td className="py-1.5 pr-4">
                     {canManageRoles && user.id !== session.user.id ? (
-                      <form action={updateUserRolesAction} className="flex items-center gap-1.5">
+                      <ActionForm action={updateUserRolesAction} resetOnSuccess={false} className="flex flex-wrap items-center gap-1.5">
                         <input type="hidden" name="userId" value={user.id} />
                         <select
                           name="roleCode"
@@ -175,25 +149,27 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                             </option>
                           ))}
                         </select>
-                        <Button type="submit" size="xs">
+                        <SubmitButton size="xs" pendingLabel="Updating…">
                           Update
-                        </Button>
-                      </form>
+                        </SubmitButton>
+                      </ActionForm>
                     ) : (
                       user.roleCodes.map((code) => ROLE_NAMES[code as RoleCode] ?? code).join(", ")
                     )}
                   </td>
                   <td className="py-1.5 pr-4">
-                    <form action={resetUserPasswordAction}>
+                    <ActionForm action={resetUserPasswordAction} resetOnSuccess={false} className="flex max-w-xs flex-col gap-1">
                       <input type="hidden" name="userId" value={user.id} />
-                      <ConfirmSubmitButton
+                      <SubmitButton
                         size="xs"
                         variant="outline"
-                        message={`Reset the password for ${user.email}? They are signed out and emailed a new one.`}
+                        className="self-start"
+                        pendingLabel="Resetting…"
+                        confirm={`Reset the password for ${user.email}? They are signed out and emailed a new one.`}
                       >
                         Reset password
-                      </ConfirmSubmitButton>
-                    </form>
+                      </SubmitButton>
+                    </ActionForm>
                   </td>
                 </tr>
               ))}
