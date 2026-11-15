@@ -45,6 +45,17 @@ dashboard and add the cron trigger (`*/4 4-13 * * mon-fri`) and the `HEALTH_URL`
 variable (`https://crm.desirerealty.in/api/health`) by hand, and switch on
 Workers Logs in the Worker's settings.
 
+**One account step first.** Cloudflare will not store a cron schedule on an
+account that has no `workers.dev` subdomain, even for a Worker with no public URL:
+`wrangler deploy` uploads the script and then stops with error 10063 (this
+happened on the first deploy, 2026-11-15). Open **Workers & Pages** in the
+dashboard (it creates one the first time) or register a name there, then run
+`wrangler triggers deploy`, which re-saves just the schedule. The Worker has
+`workers_dev = false`, so no URL is published either way.
+
+`wrangler login --scopes account:read user:read workers_scripts:write` is enough
+for this Worker, and gives the login far less than the default.
+
 Cron changes can take up to 15 minutes to propagate.
 
 ## Verify
