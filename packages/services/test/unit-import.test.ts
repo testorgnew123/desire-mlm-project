@@ -6,8 +6,11 @@ import { describe, expect, it } from "vitest";
 import { Prisma } from "@desire/db";
 import {
   validateUnitImportRows,
+  validateUnitUpdateRows,
+  type ExistingUnitForUpdate,
   type RawUnitRow,
   type UnitImportContext,
+  type UnitUpdateContext,
 } from "../src/unit-import";
 
 const D = (v: string | number) => new Prisma.Decimal(v);
@@ -269,5 +272,180 @@ describe("plotted blocks", () => {
     });
     expect(errors).toEqual([]);
     expect(valid).toHaveLength(1);
+  });
+});
+
+// "Update plots that already exist": the same file read as changes to plots that
+// are already there. Pure, like the rest of this file: the plots, their status
+// and their sizes are passed in.
+describe("updating plots that already exist", () => {
+  const BLOCK = "block-a";
+  const plot = (unitNumber: string, over: Partial<ExistingUnitForUpdate> = {}): [string, ExistingUnitForUpdate] => [
+    unitNumber,
+    {
+      id: `id-${unitNumber}`,
+      towerId: BLOCK,
+      status: "AVAILABLE",
+      unitTypeCode: "PLOT-200",
+      facing: null,
+      plcTags: [],
+      saleableAreaOverride: null,
+      ...over,
+    },
+  ];
+  const contextFor = (...units: Array<[string, ExistingUnitForUpdate]>): UnitUpdateContext => ({
+    existingUnits: units,
+    targetTowerId: BLOCK,
+    unitTypeAreas: [
+      ["PLOT-200", { carpetArea: null, builtUpArea: null, saleableArea: D(200) }],
+      ["PLOT-300", { carpetArea: null, builtUpArea: null, saleableArea: D(300) }],
+    ],
+  });
+
+  it("changes only what the row says: a blank cell, or an empty tag list, keeps the plot as it is", () => {
+    const { changes, unchanged, errors } = validateUnitUpdateRows(
+      // The route hands plcTags over as [] for a blank cell.
+      [{ unitNumber: "A-01", unitTypeCode: "", floor: "", facing: "", plcTags: [], saleableAreaOverride: "210" }],
+      contextFor(plot("A-01", { facing: "N", plcTags: ["CORNER"] })),
+    );
+    expect(errors).toEqual([]);
+    expect(unchanged).toBe(0);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ rowNumber: 1, unitId: "id-A-01", unitNumber: "A-01" });
+    expect(changes[0]?.patch).toEqual({ saleableAreaOverride: D(210) });
+  });
+
+  it("changes type, size, facing and tags together, normalising what it is given", () => {
+    const { changes, errors } = validateUnitUpdateRows(
+      [{ unitNumber: "A-01", unitTypeCode: "PLOT-300", facing: "ne", plcTags: ["corner", "park facing"], saleableAreaOverride: "250.555" }],
+      contextFor(plot("A-01")),
+    );
+    expect(errors).toEqual([]);
+    expect(changes[0]?.patch).toEqual({
+      unitTypeCode: "PLOT-300",
+      facing: "NE",
+      plcTags: ["CORNER", "PARK_FACING"],
+      saleableAreaOverride: D("250.56"),
+    });
+  });
+
+  it("counts a row that already matches as unchanged, not as an error", () => {
+    const { changes, unchanged, errors } = validateUnitUpdateRows(
+      [
+        { unitNumber: "A-01", saleableAreaOverride: "200" }, // the type's own size
+        { unitNumber: "A-02", saleableAreaOverride: "210.00" }, // its own override already
+        { unitNumber: "A-03", facing: "n", plcTags: ["CORNER"], unitTypeCode: "PLOT-200" },
+        { unitNumber: "A-04" }, // names a plot and says nothing
+      ],
+      contextFor(
+        plot("A-01"),
+        plot("A-02", { saleableAreaOverride: D("210") }),
+        plot("A-03", { facing: "N", plcTags: ["CORNER"] }),
+        plot("A-04"),
+      ),
+    );
+    expect(errors).toEqual([]);
+    expect(changes).toEqual([]);
+    expect(unchanged).toBe(4);
+  });
+
+  it("changes the size of a blocked plot, but refuses to change size, type or tags of a held or sold one", () => {
+    const { changes, errors } = validateUnitUpdateRows(
+      [
+        { unitNumber: "A-01", saleableAreaOverride: "210" },
+        { unitNumber: "A-02", saleableAreaOverride: "210" },
+        { unitNumber: "A-03", plcTags: ["CORNER"] },
+        { unitNumber: "A-04", unitTypeCode: "PLOT-300" },
+      ],
+      contextFor(
+        plot("A-01", { status: "BLOCKED" }),
+        plot("A-02", { status: "HELD" }),
+        plot("A-03", { status: "BOOKED" }),
+        plot("A-04", { status: "HELD" }),
+      ),
+    );
+    expect(changes.map((change) => change.unitNumber)).toEqual(["A-01"]);
+    expect(errors.map((error) => [error.rowNumber, error.field])).toEqual([
+      [2, "unitNumber"],
+      [3, "unitNumber"],
+      [4, "unitNumber"],
+    ]);
+    expect(errors[0]?.message).toMatch(/Plot A-02 is held.*Block it first/);
+    expect(errors[1]?.message).toMatch(/Plot A-03 is sold.*Cancel its booking/);
+  });
+
+  it("still changes the facing of a held plot, and accepts a held plot the file leaves as it is", () => {
+    const { changes, unchanged, errors } = validateUnitUpdateRows(
+      [
+        { unitNumber: "A-01", facing: "S" },
+        { unitNumber: "A-02", saleableAreaOverride: "200" },
+      ],
+      contextFor(plot("A-01", { status: "HELD" }), plot("A-02", { status: "HELD" })),
+    );
+    expect(errors).toEqual([]);
+    expect(changes[0]?.patch).toEqual({ facing: "S" });
+    expect(unchanged).toBe(1);
+  });
+
+  it("never creates: an unknown plot, a plot in another block and a repeated plot are errors", () => {
+    const { changes, errors } = validateUnitUpdateRows(
+      [
+        { unitNumber: "Z-99", saleableAreaOverride: "210" },
+        { unitNumber: "B-01", saleableAreaOverride: "210" },
+        { unitNumber: "A-01", saleableAreaOverride: "210" },
+        { unitNumber: "A-01", saleableAreaOverride: "220" },
+        { unitNumber: "", saleableAreaOverride: "210" },
+      ],
+      contextFor(plot("A-01"), plot("B-01", { towerId: "block-b" })),
+    );
+    expect(changes.map((change) => change.unitNumber)).toEqual(["A-01"]);
+    expect(errors.map((error) => [error.rowNumber, error.field])).toEqual([
+      [1, "unitNumber"],
+      [2, "unitNumber"],
+      [4, "unitNumber"],
+      [5, "unitNumber"],
+    ]);
+    expect(errors[0]?.message).toMatch(/does not exist.*never creates/);
+    expect(errors[1]?.message).toMatch(/not in the block/);
+    expect(errors[2]?.message).toMatch(/more than once.*first on row 3/);
+  });
+
+  it("reports every bad cell of a row in one pass, and changes nothing for that row", () => {
+    const { changes, unchanged, errors } = validateUnitUpdateRows(
+      [
+        {
+          unitNumber: "A-01",
+          unitTypeCode: "NOPE",
+          floor: "2",
+          facing: "UP",
+          plcTags: ["corner", "bad tag!"],
+          carpetAreaOverride: "100",
+          saleableAreaOverride: "abc",
+        },
+      ],
+      contextFor(plot("A-01")),
+    );
+    expect(changes).toEqual([]);
+    expect(unchanged).toBe(0);
+    expect(fieldsFor(errors, 1)).toEqual([
+      "carpetAreaOverride",
+      "facing",
+      "floor",
+      "plcTags",
+      "saleableAreaOverride",
+      "unitTypeCode",
+    ]);
+  });
+
+  it("refuses a size of zero, below zero or beyond the column", () => {
+    const { errors } = validateUnitUpdateRows(
+      [
+        { unitNumber: "A-01", saleableAreaOverride: "0" },
+        { unitNumber: "A-02", saleableAreaOverride: "-5" },
+        { unitNumber: "A-03", saleableAreaOverride: "100000000" },
+      ],
+      contextFor(plot("A-01"), plot("A-02"), plot("A-03")),
+    );
+    expect(errors.map((error) => error.field)).toEqual(["saleableAreaOverride", "saleableAreaOverride", "saleableAreaOverride"]);
   });
 });

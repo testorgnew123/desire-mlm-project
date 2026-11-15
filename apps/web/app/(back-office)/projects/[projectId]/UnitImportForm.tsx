@@ -15,6 +15,10 @@ interface ImportReport {
   imported: number;
   skipped: number;
   errors: RowError[];
+  /** "Update plots that already exist" only: plots changed, and plots already as
+   *  the file says. */
+  updated?: number;
+  unchanged?: number;
   /** Lines the importer skipped because they start with # (notes/examples). */
   ignoredComments?: number;
 }
@@ -26,9 +30,9 @@ const TEMPLATE_HEADER =
  *  ("rejected under ALL_OR_NOTHING: 149 problem(s) across 150 row(s)") is written
  *  for logs and counts a problem per field, so a file whose every row has one bad
  *  cell reads as "problems across all rows". */
-function describeRejection(report: ImportReport): string {
+function describeRejection(report: ImportReport, updating: boolean): string {
   const badRows = new Set(report.errors.map((error) => error.rowNumber)).size;
-  return `Nothing was imported: ${badRows} of ${report.skipped} row(s) have a problem. Fix the file and upload it again.`;
+  return `Nothing was ${updating ? "changed" : "imported"}: ${badRows} of ${report.skipped} row(s) have a problem. Fix the file and upload it again.`;
 }
 
 /** The same problems, one line per column instead of one per cell: a file where
@@ -84,6 +88,11 @@ function buildTemplate(unitTypes: ReadonlyArray<{ code: string }>, facings: read
     ),
     note("Example - a corner plot (choose its block as the import target):"),
     `#B-17,${csvCell(plotCode)},,N,CORNER,,`,
+    note(
+      'To CHANGE plots that already exist (their size, plot type, facing or tags), tick "Update plots that already exist" before uploading. Then only unitNumber is needed on each row, and an empty cell keeps that value as it is. Nothing is created, the plot number and block cannot change, and a plot that is held or sold keeps its size, type and tags.',
+    ),
+    note("Example - change one plot's size to 210 sq yd (tick the box):"),
+    `#B-17,,,,,,210`,
   ];
   return `${lines.join("\r\n")}\r\n`;
 }
@@ -117,6 +126,9 @@ export function UnitImportForm({
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    const data = new FormData(form);
+    // Ticked: the file changes plots that already exist instead of adding new ones.
+    const updating = data.get("updateExisting") === "on";
     setBusy(true);
     setReport(null);
     setMessage(null);
@@ -124,7 +136,7 @@ export function UnitImportForm({
     try {
       const response = await fetch(`/api/v1/projects/${projectId}/units/import`, {
         method: "POST",
-        body: new FormData(form),
+        body: data,
         credentials: "same-origin",
       });
       const body = (await response.json().catch(() => null)) as
@@ -134,7 +146,9 @@ export function UnitImportForm({
       if (response.ok && body) {
         const ignored = body.ignoredComments ?? 0;
         setMessage(
-          `Imported ${body.imported} unit(s).` +
+          (updating
+            ? `Updated ${body.updated ?? 0} plot(s); ${body.unchanged ?? 0} already matched the file.`
+            : `Imported ${body.imported} unit(s).`) +
             (ignored > 0 ? ` Ignored ${ignored} line(s) starting with #.` : ""),
         );
         form.reset();
@@ -146,7 +160,7 @@ export function UnitImportForm({
 
       if (body?.report) {
         setReport(body.report);
-        setMessage(describeRejection(body.report));
+        setMessage(describeRejection(body.report, updating));
       } else {
         setMessage(body?.detail ?? `Import failed (HTTP ${response.status}).`);
       }
@@ -184,6 +198,11 @@ export function UnitImportForm({
         />
       </div>
 
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="updateExisting" />
+        Update plots that already exist
+      </label>
+
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={busy}>
           {busy ? "Importing…" : "Import CSV"}
@@ -197,6 +216,12 @@ export function UnitImportForm({
         The template explains each column and has an example plot. Lines starting with{" "}
         <code>#</code> are notes and are ignored. Leave <code>floor</code> empty. Nothing is
         imported unless every row is valid.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Tick <strong>Update plots that already exist</strong> to change plots instead of adding
+        them: only <code>unitNumber</code> is needed, an empty cell keeps the old value, and no plot
+        is created. Size, plot type and corner tags change only on plots that are free (not held or
+        sold).
       </p>
 
       {message ? (

@@ -14,10 +14,17 @@ afterAll(async () => {
 
 const HEADER = "unitNumber,unitTypeCode,floor,facing,plcTags,carpetAreaOverride,saleableAreaOverride";
 
-function upload(token: string | null, csv: string | null, towerId: string | null = w.block.id) {
+function upload(
+  token: string | null,
+  csv: string | null,
+  towerId: string | null = w.block.id,
+  updateExisting = false,
+) {
   const form = new FormData();
   if (csv !== null) form.set("file", new File([csv], "plots.csv", { type: "text/csv" }));
   if (towerId) form.set("towerId", towerId);
+  // A tick-box posts "on" when ticked and nothing at all when not.
+  if (updateExisting) form.set("updateExisting", "on");
   return importUnits(
     request(`/api/v1/projects/${w.project.id}/units/import`, { method: "POST", token, body: form }),
     params({ projectId: w.project.id }),
@@ -122,5 +129,61 @@ describe("POST /api/v1/projects/[projectId]/units/import", () => {
   it("answers 422 for a block that belongs to another project", async () => {
     const response = await upload(w.admin.token, `${HEADER}\nB-01,PLOT-200,,,,,\n`, "no-such-block");
     expect(response.status).toBe(422);
+  });
+});
+
+describe("POST /api/v1/projects/[projectId]/units/import with 'Update plots that already exist' ticked", () => {
+  const plotNamed = (unitNumber: string) =>
+    db.unit.findFirstOrThrow({ where: { projectId: w.project.id, unitNumber } });
+
+  it("changes the plots the file names, leaves blank cells alone, and creates nothing", async () => {
+    const csv = `${HEADER}\nA-01,,,S,CORNER,,210\nA-02,,,,,,\n`;
+    const response = await upload(w.admin.token, csv, w.block.id, true);
+
+    expect(response.status).toBe(200);
+    expect(await body(response)).toMatchObject({ imported: 0, updated: 1, unchanged: 1, skipped: 0 });
+    expect(await plotsNow()).toBe(3);
+    const changed = await plotNamed("A-01");
+    expect(changed).toMatchObject({ facing: "S", plcTags: ["CORNER"] });
+    expect(changed.saleableAreaOverride?.toString()).toBe("210");
+    expect((await plotNamed("A-02")).saleableAreaOverride).toBeNull();
+  });
+
+  it("answers 422 with the whole report and changes nothing when a row names a plot that does not exist", async () => {
+    const csv = `${HEADER}\nA-01,,,,,,210\nZ-99,,,,,,210\n`;
+    const response = await upload(w.admin.token, csv, w.block.id, true);
+
+    expect(response.status).toBe(422);
+    const json = (await body(response)) as { report: { errors: { rowNumber: number; message: string }[] } };
+    expect(json.report.errors.map((e) => e.rowNumber)).toEqual([2]);
+    expect(json.report.errors[0]?.message).toMatch(/does not exist/);
+    expect(await plotsNow()).toBe(3);
+    expect((await plotNamed("A-01")).saleableAreaOverride).toBeNull();
+  });
+
+  it("answers 422 when the size of a held plot would change", async () => {
+    await db.unit.update({ where: { id: w.plots[1]!.id }, data: { status: "HELD" } });
+    const response = await upload(w.admin.token, `${HEADER}\nA-02,,,,,,210\n`, w.block.id, true);
+
+    expect(response.status).toBe(422);
+    const json = (await body(response)) as { report: { errors: { message: string }[] } };
+    expect(json.report.errors[0]?.message).toMatch(/Plot A-02 is held/);
+    expect((await plotNamed("A-02")).saleableAreaOverride).toBeNull();
+  });
+
+  it("answers 403 to an associate, and 401 without a session", async () => {
+    const csv = `${HEADER}\nA-01,,,,,,210\n`;
+
+    expect((await upload(w.seller.token, csv, w.block.id, true)).status).toBe(403);
+    expect((await upload(null, csv, w.block.id, true)).status).toBe(401);
+    expect((await plotNamed("A-01")).saleableAreaOverride).toBeNull();
+  });
+
+  it("is off unless the box is ticked: the same file is refused as duplicates", async () => {
+    const response = await upload(w.admin.token, `${HEADER}\nA-01,PLOT-200,,,,,210\n`);
+
+    expect(response.status).toBe(422);
+    expect(await plotsNow()).toBe(3);
+    expect((await plotNamed("A-01")).saleableAreaOverride).toBeNull();
   });
 });

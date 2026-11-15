@@ -194,6 +194,10 @@ export async function POST(
   });
 
   const towerId = form.get("towerId");
+  // A tick-box, sent as "on" when ticked: read the rows as changes to plots that
+  // already exist in that block, not as new plots. Off unless asked for, so a file
+  // sent twice by mistake is still refused as duplicates rather than rewriting plots.
+  const updateExisting = form.get("updateExisting") === "on";
 
   try {
     const report = await importUnits(db, {
@@ -201,6 +205,7 @@ export async function POST(
       projectId,
       towerId: typeof towerId === "string" && towerId !== "" ? towerId : undefined,
       rows,
+      updateExisting,
       audit: {
         orgId: session.user.orgId,
         actorId: session.user.id,

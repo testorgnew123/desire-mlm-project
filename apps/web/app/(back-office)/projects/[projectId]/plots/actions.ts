@@ -2,9 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { getPrismaClient } from "@desire/db";
+import { updateUnit } from "@desire/services/projects";
+import { ForbiddenError } from "@desire/services/rbac";
 import { blockUnit, unblockUnit } from "@desire/services/units";
 import { setUnitPlcTag } from "@desire/services/unit-tags";
 import { requireSession } from "@/lib/session";
+import { MAX_PLOTS_PER_SIZE_CHANGE, MAX_SIZE_REASON_LENGTH, parsePlotSize } from "@/lib/plot-size";
 import type { ActionResult } from "@/lib/action-result";
 
 /** The ids ticked on the plots table. Duplicates dropped; the services cap the
@@ -113,4 +116,41 @@ export async function markCornerAction(formData: FormData): Promise<ActionResult
 
 export async function clearCornerAction(formData: FormData): Promise<ActionResult> {
   return mark(formData, false);
+}
+
+/** Gives the ticked plots one new size in square yards, with one reason for all.
+ *  The size is each plot's own override; the plot type's size is left alone. A
+ *  plot's size is its price, so a held or sold plot is refused by name (see
+ *  PRICE_EDITABLE_STATUSES) and the others still go through, one at a time like
+ *  blocking. */
+export async function changePlotSizeAction(formData: FormData): Promise<ActionResult> {
+  return run(formData, async ({ unitIds, audit }) => {
+    const size = parsePlotSize(String(formData.get("saleableArea") ?? ""));
+    const reason = String(formData.get("sizeReason") ?? "").trim();
+    if (reason === "") throw new Error("Give a reason for the new size.");
+    if (reason.length > MAX_SIZE_REASON_LENGTH) {
+      throw new Error(`The reason must be at most ${MAX_SIZE_REASON_LENGTH} characters.`);
+    }
+    if (unitIds.length > MAX_PLOTS_PER_SIZE_CHANGE) {
+      throw new Error(
+        `Tick at most ${MAX_PLOTS_PER_SIZE_CHANGE} plots at a time. To resize a whole block, use the CSV import with "Update plots that already exist".`,
+      );
+    }
+
+    const db = getPrismaClient();
+    let done = 0;
+    const refused: string[] = [];
+    for (const unitId of unitIds) {
+      try {
+        await updateUnit(db, { unitId, saleableAreaOverride: size, reason, audit });
+        done += 1;
+      } catch (error) {
+        // No permission fails every plot alike: say so once.
+        if (error instanceof ForbiddenError) throw error;
+        refused.push(error instanceof Error ? error.message : "A plot was refused.");
+      }
+    }
+    if (done === 0) throw new Error(`Nothing was changed. ${refused.join(" ")}`);
+    return `Changed ${plural(done, "plot")} to ${size} sq yd.${refused.length ? ` Not changed: ${refused.join(" ")}` : ""}`;
+  });
 }

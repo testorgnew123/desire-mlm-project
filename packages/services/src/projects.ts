@@ -20,6 +20,7 @@ import type {
   Project,
   Tower,
   UnitGroupKind,
+  UnitStatus,
   UnitType,
   Unit,
 } from "@desire/db";
@@ -88,6 +89,32 @@ export class InvalidUnitAreasError extends Error {
         `saleable ${saleableArea.toFixed(2)}).`,
     );
     this.name = "InvalidUnitAreasError";
+  }
+}
+
+/** A plot's size, type and corner tags are its price. The price a holder was
+ *  quoted, and the price frozen on a booking, must not move under them, so these
+ *  change only while the plot is free. It is the rule setUnitPlcTag (unit-tags.ts)
+ *  already applies to corner marking, kept in one place so updateUnit and the CSV
+ *  import agree with it. A hold that has expired but has not been swept yet still
+ *  reads HELD here, and is refused until the sweep runs. */
+export const PRICE_EDITABLE_STATUSES: readonly UnitStatus[] = ["AVAILABLE", "BLOCKED"];
+
+/** What to do about a plot whose price cannot change, in the words of the screens
+ *  that do it. Shared by the error below and by the CSV import's row messages. */
+export function priceLockedMessage(unitNumber: string, status: UnitStatus): string {
+  return status === "HELD"
+    ? `Plot ${unitNumber} is held, so its price cannot change under the holder. Block it first (that releases the hold), make the change, then unblock it.`
+    : `Plot ${unitNumber} is sold, so its price cannot change. Cancel its booking first, then make the change.`;
+}
+
+export class UnitPriceLockedError extends Error {
+  constructor(
+    public readonly unitNumber: string,
+    public readonly status: UnitStatus,
+  ) {
+    super(priceLockedMessage(unitNumber, status));
+    this.name = "UnitPriceLockedError";
   }
 }
 
@@ -291,7 +318,7 @@ function auditSnapshot(data: object): Record<string, unknown> {
 
 /** before/after limited to the keys actually being written, so an audit row
  *  for a one-field edit is readable rather than a full row dump. */
-function auditDiff(
+export function auditDiff(
   existing: object,
   patch: object,
 ): { before: Record<string, unknown>; after: Record<string, unknown> } {
@@ -811,6 +838,19 @@ export async function updateUnit(db: PrismaClient, params: UpdateUnitParams): Pr
     const projectId = existing.projectId;
     await loadProjectInOrg(tx, projectId, params.audit.orgId);
     await assertPermission(tx, actorId, "project.write", { projectId });
+
+    // Size, type and corner tags are the plot's price (PRICE_EDITABLE_STATUSES).
+    // Checked here, under the row lock above and after the permission check, so a
+    // hold or booking that lands between this read and the write cannot have a
+    // price change slipped underneath it.
+    const touchesPrice =
+      params.saleableAreaOverride !== undefined ||
+      params.carpetAreaOverride !== undefined ||
+      params.unitTypeId !== undefined ||
+      params.plcTags !== undefined;
+    if (touchesPrice && !PRICE_EDITABLE_STATUSES.includes(existing.status)) {
+      throw new UnitPriceLockedError(existing.unitNumber, existing.status);
+    }
 
     const overrides: UnitAreaOverrides = {
       carpetAreaOverride: patchOverride(params.carpetAreaOverride, existing.carpetAreaOverride),
