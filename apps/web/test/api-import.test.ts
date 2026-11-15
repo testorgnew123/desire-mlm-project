@@ -67,6 +67,21 @@ describe("POST /api/v1/projects/[projectId]/units/import", () => {
     expect(corner.plcTags.sort()).toEqual(["CORNER", "PARK_FACING"]);
   });
 
+  it("answers 400 with a plain message when an Excel workbook is uploaded instead of a CSV", async () => {
+    const form = new FormData();
+    // The first bytes of any .xlsx: a ZIP local-file header.
+    form.set("file", new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00])], "plots.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    form.set("towerId", w.block.id);
+    const response = await importUnits(
+      request(`/api/v1/projects/${w.project.id}/units/import`, { method: "POST", token: w.admin.token, body: form }),
+      params({ projectId: w.project.id }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(String((await body(response)).detail)).toMatch(/Excel workbook/);
+    expect(await plotsNow()).toBe(3);
+  });
+
   it("answers 422 with every bad row at once, and writes none of them", async () => {
     const csv = `${HEADER}\nB-01,PLOT-200,,,,,\nA-01,PLOT-200,,,,,\nB-03,NO-SUCH-TYPE,,,,,\n`;
     const response = await upload(w.admin.token, csv);

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { MAX_PLOTS_PER_BLOCK, describePlotRows } from "@desire/services/plot-numbering";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createTowerAction } from "./actions";
@@ -54,7 +55,13 @@ export function GroupForm({ projectId, plotTypes }: { projectId: string; plotTyp
   const remaining = (row: SizeRow) => Math.max(1, MAX_PLOTS_PER_BLOCK - (used - (Number(row.count) || 0)));
 
   return (
-    <form action={createTowerAction} className="flex flex-col gap-2 border-t border-border pt-3">
+    // resetOnSuccess off: the fields are React state, and the page remounts this
+    // form (key={towers.length}) once the new block exists.
+    <ActionForm
+      action={createTowerAction}
+      resetOnSuccess={false}
+      className="flex flex-col gap-2 border-t border-border pt-3"
+    >
       <input type="hidden" name="projectId" value={projectId} />
 
       <div className="grid gap-2 sm:grid-cols-2">
@@ -165,9 +172,9 @@ export function GroupForm({ projectId, plotTypes }: { projectId: string; plotTyp
         </p>
       )}
 
-      <Button type="submit" size="sm" disabled={incomplete || (filled.length > 0 && preview === null)}>
+      <SubmitButton size="sm" disabled={incomplete || (filled.length > 0 && preview === null)}>
         Add block
-      </Button>
-    </form>
+      </SubmitButton>
+    </ActionForm>
   );
 }

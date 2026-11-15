@@ -7,10 +7,9 @@ import { formatDate, formatDateTime } from "@/lib/format";
 import { bookingActions } from "@/lib/booking-actions";
 import { formatArea, formatMoney } from "@/lib/money";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { StatusBadge } from "@/components/status-badge";
 import { bookingStatusTone } from "@/lib/status-tone";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cancelBookingAction, clearPriceOverrideAction, confirmBookingAction, setPriceOverrideAction } from "./actions";
 
@@ -27,15 +26,8 @@ const FIELD_CLASS =
  *  confirmed here by an admin, and a confirmed one can be cancelled with a
  *  reason. The discount request, payment schedule and clawback preview that used
  *  to sit here belong to switched-off features (apps/web/lib/features.ts). */
-export default async function BookingDetailPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ bookingId: string }>;
-  searchParams: Promise<{ error?: string }>;
-}) {
+export default async function BookingDetailPage({ params }: { params: Promise<{ bookingId: string }> }) {
   const { bookingId } = await params;
-  const { error } = await searchParams;
   const session = await requireSession();
   const db = getPrismaClient();
 
@@ -97,12 +89,6 @@ export default async function BookingDetailPage({
         ) : null}
       </div>
 
-      {error ? (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-
       {booking.status === "DRAFT" ? (
         <Card>
           <CardHeader>
@@ -116,7 +102,10 @@ export default async function BookingDetailPage({
             </p>
             {confirmNote ? <p className="text-muted-foreground">{confirmNote}</p> : null}
             {permissions.has("booking.set_price") ? (
-              <form action={setPriceOverrideAction} className="flex flex-col gap-2 border-t border-border pt-3">
+              <ActionForm
+                actions={{ set: setPriceOverrideAction, clear: clearPriceOverrideAction }}
+                className="flex flex-col gap-2 border-t border-border pt-3"
+              >
                 <input type="hidden" name="bookingId" value={booking.id} />
                 <label className="flex flex-col gap-1 text-xs font-medium">
                   Agreed price (₹), replaces the price list
@@ -130,28 +119,30 @@ export default async function BookingDetailPage({
                   />
                 </label>
                 <div className="flex gap-2">
-                  <Button type="submit" size="sm" variant="outline">
+                  <SubmitButton name="intent" value="set" pendingLabel="Saving…" size="sm" variant="outline">
                     Set agreed price
-                  </Button>
+                  </SubmitButton>
                   {booking.priceOverride ? (
-                    <Button type="submit" size="sm" variant="ghost" formAction={clearPriceOverrideAction}>
+                    <SubmitButton name="intent" value="clear" pendingLabel="Saving…" size="sm" variant="ghost">
                       Use the list price
-                    </Button>
+                    </SubmitButton>
                   ) : null}
                 </div>
-              </form>
+              </ActionForm>
             ) : null}
             {canConfirm ? (
-              <form action={confirmBookingAction}>
+              <ActionForm action={confirmBookingAction} resetOnSuccess={false} className="flex flex-col gap-2">
                 <input type="hidden" name="bookingId" value={booking.id} />
-                <ConfirmSubmitButton
+                <SubmitButton
                   size="sm"
+                  className="self-start"
                   disabled={confirmDisabled}
-                  message={`Confirm booking ${booking.bookingNumber}? The plot is booked and the price is fixed.`}
+                  pendingLabel="Confirming…"
+                  confirm={`Confirm booking ${booking.bookingNumber}? The plot is booked and the price is fixed.`}
                 >
                   Confirm booking
-                </ConfirmSubmitButton>
-              </form>
+                </SubmitButton>
+              </ActionForm>
             ) : null}
           </CardContent>
         </Card>
@@ -225,24 +216,26 @@ export default async function BookingDetailPage({
             <CardTitle>Cancel this booking</CardTitle>
           </CardHeader>
           <CardContent>
-            <form action={cancelBookingAction} className="flex flex-col gap-2">
+            <ActionForm action={cancelBookingAction} resetOnSuccess={false} className="flex flex-col gap-2">
               <input type="hidden" name="bookingId" value={booking.id} />
               <textarea
                 name="reason"
                 placeholder="Cancellation reason (required)"
+                aria-label="Cancellation reason"
                 required
                 rows={2}
                 className={FIELD_CLASS}
               />
-              <ConfirmSubmitButton
+              <SubmitButton
                 size="sm"
                 variant="destructive"
                 className="self-start"
-                message={`Cancel booking ${booking.bookingNumber}? The plot goes back on sale.`}
+                pendingLabel="Cancelling…"
+                confirm={`Cancel booking ${booking.bookingNumber}? The plot goes back on sale.`}
               >
                 Cancel booking
-              </ConfirmSubmitButton>
-            </form>
+              </SubmitButton>
+            </ActionForm>
           </CardContent>
         </Card>
       ) : null}

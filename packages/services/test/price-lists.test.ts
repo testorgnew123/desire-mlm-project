@@ -9,6 +9,7 @@ import { Prisma, getPrismaClient } from "@desire/db";
 import { ForbiddenError } from "../src/rbac";
 import {
   PriceListNotEditableError,
+  PriceListNotPublishableError,
   createDraftPriceList,
   getActivePriceList,
   publishPriceList,
@@ -306,6 +307,45 @@ describe("immutability once published", () => {
         audit: ctx(ORG, preparer.id, "preparer"),
       }),
     ).rejects.toThrow(PriceListNotEditableError);
+  });
+
+  // These messages go to a person's screen verbatim. Publishing a list a second
+  // time is what a double click, or a screen still showing the Publish button,
+  // sends -- and the refusal used to read "Price list cmwhhlxly... cannot be
+  // published from status ACTIVE".
+  it("names the list, not its database id, when a published list is published or edited again", async () => {
+    const { project, unitType, preparer, approver } = await seed();
+    const draft = await createDraftPriceList(db, {
+      projectId: project.id,
+      name: "Launch pricing",
+      validFrom: new Date("2024-01-01"),
+      items: items(unitType.id, 5000),
+      audit: ctx(ORG, preparer.id, "preparer"),
+    });
+    await publishPriceList(db, { priceListId: draft.priceListId, audit: ctx(ORG, approver.id, "approver") });
+
+    const again = await publishPriceList(db, {
+      priceListId: draft.priceListId,
+      audit: ctx(ORG, approver.id, "approver"),
+    }).then(
+      () => null,
+      (error: Error) => error,
+    );
+    expect(again).toBeInstanceOf(PriceListNotPublishableError);
+    expect(again?.message).toBe('Price list "Launch pricing" (v1) cannot be published from status ACTIVE.');
+    expect(again?.message).not.toContain(draft.priceListId);
+
+    const edit = await replacePriceListItems(db, {
+      priceListId: draft.priceListId,
+      items: items(unitType.id, 9999),
+      audit: ctx(ORG, preparer.id, "preparer"),
+    }).then(
+      () => null,
+      (error: Error) => error,
+    );
+    expect(edit).toBeInstanceOf(PriceListNotEditableError);
+    expect(edit?.message).toContain('Price list "Launch pricing" (v1) is ACTIVE, not DRAFT.');
+    expect(edit?.message).not.toContain(draft.priceListId);
   });
 });
 
