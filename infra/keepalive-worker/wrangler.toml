@@ -2,7 +2,7 @@ name = "desire-keepalive"
 main = "src/index.js"
 compatibility_date = "2026-10-12"
 
-# No `routes` and no `workers_dev` entry, deliberately.
+# No `routes`, and `workers_dev = false`, deliberately.
 #
 # This Worker only ever runs on a schedule; it never needs to receive an
 # inbound request. Keeping it off the desirerealty.in zone's routes also
@@ -10,6 +10,13 @@ compatibility_date = "2026-10-12"
 # the request straight to the origin and bypass the Cloudflare proxy -- still
 # a valid keep-warm, but it would not exercise the edge path we actually want
 # warm.
+#
+# `workers_dev = false` because leaving it out does not mean "off": wrangler then
+# publishes the Worker to <name>.<account>.workers.dev, and the first deploy fails
+# until a workers.dev subdomain is registered (it did, 2026-11-15). A cron-only
+# Worker needs no public URL, and registering a subdomain is an account-wide
+# choice nobody here needs to make.
+workers_dev = false
 
 [vars]
 # The target is /api/health deliberately: unauthenticated, one SELECT 1, no
