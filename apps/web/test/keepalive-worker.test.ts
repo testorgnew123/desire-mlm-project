@@ -102,6 +102,12 @@ describe("the keep-warm schedule", () => {
     expect(istWeekdays(firings("*/4 4-13 * * 1-5"))).toEqual([0, 1, 2, 3, 4]);
   });
 
+  it("is published to no URL: it only ever runs on a schedule", () => {
+    // Left out, wrangler publishes to workers.dev and the first deploy fails until a subdomain is registered.
+    expect(toml).toMatch(/^workers_dev\s*=\s*false/m);
+    expect(toml).not.toMatch(/^routes\s*=/m);
+  });
+
   it("keeps each run's log line (Workers Logs is on)", () => {
     expect(toml).toMatch(/^\[observability\]\s*\n(?:#.*\n)*enabled\s*=\s*true/m);
   });
