@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CircleAlert, CircleCheck } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { ForbiddenError, assertPermission } from "@desire/services/rbac";
 import { getUnpricedPlcTags } from "@desire/services/unit-tags";
@@ -10,7 +10,7 @@ import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
 import { unitStatusTone } from "@/lib/status-tone";
 import { StatusBadge } from "@/components/status-badge";
-import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,18 +23,18 @@ export const metadata: Metadata = {
 };
 
 /** One block's plots, to block or unblock them and to mark which are corner.
- *  Plain forms: tick plots, press a button. Each button is a formAction on the one
- *  form, so there is no client code at all. What a person sees is gated by what
- *  they may do (unit.block, project.write); the services check again. */
+ *  Tick plots, press a button. The four buttons are the `intent` buttons of one
+ *  ActionForm, which shows what happened above the table. What a person sees is
+ *  gated by what they may do (unit.block, project.write); the services check again. */
 export default async function ProjectPlotsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ block?: string; error?: string; notice?: string }>;
+  searchParams: Promise<{ block?: string }>;
 }) {
   const { projectId } = await params;
-  const { block, error, notice } = await searchParams;
+  const { block } = await searchParams;
   const session = await requireSession();
   const db = getPrismaClient();
 
@@ -93,18 +93,6 @@ export default async function ProjectPlotsPage({
         </p>
       </div>
 
-      {error ? (
-        <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p role="status" className="flex items-start gap-1.5 text-sm text-success">
-          <CircleCheck className="mt-0.5 size-4 shrink-0" />
-          {notice}
-        </p>
-      ) : null}
       {unpriced.length > 0 ? (
         <p role="alert" className="flex items-start gap-1.5 text-sm text-warning">
           <CircleAlert className="mt-0.5 size-4 shrink-0" />
@@ -138,7 +126,17 @@ export default async function ProjectPlotsPage({
           </nav>
 
           {selected ? (
-            <form className="flex flex-col gap-3">
+            <ActionForm
+              id="plots"
+              feedback="top"
+              actions={{
+                block: blockPlotsAction,
+                unblock: unblockPlotsAction,
+                markCorner: markCornerAction,
+                clearCorner: clearCornerAction,
+              }}
+              className="flex flex-col gap-3"
+            >
               <input type="hidden" name="projectId" value={project.id} />
               <input type="hidden" name="towerId" value={selected.id} />
 
@@ -150,27 +148,29 @@ export default async function ProjectPlotsPage({
                         Reason (to block, required)
                         <Input name="reason" maxLength={MAX_BLOCK_REASON_LENGTH} placeholder="e.g. Title dispute" />
                       </label>
-                      <ConfirmSubmitButton
-                        formAction={blockPlotsAction}
-                        message="Take the ticked plots off sale? Anyone holding one loses the hold."
+                      <SubmitButton
+                        name="intent"
+                        value="block"
+                        confirm="Take the ticked plots off sale? Anyone holding one loses the hold."
+                        pendingLabel="Blocking…"
                         size="sm"
                         variant="destructive"
                       >
                         Block
-                      </ConfirmSubmitButton>
-                      <Button type="submit" formAction={unblockPlotsAction} size="sm" variant="outline">
+                      </SubmitButton>
+                      <SubmitButton name="intent" value="unblock" pendingLabel="Unblocking…" size="sm" variant="outline">
                         Unblock
-                      </Button>
+                      </SubmitButton>
                     </>
                   ) : null}
                   {canMark ? (
                     <>
-                      <Button type="submit" formAction={markCornerAction} size="sm" variant="outline">
+                      <SubmitButton name="intent" value="markCorner" pendingLabel="Marking…" size="sm" variant="outline">
                         Mark corner
-                      </Button>
-                      <Button type="submit" formAction={clearCornerAction} size="sm" variant="outline">
+                      </SubmitButton>
+                      <SubmitButton name="intent" value="clearCorner" pendingLabel="Clearing…" size="sm" variant="outline">
                         Clear corner
-                      </Button>
+                      </SubmitButton>
                     </>
                   ) : null}
                 </div>
@@ -222,7 +222,7 @@ export default async function ProjectPlotsPage({
                 confirmed or cancelled first. Held or sold plots cannot be marked or cleared as corner,
                 because the price would change under the buyer.
               </p>
-            </form>
+            </ActionForm>
           ) : null}
         </>
       )}

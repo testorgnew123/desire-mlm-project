@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CircleAlert } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { isHoldLive } from "@desire/services/holds";
 import { getCachedSessionPermissions, getSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
 import { formatDateTime } from "@/lib/format";
-import { Button } from "@/components/ui/button";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { bookPlotAction, releaseHoldFormAction } from "./actions";
@@ -25,13 +24,10 @@ export const metadata: Metadata = {
  *  it at submit, since the state can change in between. */
 export default async function BookPlotPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ projectId: string; unitId: string }>;
-  searchParams: Promise<{ error?: string }>;
 }) {
   const { projectId, unitId } = await params;
-  const { error } = await searchParams;
   const session = await getSession();
   if (!session) notFound();
   const db = getPrismaClient();
@@ -76,13 +72,6 @@ export default async function BookPlotPage({
         </p>
       </div>
 
-      {error ? (
-        <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
-          {error}
-        </p>
-      ) : null}
-
       {!associate ? (
         <p className="text-sm text-muted-foreground">
           Only an associate can book a plot, and this account has no associate profile.
@@ -94,7 +83,7 @@ export default async function BookPlotPage({
             : `This plot is ${unit.status.toLowerCase().replaceAll("_", " ")} and cannot be booked.`}
         </p>
       ) : (
-        <form action={bookPlotAction} className="flex flex-col gap-3">
+        <ActionForm action={bookPlotAction} resetOnSuccess={false} className="flex flex-col gap-3">
           <input type="hidden" name="projectId" value={projectId} />
           <input type="hidden" name="unitId" value={unit.id} />
           <div className="flex flex-col gap-1.5">
@@ -124,22 +113,22 @@ export default async function BookPlotPage({
               : "Booking holds the plot for you. "}
             An admin confirms the booking afterwards.
           </p>
-          <Button type="submit" className="w-full">
+          <SubmitButton className="w-full" pendingLabel="Booking…">
             Book this plot
-          </Button>
-        </form>
+          </SubmitButton>
+        </ActionForm>
       )}
 
       {heldByMe ? (
         // Not ready to book after all: give the plot back to everyone. Refused
         // while a draft booking from this hold waits for an admin.
-        <form action={releaseHoldFormAction}>
+        <ActionForm action={releaseHoldFormAction} resetOnSuccess={false} className="flex flex-col gap-2">
           <input type="hidden" name="projectId" value={projectId} />
           <input type="hidden" name="unitId" value={unit.id} />
-          <Button type="submit" variant="outline" className="w-full">
+          <SubmitButton variant="outline" className="w-full" pendingLabel="Releasing…">
             Release hold
-          </Button>
-        </form>
+          </SubmitButton>
+        </ActionForm>
       ) : null}
 
       <Link href={`/inventory/${projectId}`} className="text-center text-sm text-primary hover:underline">

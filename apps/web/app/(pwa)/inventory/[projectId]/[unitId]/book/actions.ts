@@ -1,24 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { bookPlot, releasePlotHold } from "@desire/services/plot-booking";
 import { describeHoldFailure } from "@/lib/hold-messages";
 import { requireSession } from "@/lib/session";
+import type { ActionResult } from "@/lib/action-result";
 
 /** The associate's one action: hold the plot (unless they already do), record
  *  the customer, draft the booking. All of the work and every rule is in
  *  bookPlot; this reads the form and says what happened. A refusal -- the plot
  *  was just taken, the quota is used up, the number is not a phone number -- comes
- *  back to the form as a message, not a crash.
- *
- *  redirect() throws, so it is called after the try, never inside it. */
-export async function bookPlotAction(formData: FormData): Promise<void> {
+ *  back to the form as a message, not a crash. Success sends the associate on to
+ *  My bookings (`redirectTo`, followed by the form). */
+export async function bookPlotAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const unitId = String(formData.get("unitId") ?? "");
-  const back = `/inventory/${projectId}/${unitId}/book`;
 
   let destination: string;
   try {
@@ -35,7 +33,7 @@ export async function bookPlotAction(formData: FormData): Promise<void> {
     });
     destination = `/my-bookings?booked=${encodeURIComponent(booked.bookingNumber)}`;
   } catch (error) {
-    if (error instanceof Error) redirect(`${back}?error=${encodeURIComponent(error.message)}`);
+    if (error instanceof Error) return { ok: false, error: error.message };
     throw error;
   }
 
@@ -43,18 +41,19 @@ export async function bookPlotAction(formData: FormData): Promise<void> {
   // list so neither shows the old state for up to staleTimes.dynamic seconds.
   revalidatePath(`/inventory/${projectId}`);
   revalidatePath("/my-bookings");
-  redirect(destination);
+  return { ok: true, redirectTo: destination };
 }
 
-/** Gives a held plot back, from the book page or from My bookings. Back to the
- *  plot grid, or to My bookings when that is where the button was. A refusal
- *  (someone else's hold, a draft is waiting for an admin) comes back as a message. */
-export async function releaseHoldFormAction(formData: FormData): Promise<void> {
+/** Gives a held plot back, from the book page or from My bookings. From the book
+ *  page it goes back to the plot grid; from My bookings it stays there and the
+ *  list refreshes. A refusal (someone else's hold, a draft is waiting for an admin)
+ *  comes back as a message under the button. */
+export async function releaseHoldFormAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const projectId = String(formData.get("projectId") ?? "");
   const unitId = String(formData.get("unitId") ?? "");
-  // Only these two places, never a posted address: no open redirect.
-  const home = formData.get("next") === "/my-bookings" ? "/my-bookings" : `/inventory/${projectId}`;
+  // Only the two known places, never a posted address: no open redirect.
+  const fromMyBookings = formData.get("next") === "/my-bookings";
 
   try {
     await releasePlotHold(getPrismaClient(), {
@@ -62,10 +61,10 @@ export async function releaseHoldFormAction(formData: FormData): Promise<void> {
       audit: { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name },
     });
   } catch (error) {
-    redirect(`${home === "/my-bookings" ? home : `/inventory/${projectId}/${unitId}/book`}?error=${encodeURIComponent(describeHoldFailure(error))}`);
+    return { ok: false, error: describeHoldFailure(error) };
   }
 
   revalidatePath(`/inventory/${projectId}`);
   revalidatePath("/my-bookings");
-  redirect(home);
+  return fromMyBookings ? { ok: true } : { ok: true, redirectTo: `/inventory/${projectId}` };
 }

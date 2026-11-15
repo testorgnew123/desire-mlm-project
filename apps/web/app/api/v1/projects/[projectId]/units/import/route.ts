@@ -147,7 +147,20 @@ export async function POST(
     return problemResponse(400, "bad-request", "Bad Request", "Attach a CSV file.");
   }
 
-  const { rows: table, comments: ignoredComments } = parseCsv(await file.text());
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // An .xlsx is a ZIP ("PK"). Read as text it is garbage, and the importer would
+  // answer with nonsense problems about rows that are not in the file, which is
+  // how a workbook saved from Excel reads as "12 problems in 6 rows".
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
+    return problemResponse(
+      400,
+      "bad-request",
+      "Bad Request",
+      "That is an Excel workbook, not a CSV file. In Excel choose File > Save As > CSV UTF-8 (Comma delimited), then upload the .csv.",
+    );
+  }
+
+  const { rows: table, comments: ignoredComments } = parseCsv(new TextDecoder().decode(bytes));
   if (table.length < 2) {
     return problemResponse(
       400,

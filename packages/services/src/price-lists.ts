@@ -41,12 +41,30 @@ export class PriceListProjectNotFoundError extends Error {
   }
 }
 
+/** What a message needs to call a price list by its name. Optional everywhere: the
+ *  one caller with no row to read it from (a list that was not found) falls back
+ *  to the id. */
+export interface PriceListLabel {
+  name?: string | null;
+  version?: number | null;
+}
+
+/** `Price list "Launch pricing" (v2)` -- how an error names a list. These
+ *  messages reach a person's screen verbatim, and a database id
+ *  ("Price list cmwhhlxly000009jnp33dbepm cannot be published...") tells them
+ *  nothing about which list is meant. */
+function describePriceList(id: string, label?: PriceListLabel): string {
+  if (!label?.name) return `Price list ${id}`;
+  return `Price list "${label.name}"${label.version == null ? "" : ` (v${label.version})`}`;
+}
+
 export class PriceListNotPublishableError extends Error {
   constructor(
     public readonly priceListId: string,
     public readonly status: PublishStatus,
+    label?: PriceListLabel,
   ) {
-    super(`Price list ${priceListId} cannot be published from status ${status}.`);
+    super(`${describePriceList(priceListId, label)} cannot be published from status ${status}.`);
     this.name = "PriceListNotPublishableError";
   }
 }
@@ -54,8 +72,11 @@ export class PriceListNotPublishableError extends Error {
 /** Publishing a list with no items would satisfy the "an ACTIVE price list
  *  exists" hold guard in holds.ts while leaving every unit unpriceable. */
 export class EmptyPriceListError extends Error {
-  constructor(public readonly priceListId: string) {
-    super(`Price list ${priceListId} has no items; there is nothing to publish.`);
+  constructor(
+    public readonly priceListId: string,
+    label?: PriceListLabel,
+  ) {
+    super(`${describePriceList(priceListId, label)} has no items; there is nothing to publish.`);
     this.name = "EmptyPriceListError";
   }
 }
@@ -64,9 +85,10 @@ export class PriceListNotEditableError extends Error {
   constructor(
     public readonly priceListId: string,
     public readonly status: PublishStatus,
+    label?: PriceListLabel,
   ) {
     super(
-      `Price list ${priceListId} is ${status}, not DRAFT. Published price lists are immutable ` +
+      `${describePriceList(priceListId, label)} is ${status}, not DRAFT. Published price lists are immutable ` +
         `(docs/06-INVENTORY-SPEC.md section 5) -- create a new version instead.`,
     );
     this.name = "PriceListNotEditableError";
@@ -267,9 +289,9 @@ export async function createDraftPriceList(
 
 /** The immutability guard. Exported so any future price-list mutation has one
  *  place to call rather than re-deriving the rule. */
-export function assertPriceListEditable(list: { id: string; status: PublishStatus }): void {
+export function assertPriceListEditable(list: { id: string; status: PublishStatus } & PriceListLabel): void {
   if (list.status !== "DRAFT") {
-    throw new PriceListNotEditableError(list.id, list.status);
+    throw new PriceListNotEditableError(list.id, list.status, list);
   }
 }
 
@@ -310,7 +332,7 @@ export async function replacePriceListItems(
 
     const list = await tx.priceList.findUniqueOrThrow({
       where: { id: params.priceListId },
-      select: { id: true, status: true, _count: { select: { items: true } } },
+      select: { id: true, name: true, version: true, status: true, _count: { select: { items: true } } },
     });
     assertPriceListEditable(list);
 
@@ -397,6 +419,7 @@ export async function publishPriceList(
         select: {
           id: true,
           projectId: true,
+          name: true,
           version: true,
           status: true,
           preparedById: true,
@@ -413,10 +436,10 @@ export async function publishPriceList(
       });
       const selfApproved = list.preparedById === approvedById;
       if (list.status !== "DRAFT" && list.status !== "PENDING_APPROVAL") {
-        throw new PriceListNotPublishableError(list.id, list.status);
+        throw new PriceListNotPublishableError(list.id, list.status, list);
       }
       if (list._count.items === 0) {
-        throw new EmptyPriceListError(list.id);
+        throw new EmptyPriceListError(list.id, list);
       }
 
       const incumbents = await tx.priceList.findMany({

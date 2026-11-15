@@ -1,31 +1,33 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import { createProject } from "@desire/services/projects";
 import { requireSession } from "@/lib/session";
+import type { ActionResult } from "@/lib/action-result";
 
 /** Same discipline as projects/[projectId]/actions.ts: a caller without an
  *  ORG-WIDE project.write grant is a real, expected case (a project-scoped
  *  Project Manager cannot create a new project -- see createProject), as is a
  *  duplicate project code. Letting either throw uncaught lands on Next's
- *  generic error page; caught here and shown inline instead. These are
- *  internal back-office actors, so the service's own message is safe and
- *  useful to show verbatim. */
-async function runCreate(run: () => Promise<string>): Promise<void> {
+ *  generic error page; it is returned instead and the ActionForm shows it under
+ *  the form. These are internal back-office actors, so the service's own message
+ *  is safe and useful to show verbatim.
+ *
+ *  Success hands back where to go (`redirectTo`) rather than calling redirect():
+ *  the client navigates itself, with a hard-navigation fallback if the router
+ *  stalls (see components/action-form.tsx). */
+async function runCreate(run: () => Promise<string>): Promise<ActionResult> {
   let projectId: string;
   try {
     projectId = await run();
   } catch (error) {
-    if (error instanceof Error) {
-      redirect(`/projects/new?error=${encodeURIComponent(error.message)}`);
-    }
+    if (error instanceof Error) return { ok: false, error: error.message };
     throw error;
   }
 
   revalidatePath("/projects");
-  redirect(`/projects/${projectId}`);
+  return { ok: true, redirectTo: `/projects/${projectId}` };
 }
 
 /** Empty strings from a form are not the same as "not supplied" -- an empty
@@ -45,11 +47,11 @@ function optionalInt(value: FormDataEntryValue | null): number | undefined {
   return text === null ? undefined : Number(text);
 }
 
-export async function createProjectAction(formData: FormData): Promise<void> {
+export async function createProjectAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const db = getPrismaClient();
 
-  await runCreate(async () => {
+  return runCreate(async () => {
     const project = await createProject(db, {
       code: String(formData.get("code") ?? "").trim(),
       name: String(formData.get("name") ?? "").trim(),

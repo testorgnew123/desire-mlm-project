@@ -1,11 +1,13 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import type { NotificationChannel, RoleCode } from "@desire/db";
 import { createUser, resetUserPassword, updateUserRoles, type IssuedCredentials } from "@desire/services/admin";
 import { createNotificationRule, updateNotificationRule } from "@desire/services/notifications";
 import { requireSession } from "@/lib/session";
+import type { ActionResult } from "@/lib/action-result";
 
 function auditFor(session: { user: { orgId: string; id: string; name: string } }) {
   return { orgId: session.user.orgId, actorId: session.user.id, actorLabel: session.user.name };
@@ -24,46 +26,50 @@ async function runAction(path: string, run: () => Promise<void>): Promise<void> 
   redirect(path);
 }
 
-/** Where to send the admin after credentials were issued. The login details go to
+/** What the admin is told after credentials were issued. The login details go to
  *  the person by email; the admin sees the temporary password only when that
- *  email did not go, as a one-time query param so they can pass it on by hand
- *  (never logged, never persisted anywhere except as the row's own argon2id
- *  hash). */
-function issuedDestination(kind: "created" | "reset", issued: IssuedCredentials): string {
-  const query = new URLSearchParams({ issued: kind, to: issued.email });
+ *  email did not go, so they can pass it on by hand. It is returned as the
+ *  result's `secret` -- held in the form's memory, shown once -- and no longer as
+ *  a query param, which left the password in the address bar and the browser's
+ *  history (never logged, never persisted anywhere except as the row's own
+ *  argon2id hash). */
+function issuedResult(kind: "created" | "reset", issued: IssuedCredentials): ActionResult {
+  const what = kind === "reset" ? "Password reset" : "Account created";
   if (issued.emailSent) {
-    query.set("emailed", "1");
-  } else {
-    query.set("tempPassword", issued.temporaryPassword);
-    if (issued.emailNote) query.set("note", issued.emailNote);
+    return {
+      ok: true,
+      message: `${what} for ${issued.email}. Their login ID and a temporary password were emailed to them; they choose their own at first sign-in.`,
+    };
   }
-  return `/admin/users?${query.toString()}`;
+  return {
+    ok: true,
+    message:
+      `${what} for ${issued.email}, but the email was not sent${issued.emailNote ? ` (${issued.emailNote})` : ""}. ` +
+      "Give them this one-time temporary password (copy it now, it will not be shown again):",
+    secret: issued.temporaryPassword,
+  };
 }
 
-/** redirect() works by throwing, so it must never run inside the try whose catch
- *  turns every Error into `?error=`: it used to, which swallowed the redirect
- *  that carried the temporary password. Work inside the try, redirect after. */
 async function issueCredentials(
   kind: "created" | "reset",
   run: () => Promise<IssuedCredentials>,
-): Promise<void> {
-  let destination: string;
+): Promise<ActionResult> {
+  let issued: IssuedCredentials;
   try {
-    destination = issuedDestination(kind, await run());
+    issued = await run();
   } catch (error) {
-    if (error instanceof Error) {
-      redirect(`/admin/users?error=${encodeURIComponent(error.message)}`);
-    }
+    if (error instanceof Error) return { ok: false, error: error.message };
     throw error;
   }
-  redirect(destination);
+  revalidatePath("/admin/users");
+  return issuedResult(kind, issued);
 }
 
-export async function createUserAction(formData: FormData): Promise<void> {
+export async function createUserAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const db = getPrismaClient();
 
-  await issueCredentials("created", () =>
+  return issueCredentials("created", () =>
     createUser(db, {
       email: String(formData.get("email") ?? ""),
       name: String(formData.get("name") ?? ""),
@@ -73,26 +79,31 @@ export async function createUserAction(formData: FormData): Promise<void> {
   );
 }
 
-export async function resetUserPasswordAction(formData: FormData): Promise<void> {
+export async function resetUserPasswordAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const db = getPrismaClient();
 
-  await issueCredentials("reset", () =>
+  return issueCredentials("reset", () =>
     resetUserPassword(db, { userId: String(formData.get("userId") ?? ""), audit: auditFor(session) }),
   );
 }
 
-export async function updateUserRolesAction(formData: FormData): Promise<void> {
+export async function updateUserRolesAction(formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
   const db = getPrismaClient();
 
-  await runAction("/admin/users", () =>
-    updateUserRoles(db, {
+  try {
+    await updateUserRoles(db, {
       userId: String(formData.get("userId") ?? ""),
       roleCode: String(formData.get("roleCode") ?? "") as RoleCode,
       audit: auditFor(session),
-    }).then(() => undefined),
-  );
+    });
+  } catch (error) {
+    if (error instanceof Error) return { ok: false, error: error.message };
+    throw error;
+  }
+  revalidatePath("/admin/users");
+  return { ok: true, message: "Role updated." };
 }
 
 export async function createNotificationRuleAction(formData: FormData): Promise<void> {

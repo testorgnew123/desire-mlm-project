@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ClipboardList, CircleAlert, CircleCheck } from "lucide-react";
+import { ClipboardList, CircleCheck } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
 import { listBookings } from "@desire/services/bookings";
 import { getMyHolds } from "@desire/services/plot-booking";
@@ -11,6 +11,7 @@ import { formatMoney, formatMoneyCompact } from "@/lib/money";
 import { bookingStatusTone } from "@/lib/status-tone";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Button } from "@/components/ui/button";
 import { releaseHoldFormAction } from "../inventory/[projectId]/[unitId]/book/actions";
 
@@ -27,9 +28,9 @@ export const metadata: Metadata = {
 export default async function MyBookingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ booked?: string; error?: string }>;
+  searchParams: Promise<{ booked?: string }>;
 }) {
-  const { booked, error } = await searchParams;
+  const { booked } = await searchParams;
   const session = await requireSession();
   const db = getPrismaClient();
 
@@ -66,13 +67,6 @@ export default async function MyBookingsPage({
         <p role="status" className="flex items-start gap-1.5 text-sm text-success">
           <CircleCheck className="mt-0.5 size-4 shrink-0" />
           Booking {booked} created. It is waiting for an admin to confirm it.
-        </p>
-      ) : null}
-
-      {error ? (
-        <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
-          {error}
         </p>
       ) : null}
 
@@ -115,7 +109,7 @@ export default async function MyBookingsPage({
                     Booked as {hold.draftBookingNumber}, waiting for an admin to confirm.
                   </p>
                 ) : (
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap items-start gap-2">
                     <Button
                       nativeButton={false}
                       render={<Link href={`/inventory/${hold.projectId}/${hold.unitId}/book`} />}
@@ -123,14 +117,14 @@ export default async function MyBookingsPage({
                     >
                       Book
                     </Button>
-                    <form action={releaseHoldFormAction}>
+                    <ActionForm action={releaseHoldFormAction} resetOnSuccess={false} className="flex flex-col gap-1">
                       <input type="hidden" name="projectId" value={hold.projectId} />
                       <input type="hidden" name="unitId" value={hold.unitId} />
                       <input type="hidden" name="next" value="/my-bookings" />
-                      <Button type="submit" variant="outline" size="sm">
+                      <SubmitButton variant="outline" size="sm" pendingLabel="Releasing…">
                         Release
-                      </Button>
-                    </form>
+                      </SubmitButton>
+                    </ActionForm>
                   </div>
                 )}
               </li>

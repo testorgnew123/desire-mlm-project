@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { CircleAlert, CircleCheck } from "lucide-react";
 import { mailSettingsStatus } from "@desire/services/email";
 import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { getPrismaClient } from "@desire/db";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { sendTestEmailAction } from "./actions";
@@ -20,12 +19,7 @@ export const metadata: Metadata = {
  *  values) and a button that sends one real message and says exactly why it did
  *  not go. Everything that mails people (new accounts, password resets, booking
  *  confirmations) uses these same settings. */
-export default async function AdminMailPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ sent?: string; error?: string }>;
-}) {
-  const { sent, error } = await searchParams;
+export default async function AdminMailPage() {
   const session = await requireSession();
   const permissions = await getCachedSessionPermissions(getPrismaClient(), session.user.id);
   if (!permissions.has("user.manage")) notFound();
@@ -41,19 +35,6 @@ export default async function AdminMailPage({
           New-user logins, password resets and booking emails are all sent with these settings.
         </p>
       </div>
-
-      {sent ? (
-        <p role="status" className="flex items-start gap-1.5 text-sm text-success">
-          <CircleCheck className="mt-0.5 size-4 shrink-0" />
-          Sent. Check that inbox, and its spam folder, to be sure it arrived.
-        </p>
-      ) : null}
-      {error ? (
-        <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
-          {error}
-        </p>
-      ) : null}
 
       <Card>
         <CardHeader>
@@ -90,15 +71,15 @@ export default async function AdminMailPage({
           <CardDescription>Sends one real message to the address you give.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form action={sendTestEmailAction} className="flex flex-wrap items-end gap-2">
+          <ActionForm action={sendTestEmailAction} resetOnSuccess={false} className="flex flex-wrap items-end gap-2">
             <label className="flex min-w-64 flex-1 flex-col gap-1 text-xs font-medium">
               Send to
               <Input name="to" type="email" required autoComplete="off" placeholder="you@example.com" />
             </label>
-            <Button type="submit" size="sm">
+            <SubmitButton size="sm" pendingLabel="Sending…">
               Send test email
-            </Button>
-          </form>
+            </SubmitButton>
+          </ActionForm>
         </CardContent>
       </Card>
     </div>
