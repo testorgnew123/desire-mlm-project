@@ -435,6 +435,82 @@
 > | Fewer round trips on the request path | Every kept page lost 3-4 statements to the two joins; the table above has each route's count. The budget's "≤ 4 sequential round trips per page" was framed in round trips but measured in statements; pages that read in parallel (the PWA grid, the board) are shallower than their count, the rest are not provably ≤ 4. |
 > | Hold, draft and confirm cut by ≥ 40% | **Not met**: hold 23 → 18 (-22%), draft 25 → 20 (-20%), confirm 35 → 30 (-14%), cancel 19 → 15 (-21%), nearly all of it from the permission and session joins. Reason above. Reason above. |
 
+> ## Round seven, 2026-11-15: server work against the network floor, and mail inside the request
+>
+> The ask was "every API under 200-300 ms". This round measures what the floor
+> is, what server work adds to it, and what booking mail does inside a request.
+>
+> ### The network floor (live site, read-only)
+>
+> Logged-out `GET /api/health` (4-7 ms of app work), from the developer's PC,
+> 8 interleaved pairs, one connection per host:
+>
+> | Path | Warm request, median (range) | A fresh connection adds | First request after idle |
+> |---|---|---|---|
+> | Cloudflare (`crm.desirerealty.in`) | 0.28 s (0.26-0.43) | 0.28 s | 9.05 s |
+> | The Netlify host directly (skips Cloudflare) | 0.26 s (0.25-0.42) | 0.29 s | not measured |
+>
+> Cloudflare costs about 0.03 s. A first four-request sample suggested 0.18 s and
+> the interleaved run did not reproduce it, so do not decide anything from a short
+> sample. Cloudflare served this PC from Paris (`colo=CDG`), a far point of
+> presence, so another network may read differently.
+>
+> Round trip (TCP connect, best of two) from the same PC to public AWS endpoints:
+> Mumbai 0.061 s, Hyderabad 0.112, Frankfurt 0.147, **Singapore 0.185,
+> Ohio 0.231**. Singapore, the region the ADR once planned, is barely nearer than
+> Ohio from here, so "about 60-80 ms" is not proven for this network. Netlify's
+> function regions (Pro and Enterprise only) include `sin` but nothing in India;
+> Neon has no India region and cannot move a project between regions; the client
+> ruled out every paid service on 2026-09-13 ([21](21-TIER-LIMITS.md) §8).
+>
+> **What follows:** about 0.25 s of every dynamic request is distance to Ohio, so
+> 200 ms cannot be met by code, and 300 ms leaves about 40 ms for the server. The
+> two items that are not distance are the 9 s cold hit (the keep-warm Worker in
+> `infra/keepalive-worker`, a Cloudflare deploy) and mail inside the request.
+>
+> ### Statements per request (local production build, Postgres `log_min_duration_statement = 0`)
+>
+> Statement counts are exact, milliseconds are not (round five's note applies).
+> The QA project here had far more plot types than a real one, so the project page
+> is heavier than it would be in use.
+>
+> | Request | Before (main `08b8ba9`) | After | Round five final |
+> |---|---|---|---|
+> | `POST` hold | 17 | 17 | 18 |
+> | `POST` draft booking | 26 | 20 | 20 |
+> | `POST` confirm | 35 | 24 | 30 |
+> | `POST` cancel | 20 | 15 | 15 |
+>
+> Round five's column is another dataset (2,000 plots) and predates booking mail.
+> The mail added five or six statements to each mutation after commit: one read per
+> thing the email quotes. Two changes took them out: the email's facts are one
+> joined read, and the Prisma `relationJoins` preview feature makes every nested
+> read one statement (the commission scheme lookup in a confirm went from six
+> statements to one). Pages read one to four statements fewer.
+>
+> ### Mail inside the request
+>
+> A booking waiting, confirmed or cancelled sends mail while the person waits, on a
+> fresh SMTP connection per message (about ten round trips each, no pool). With a
+> test mail server that answers each command after 250 ms (like one a long way from
+> Ohio), two runs of hold, draft, confirm, cancel:
+>
+> | | draft | confirm | cancel |
+> |---|---|---|---|
+> | Mail inside the request (today's default) | 1.73-1.80 s | 1.71-1.79 s | 1.65 s |
+> | `BOOKING_MAIL_AFTER_RESPONSE=1` (Next's `after()`) | 0.12-0.19 s | 0.21-0.30 s | 0.13-0.20 s |
+>
+> All ten mails were still delivered. The switch is **off by default**: whether the
+> function stays alive until `after()` finishes is up to the host, and was proven
+> here only on `next start`. Try it on a deploy preview first
+> ([15](15-OPS-RUNBOOK.md), Email). What the live SMTP server costs is not known:
+> Admin > Email proves it works but does not time it.
+>
+> ### Found on the way
+>
+> `POST /api/v1/bookings` answered 500 for a plot whose CORNER tag the price list
+> does not price (`UnpricedPlcTagError` was not mapped). It answers 422 now, with a test.
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the

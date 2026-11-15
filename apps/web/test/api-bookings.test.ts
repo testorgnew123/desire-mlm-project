@@ -96,6 +96,21 @@ describe("POST /api/v1/bookings (draft)", () => {
     expect((await postDraft(w.seller.token, { unitId, priceListId: "no-such-list", customerId: c.id })).status).toBe(422);
   });
 
+  it("answers 422, not 500, for a plot whose corner tag the price list does not price", async () => {
+    const unitId = await holdPlot(w.seller);
+    // The org prices premiums (it has a PLC charge head), the list just has no CORNER rate.
+    await db.chargeHead.create({
+      data: { orgId: ORG, code: "PLC", name: "Preferred location", category: "PLC", countsTowardCommission: true, isRefundable: false, displayOrder: 2 },
+    });
+    await db.unit.update({ where: { id: unitId }, data: { plcTags: ["CORNER"] } });
+    const c = await customer();
+    const response = await postDraft(w.seller.token, { unitId, priceListId: w.priceList.id, customerId: c.id });
+
+    expect(response.status).toBe(422);
+    expect(await body(response)).toMatchObject({ type: expect.stringContaining("plot-not-priced"), detail: expect.stringContaining("CORNER") });
+    expect(await db.booking.count({ where: { orgId: ORG } })).toBe(0);
+  });
+
   it("answers 403 when an associate tries to book under another associate's name", async () => {
     const unitId = await holdPlot(w.seller);
     const c = await customer();

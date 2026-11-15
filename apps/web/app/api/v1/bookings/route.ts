@@ -9,6 +9,7 @@ import { getPrismaClient } from "@desire/db";
 // that fails `next build` outright.
 import { SessionInvalidError, validateSession } from "@desire/services/auth";
 import { ForbiddenError } from "@desire/services/rbac";
+import { UnpricedPlcTagError } from "@desire/services/cost-sheet";
 import {
   HeldByAnotherAssociateError,
   InvalidPriceListError,
@@ -201,6 +202,18 @@ export async function POST(request: Request) {
         status: 422,
         type: "invalid-price-list",
         title: "Price list not usable",
+        detail: error.message,
+        instance: url.pathname,
+      });
+    }
+    if (error instanceof UnpricedPlcTagError) {
+      // The plot carries a premium tag (corner, park facing) the price list has no
+      // rate for. Charging nothing would give the premium away, so the booking is
+      // refused -- a refusal the caller can act on, not a server fault.
+      return problemResponse({
+        status: 422,
+        type: "plot-not-priced",
+        title: "Plot cannot be priced",
         detail: error.message,
         instance: url.pathname,
       });

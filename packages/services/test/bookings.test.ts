@@ -26,7 +26,7 @@ import {
   setBookingPriceOverride,
 } from "../src/bookings";
 import type { AuditContext } from "../src/audit";
-import { formatRupees } from "../src/booking-mail";
+import { formatRupees, setBookingMailScheduler } from "../src/booking-mail";
 
 // No test here may reach a real SMTP server: sendEmail is replaced by a recorder
 // that can be told to fail or hang. isMailConfigured stays real, so the tests set
@@ -1053,6 +1053,45 @@ describe("booking emails", () => {
     expect(confirmed.status).toBe("CONFIRMED");
     expect(Date.now() - started).toBeLessThan(8_000);
   }, 15_000);
+
+  it("hands the mail to a registered scheduler, so the confirm does not wait for the mail server", async () => {
+    const f = await drafted();
+    outbox.sent.length = 0;
+    outbox.mode = "hang"; // a mail server that never answers
+    const tasks: Array<() => Promise<void>> = [];
+    setBookingMailScheduler((task) => {
+      tasks.push(task);
+    });
+    try {
+      const started = Date.now();
+      await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+
+      // Well inside the 4 s the mail would otherwise hold the confirm for.
+      expect(Date.now() - started).toBeLessThan(3_500);
+      expect(tasks).toHaveLength(1);
+      expect(outbox.sent).toHaveLength(0);
+
+      outbox.mode = "ok";
+      await tasks[0]!();
+      expect(outbox.sent.map((m) => m.to).sort()).toEqual(["buyer@test.local", f.seller.user.email].sort());
+    } finally {
+      setBookingMailScheduler(null);
+    }
+  }, 15_000);
+
+  it("sends in the request when the scheduler cannot take the work", async () => {
+    const f = await drafted();
+    outbox.sent.length = 0;
+    setBookingMailScheduler(() => {
+      throw new Error("after() was called outside a request scope");
+    });
+    try {
+      await confirmBooking(db, { bookingId: f.draft.id, audit: ctx(ORG, f.admin.user.id, "admin") });
+      expect(outbox.sent.map((m) => m.to).sort()).toEqual(["buyer@test.local", f.seller.user.email].sort());
+    } finally {
+      setBookingMailScheduler(null);
+    }
+  });
 
   it("formats rupees with Indian grouping from the exact value", () => {
     expect(formatRupees(new Prisma.Decimal("5200000"))).toBe("₹52,00,000.00");
