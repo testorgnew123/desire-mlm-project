@@ -15,13 +15,19 @@
 // docs/07-API.md draws for every other endpoint -- handlers validate shape,
 // services hold the rules.
 import { Prisma, SCOPE } from "@desire/db";
-import type { UnitGroupKind } from "@desire/db";
+import type { UnitGroupKind, UnitStatus } from "@desire/db";
 import type { PrismaClient } from "@desire/db";
 import { writeAuditLog, type AuditContext } from "./audit";
 import { normalizePlcTag } from "./plc-tags";
 import { PlotsOnlyError, assertPlotsOnlyGroup } from "./plots-only";
 import { assertPermission, ForbiddenError } from "./rbac";
-import { resolveUnitAreas, type UnitTypeAreas } from "./projects";
+import {
+  PRICE_EDITABLE_STATUSES,
+  auditDiff,
+  priceLockedMessage,
+  resolveUnitAreas,
+  type UnitTypeAreas,
+} from "./projects";
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -118,6 +124,46 @@ export interface UnitImportContext {
 
 export interface UnitImportValidation {
   valid: ParsedUnitRow[];
+  errors: RowError[];
+}
+
+/** A plot already in the project, as the "update existing plots" import sees it. */
+export interface ExistingUnitForUpdate {
+  id: string;
+  towerId: string | null;
+  status: UnitStatus;
+  unitTypeCode: string;
+  facing: string | null;
+  plcTags: readonly string[];
+  saleableAreaOverride: Prisma.Decimal | null;
+}
+
+export interface UnitUpdateContext {
+  /** The project's plots by plot number: at least every one the file names. */
+  existingUnits: Iterable<[string, ExistingUnitForUpdate]>;
+  /** The block the file targets. A plot in any other block is refused. */
+  targetTowerId: string;
+  /** As for UnitImportContext: the keys are the valid unitTypeCode values. */
+  unitTypeAreas: Iterable<[string, UnitTypeAreas]>;
+}
+
+/** One plot the file changes. `patch` has only the fields that differ. */
+export interface ParsedUnitUpdate {
+  rowNumber: number;
+  unitId: string;
+  unitNumber: string;
+  patch: {
+    unitTypeCode?: string;
+    facing?: UnitFacing;
+    plcTags?: string[];
+    saleableAreaOverride?: Prisma.Decimal;
+  };
+}
+
+export interface UnitUpdateValidation {
+  changes: ParsedUnitUpdate[];
+  /** Rows naming a plot that is already exactly as the file says. */
+  unchanged: number;
   errors: RowError[];
 }
 
@@ -272,53 +318,12 @@ function validateRow(
   }
 
   // ── facing (optional)
-  let facing: UnitFacing | undefined;
-  if (!isAbsent(row.facing)) {
-    const raw = readCellString(row.facing);
-    const normalised = raw?.toUpperCase();
-    if (normalised === undefined || !FACING_SET.has(normalised)) {
-      fail(
-        "facing",
-        row.facing,
-        `facing must be one of ${UNIT_FACINGS.join(", ")}, got ${display(row.facing)}`,
-      );
-    } else {
-      facing = normalised as UnitFacing;
-    }
-  }
+  const facing = readFacing(row.facing, fail);
 
   // ── plcTags (optional). Priced per tag by PriceListItem.plcCharges, so a
   //    stray blank tag silently costs the customer nothing and the developer a
   //    reconciliation (docs/06-INVENTORY-SPEC.md section 5).
-  let plcTags: string[] = [];
-  if (!isAbsent(row.plcTags)) {
-    if (!Array.isArray(row.plcTags)) {
-      // The parser splits a delimited cell; this layer never sees "A|B".
-      fail(
-        "plcTags",
-        row.plcTags,
-        `plcTags must be an array of strings, got ${display(row.plcTags)}`,
-      );
-    } else {
-      const tags: string[] = [];
-      row.plcTags.forEach((tag: unknown, tagIndex: number) => {
-        if (typeof tag !== "string" || tag.trim() === "") {
-          fail(
-            "plcTags",
-            tag,
-            `plcTags[${tagIndex}] must be a non-empty string, got ${display(tag)}`,
-          );
-        } else {
-          try {
-            tags.push(normalizePlcTag(tag));
-          } catch (error) {
-            fail("plcTags", tag, `plcTags[${tagIndex}]: ${(error as Error).message}`);
-          }
-        }
-      });
-      plcTags = [...new Set(tags)];
-    }
-  }
+  const plcTags = readPlcTags(row.plcTags, fail) ?? [];
 
   // ── Area overrides (optional). Null means inherit from the UnitType.
   const carpet = readAreaCell("carpetAreaOverride", row.carpetAreaOverride);
@@ -404,6 +409,141 @@ function validateRow(
     },
     errors: [],
   };
+}
+
+// ── Update validation (pure) ───────────────────────────────────────────
+
+/** The same file, read as changes to plots that already exist ("Update plots that
+ *  already exist") instead of new plots. Only the plot number is required; a blank
+ *  cell leaves that value as it is. Plot type, size (saleableAreaOverride), facing
+ *  and plcTags can change. The plot number is the key and the block is the target,
+ *  so neither can. A row that changes nothing is counted, not refused.
+ *
+ *  A plot's type, size and tags are its price, so a row that changes any of them
+ *  on a plot that is held or sold is refused (PRICE_EDITABLE_STATUSES); facing
+ *  changes on any plot. Every problem is reported, and a row with any problem
+ *  changes nothing. A plot has one area, so the carpet < built-up <= saleable rule
+ *  that createUnit applies to flats does not come into it: only a positive size. */
+export function validateUnitUpdateRows(
+  rows: readonly RawUnitRow[],
+  context: UnitUpdateContext,
+): UnitUpdateValidation {
+  const existingUnits = new Map(context.existingUnits);
+  const unitTypeAreas = new Map(context.unitTypeAreas);
+  const unitTypeHint = describeCodes(unitTypeAreas.keys());
+  // unitNumber -> the first row that named it, so the duplicate message can
+  // point at the other half of the pair.
+  const firstSeenAt = new Map<string, number>();
+
+  const changes: ParsedUnitUpdate[] = [];
+  const errors: RowError[] = [];
+  let unchanged = 0;
+
+  rows.forEach((row, index) => {
+    const rowNumber = index + 1;
+    const problems: RowError[] = [];
+    const fail: Fail = (field, value, message) => {
+      problems.push({ rowNumber, field, value, message });
+    };
+
+    // ── unitNumber: the plot this row is about
+    const unitNumber = readCellString(row.unitNumber);
+    let current: ExistingUnitForUpdate | undefined;
+    if (unitNumber === undefined) {
+      fail(
+        "unitNumber",
+        row.unitNumber,
+        isAbsent(row.unitNumber)
+          ? "unitNumber is required"
+          : `unitNumber must be text, got ${display(row.unitNumber)}`,
+      );
+    } else {
+      const firstRow = firstSeenAt.get(unitNumber);
+      if (firstRow !== undefined) {
+        fail(
+          "unitNumber",
+          row.unitNumber,
+          `unit '${unitNumber}' appears more than once in this batch (first on row ${firstRow})`,
+        );
+      } else {
+        firstSeenAt.set(unitNumber, rowNumber);
+        current = existingUnits.get(unitNumber);
+        if (!current) {
+          fail(
+            "unitNumber",
+            row.unitNumber,
+            `plot '${unitNumber}' does not exist in this project (updating never creates plots)`,
+          );
+        } else if (current.towerId !== context.targetTowerId) {
+          fail("unitNumber", row.unitNumber, `plot '${unitNumber}' is not in the block this file targets`);
+        }
+      }
+    }
+
+    // ── unitTypeCode (optional: blank keeps the plot's type)
+    let newTypeCode: string | undefined;
+    if (!isAbsent(row.unitTypeCode)) {
+      const code = readCellString(row.unitTypeCode);
+      if (code === undefined) {
+        fail("unitTypeCode", row.unitTypeCode, `unitTypeCode must be text, got ${display(row.unitTypeCode)}`);
+      } else if (!unitTypeAreas.has(code)) {
+        fail(
+          "unitTypeCode",
+          row.unitTypeCode,
+          `unitTypeCode '${code}' is not a unit type of this project (${unitTypeHint})`,
+        );
+      } else {
+        newTypeCode = code;
+      }
+    }
+
+    // A plot in a block has no floor, and no carpet area for a file to set.
+    if (!isAbsent(row.floor)) {
+      fail("floor", row.floor, "floor must be empty for a plot in a block");
+    }
+    if (!isAbsent(row.carpetAreaOverride)) {
+      fail("carpetAreaOverride", row.carpetAreaOverride, "a plot has no carpet area; leave carpetAreaOverride empty");
+    }
+
+    const facing = readFacing(row.facing, fail);
+    const plcTags = readPlcTags(row.plcTags, fail);
+    const sizeCell = readAreaCell("saleableAreaOverride", row.saleableAreaOverride);
+    if (sizeCell && !sizeCell.ok) {
+      fail("saleableAreaOverride", row.saleableAreaOverride, sizeCell.message);
+    }
+    const newSize = sizeCell?.ok ? sizeCell.value : undefined;
+
+    if (problems.length === 0 && current !== undefined && unitNumber !== undefined) {
+      // The size the plot has now: its own override, else its type's.
+      const nowSize = current.saleableAreaOverride ?? unitTypeAreas.get(current.unitTypeCode)?.saleableArea;
+      const typeChanged = newTypeCode !== undefined && newTypeCode !== current.unitTypeCode;
+      const sizeChanged = newSize !== undefined && (nowSize === undefined || !newSize.equals(nowSize));
+      const tagsChanged = plcTags !== undefined && !sameTags(plcTags, current.plcTags);
+      const facingChanged = facing !== undefined && facing !== current.facing;
+
+      if ((typeChanged || sizeChanged || tagsChanged) && !PRICE_EDITABLE_STATUSES.includes(current.status)) {
+        fail("unitNumber", row.unitNumber, priceLockedMessage(unitNumber, current.status));
+      } else if (typeChanged || sizeChanged || tagsChanged || facingChanged) {
+        const patch: ParsedUnitUpdate["patch"] = {};
+        if (typeChanged && newTypeCode !== undefined) patch.unitTypeCode = newTypeCode;
+        if (sizeChanged && newSize !== undefined) patch.saleableAreaOverride = newSize;
+        if (facingChanged && facing !== undefined) patch.facing = facing;
+        if (tagsChanged && plcTags !== undefined) patch.plcTags = plcTags;
+        changes.push({ rowNumber, unitId: current.id, unitNumber, patch });
+      } else {
+        unchanged += 1;
+      }
+    }
+    errors.push(...problems);
+  });
+
+  return { changes, unchanged, errors };
+}
+
+function sameTags(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((tag) => right.has(tag));
 }
 
 // ── Cell readers ───────────────────────────────────────────────────────
@@ -497,6 +637,45 @@ function describeCodes(codes: Iterable<string>): string {
   return `known: ${shown}`;
 }
 
+/** Records one problem with one field of the row being read. */
+type Fail = (field: string, value: unknown, message: string) => void;
+
+/** The facing cell. Undefined when it is blank, or wrong (a wrong one is reported). */
+function readFacing(raw: unknown, fail: Fail): UnitFacing | undefined {
+  if (isAbsent(raw)) return undefined;
+  const normalised = readCellString(raw)?.toUpperCase();
+  if (normalised === undefined || !FACING_SET.has(normalised)) {
+    fail("facing", raw, `facing must be one of ${UNIT_FACINGS.join(", ")}, got ${display(raw)}`);
+    return undefined;
+  }
+  return normalised as UnitFacing;
+}
+
+/** The plcTags cell, which the parser has already split into an array. Undefined
+ *  when it is blank (an empty array is blank) or not an array (reported); otherwise
+ *  the tags, normalised and de-duplicated, with any bad tag reported and left out. */
+function readPlcTags(raw: unknown, fail: Fail): string[] | undefined {
+  if (isAbsent(raw) || (Array.isArray(raw) && raw.length === 0)) return undefined;
+  if (!Array.isArray(raw)) {
+    // The parser splits a delimited cell; this layer never sees "A|B".
+    fail("plcTags", raw, `plcTags must be an array of strings, got ${display(raw)}`);
+    return undefined;
+  }
+  const tags: string[] = [];
+  raw.forEach((tag: unknown, tagIndex: number) => {
+    if (typeof tag !== "string" || tag.trim() === "") {
+      fail("plcTags", tag, `plcTags[${tagIndex}] must be a non-empty string, got ${display(tag)}`);
+    } else {
+      try {
+        tags.push(normalizePlcTag(tag));
+      } catch (error) {
+        fail("plcTags", tag, `plcTags[${tagIndex}]: ${(error as Error).message}`);
+      }
+    }
+  });
+  return [...new Set(tags)];
+}
+
 // ── Import (database) ──────────────────────────────────────────────────
 
 export type UnitImportMode = "ALL_OR_NOTHING" | "SKIP_INVALID";
@@ -512,12 +691,20 @@ export interface ImportUnitsParams {
   audit: AuditContext;
   /** Defaults to ALL_OR_NOTHING -- see importUnits. */
   mode?: UnitImportMode;
+  /** Read the rows as changes to plots that already exist in `towerId` (a block,
+   *  required) instead of as new plots. Never creates a plot. See
+   *  validateUnitUpdateRows for what a row may change. */
+  updateExisting?: boolean;
 }
 
 export interface UnitImportReport {
   imported: number;
   skipped: number;
   errors: RowError[];
+  /** `updateExisting` only: plots changed, and plots already as the file says.
+   *  `imported` is 0 then, and `skipped` counts the rows with a problem. */
+  updated?: number;
+  unchanged?: number;
 }
 
 /** Imports a batch of units in one transaction.
@@ -616,10 +803,6 @@ export async function importUnitsInTx(
     targetGroupKind = tower.kind;
   }
 
-  const existingUnits = await tx.unit.findMany({
-    where: { projectId: params.projectId },
-    select: { unitNumber: true },
-  });
   const unitTypes = await tx.unitType.findMany({
     where: { projectId: params.projectId },
     select: {
@@ -650,6 +833,15 @@ export async function importUnitsInTx(
     },
   ]);
 
+  if (params.updateExisting) {
+    return updateExistingPlotsInTx(tx, params, { mode, targetGroupKind, unitTypeIdByCode, unitTypeAreas });
+  }
+
+  // Read only on this path: updating reads just the plots the file names.
+  const existingUnits = await tx.unit.findMany({
+    where: { projectId: params.projectId },
+    select: { unitNumber: true },
+  });
   const { valid, errors } = validateUnitImportRows(params.rows, {
     existingUnitNumbers: existingUnits.map((unit) => unit.unitNumber),
     unitTypeAreas,
@@ -745,4 +937,147 @@ function toCreateInput(
     saleableAreaOverride: row.saleableAreaOverride ?? null,
     // status defaults to AVAILABLE; imported units enter the pool unheld.
   };
+}
+
+/** importUnitsInTx for `updateExisting`: the rows change plots already in the
+ *  target block. It never creates a plot -- plots cannot be deleted from the UI, so
+ *  a mistyped number must not leave one behind.
+ *
+ *  The plots the file names are locked in id order (the order setUnitPlcTag uses,
+ *  so two admins cannot deadlock) and read AFTER the lock, so a hold or booking
+ *  that lands while the file is being judged cannot change a plot already judged
+ *  free. Then one UPDATE and one audit row per changed plot: two statements each,
+ *  not the dozen updateUnit spends, so a block's worth stays inside the 10 s
+ *  transaction. The audit row per plot carries before and after, as updateUnit's
+ *  does, plus one batch row for the file. */
+async function updateExistingPlotsInTx(
+  tx: Prisma.TransactionClient,
+  params: ImportUnitsParams,
+  context: {
+    mode: UnitImportMode;
+    targetGroupKind: UnitGroupKind | undefined;
+    unitTypeIdByCode: ReadonlyMap<string, string>;
+    unitTypeAreas: Iterable<[string, UnitTypeAreas]>;
+  },
+): Promise<UnitImportReport> {
+  const submitted = params.rows.length;
+  const towerId = params.towerId;
+  if (!towerId || context.targetGroupKind !== "BLOCK") {
+    throw new UnitImportTargetError("Updating existing plots needs the block whose plots the file changes.");
+  }
+
+  const numbers = [
+    ...new Set(
+      params.rows.flatMap((row) => {
+        const unitNumber = readCellString(row.unitNumber);
+        return unitNumber === undefined ? [] : [unitNumber];
+      }),
+    ),
+  ];
+  const named =
+    numbers.length === 0
+      ? []
+      : await tx.unit.findMany({
+          where: { projectId: params.projectId, unitNumber: { in: numbers } },
+          select: { id: true },
+        });
+  const ids = named.map((unit) => unit.id);
+  if (ids.length > 0) {
+    await tx.$queryRaw`SELECT "id" FROM "units" WHERE "id" IN (${Prisma.join(ids)}) ORDER BY "id" FOR UPDATE`;
+  }
+  const units =
+    ids.length === 0
+      ? []
+      : await tx.unit.findMany({
+          where: { id: { in: ids } },
+          select: {
+            id: true,
+            unitNumber: true,
+            towerId: true,
+            unitTypeId: true,
+            status: true,
+            facing: true,
+            plcTags: true,
+            saleableAreaOverride: true,
+            unitType: { select: { code: true } },
+          },
+        });
+  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+
+  const { changes, unchanged, errors } = validateUnitUpdateRows(params.rows, {
+    existingUnits: units.map((unit): [string, ExistingUnitForUpdate] => [
+      unit.unitNumber,
+      {
+        id: unit.id,
+        towerId: unit.towerId,
+        status: unit.status,
+        unitTypeCode: unit.unitType.code,
+        facing: unit.facing,
+        plcTags: unit.plcTags,
+        saleableAreaOverride: unit.saleableAreaOverride,
+      },
+    ]),
+    targetTowerId: towerId,
+    unitTypeAreas: context.unitTypeAreas,
+  });
+
+  if (errors.length > 0 && context.mode === "ALL_OR_NOTHING") {
+    // Thrown before anything is written, as for a create: nothing changed, so no
+    // audit row either.
+    throw new UnitImportRejectedError({ imported: 0, skipped: submitted, errors });
+  }
+
+  for (const change of changes) {
+    const data: Prisma.UnitUncheckedUpdateInput = {};
+    if (change.patch.unitTypeCode !== undefined) {
+      const unitTypeId = context.unitTypeIdByCode.get(change.patch.unitTypeCode);
+      if (unitTypeId === undefined) {
+        // Unreachable: validation accepted the code against this same map's keys.
+        throw new UnitImportTargetError(
+          `Unit type '${change.patch.unitTypeCode}' on row ${change.rowNumber} could not be resolved to an id.`,
+        );
+      }
+      data.unitTypeId = unitTypeId;
+    }
+    if (change.patch.facing !== undefined) data.facing = change.patch.facing;
+    if (change.patch.plcTags !== undefined) data.plcTags = change.patch.plcTags;
+    if (change.patch.saleableAreaOverride !== undefined) {
+      data.saleableAreaOverride = change.patch.saleableAreaOverride;
+    }
+    // Prisma sets updatedAt, which the board's delta poll keys on.
+    await tx.unit.update({ where: { id: change.unitId }, data });
+    // The same before/after shape updateUnit writes, so the trail reads alike
+    // whichever way a plot was changed.
+    const { before, after } = auditDiff(unitById.get(change.unitId) ?? {}, data);
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "Unit",
+      entityId: change.unitId,
+      before,
+      after,
+      reason: "unit import (update)",
+    });
+  }
+
+  const skipped = submitted - changes.length - unchanged;
+  if (changes.length > 0) {
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "UnitImport",
+      entityId: params.projectId,
+      after: {
+        projectId: params.projectId,
+        towerId,
+        mode: context.mode,
+        updateExisting: true,
+        rowsSubmitted: submitted,
+        updated: changes.length,
+        unchanged,
+        skipped,
+        errorCount: errors.length,
+      },
+    });
+  }
+
+  return { imported: 0, updated: changes.length, unchanged, skipped, errors };
 }

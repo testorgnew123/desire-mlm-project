@@ -8,6 +8,7 @@ import { ForbiddenError } from "../src/rbac";
 import { HoldQuotaExceededError, UnitNotAvailableError, UnitNotFoundError, acquireHold } from "../src/holds";
 import { InvalidPriceOverrideError, confirmBooking } from "../src/bookings";
 import { InvalidCustomerError } from "../src/customers";
+import { UnitPriceLockedError, updateUnit } from "../src/projects";
 import {
   HoldHasDraftError,
   NoActivePriceListError,
@@ -527,6 +528,57 @@ describe("bookPlot", () => {
 
     expect(first.customerId).not.toBe(second.customerId);
     expect(first.bookingNumber).not.toBe(second.bookingNumber);
+  });
+});
+
+describe("resizing a plot", () => {
+  it("is priced on the size it was given afterwards, not on its plot type", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const writer = await makeUser(ORG, "writer", ["project.write"]);
+
+    await updateUnit(db, {
+      unitId: plot.id,
+      saleableAreaOverride: "210.50",
+      reason: "re-measured after survey",
+      audit: ctx(ORG, writer.user, "writer"),
+    });
+    const booked = await bookPlot(db, { unitId: plot.id, customer, audit: ctx(ORG, f.seller.user, "seller") });
+
+    const booking = await db.booking.findUniqueOrThrow({ where: { id: booked.bookingId } });
+    // 210.50 sq yd at Rs 25,000. The plot type's own 200 would have made it 5,000,000,
+    // and a neighbour of the same type still is.
+    expect(booking.baseAmount.toString()).toBe("5262500");
+    expect(booking.saleableAreaAtBooking.toString()).toBe("210.5");
+    const neighbour = await bookPlot(db, { unitId: f.plots[1]!.id, customer, audit: ctx(ORG, f.seller.user, "seller") });
+    expect((await db.booking.findUniqueOrThrow({ where: { id: neighbour.bookingId } })).baseAmount.toString()).toBe("5000000");
+  });
+
+  it("is refused while an associate holds the plot, and allowed again once the hold is released", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const writer = await makeUser(ORG, "writer", ["project.write"]);
+    const resize = () =>
+      updateUnit(db, { unitId: plot.id, saleableAreaOverride: "210.50", audit: ctx(ORG, writer.user, "writer") });
+    await holdPlot(db, { unitId: plot.id, audit: ctx(ORG, f.seller.user, "seller") });
+
+    await expect(resize()).rejects.toThrow(UnitPriceLockedError);
+
+    await releasePlotHold(db, { unitId: plot.id, audit: ctx(ORG, f.seller.user, "seller") });
+    expect((await resize()).saleableAreaOverride?.toString()).toBe("210.5");
+  });
+
+  it("is refused once the booking is confirmed, so the price a buyer signed cannot move", async () => {
+    const f = await seedFixture();
+    const plot = f.plots[0]!;
+    const writer = await makeUser(ORG, "writer", ["project.write"]);
+    const booked = await bookPlot(db, { unitId: plot.id, customer, audit: ctx(ORG, f.seller.user, "seller") });
+    await confirmBooking(db, { bookingId: booked.bookingId, audit: ctx(ORG, f.admin.user, "admin") });
+
+    await expect(
+      updateUnit(db, { unitId: plot.id, saleableAreaOverride: "210.50", audit: ctx(ORG, writer.user, "writer") }),
+    ).rejects.toThrow(/Plot A-01 is sold.*Cancel its booking/);
+    expect((await db.unit.findUniqueOrThrow({ where: { id: plot.id } })).saleableAreaOverride).toBeNull();
   });
 });
 

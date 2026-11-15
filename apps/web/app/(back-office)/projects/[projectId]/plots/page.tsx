@@ -14,7 +14,8 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { blockPlotsAction, clearCornerAction, markCornerAction, unblockPlotsAction } from "./actions";
+import { MAX_SIZE_REASON_LENGTH } from "@/lib/plot-size";
+import { blockPlotsAction, changePlotSizeAction, clearCornerAction, markCornerAction, unblockPlotsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,9 +23,11 @@ export const metadata: Metadata = {
   title: "Plots — Desire",
 };
 
-/** One block's plots, to block or unblock them and to mark which are corner.
- *  Tick plots, press a button. The four buttons are the `intent` buttons of one
- *  ActionForm, which shows what happened above the table. What a person sees is
+/** One block's plots, to change their size, to block or unblock them and to mark
+ *  which are corner. Tick plots, press a button. The buttons are the `intent`
+ *  buttons of one ActionForm, which shows what happened above the table. The size
+ *  box comes first so that Enter in any box runs "Change size", which asks for
+ *  what it needs and changes nothing otherwise, not Block. What a person sees is
  *  gated by what they may do (unit.block, project.write); the services check again. */
 export default async function ProjectPlotsPage({
   params,
@@ -88,8 +91,8 @@ export default async function ProjectPlotsPage({
         </Link>
         <h1 className="text-lg font-semibold">Plots</h1>
         <p className="text-sm text-muted-foreground">
-          Block plots to take them off sale, and mark corner plots. {blockedCount} blocked in this
-          project.
+          Change a plot&apos;s size, block plots to take them off sale, and mark corner plots.{" "}
+          {blockedCount} blocked in this project.
         </p>
       </div>
 
@@ -130,6 +133,7 @@ export default async function ProjectPlotsPage({
               id="plots"
               feedback="top"
               actions={{
+                changeSize: changePlotSizeAction,
                 block: blockPlotsAction,
                 unblock: unblockPlotsAction,
                 markCorner: markCornerAction,
@@ -139,6 +143,22 @@ export default async function ProjectPlotsPage({
             >
               <input type="hidden" name="projectId" value={project.id} />
               <input type="hidden" name="towerId" value={selected.id} />
+
+              {canMark ? (
+                <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-3">
+                  <label className="flex w-40 flex-col gap-1 text-xs">
+                    New size (sq yd)
+                    <Input name="saleableArea" inputMode="decimal" autoComplete="off" placeholder="e.g. 210" />
+                  </label>
+                  <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs">
+                    Reason (for the new size, required)
+                    <Input name="sizeReason" maxLength={MAX_SIZE_REASON_LENGTH} placeholder="e.g. Re-measured after survey" />
+                  </label>
+                  <SubmitButton name="intent" value="changeSize" pendingLabel="Changing…" size="sm" variant="outline">
+                    Change size
+                  </SubmitButton>
+                </div>
+              ) : null}
 
               {canBlock || canMark ? (
                 <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-3">
@@ -219,8 +239,15 @@ export default async function ProjectPlotsPage({
               </div>
               <p className="text-xs text-muted-foreground">
                 Only plots that are free or held can be blocked. A held plot with a booking waiting must be
-                confirmed or cancelled first. Held or sold plots cannot be marked or cleared as corner,
-                because the price would change under the buyer.
+                confirmed or cancelled first. Held or sold plots cannot be resized or marked or cleared as
+                corner, because the price would change under the buyer: to resize a held plot, block it
+                first (that releases the hold) and unblock it afterwards; for a sold plot, cancel its
+                booking first.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                The new size applies to the ticked plots only, not to their plot type. To change many
+                plots at once, use the CSV import on the project page with &quot;Update plots that already
+                exist&quot;.
               </p>
             </ActionForm>
           ) : null}

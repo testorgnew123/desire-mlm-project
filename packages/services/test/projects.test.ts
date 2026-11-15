@@ -15,6 +15,7 @@ import {
   InvalidUnitAreasError,
   ProjectNotFoundError,
   TowerNotFoundError,
+  UnitPriceLockedError,
   UnitTypeNotFoundError,
   createProject,
   createTower,
@@ -853,6 +854,109 @@ describe("createUnit / updateUnit", () => {
           audit: ctx(ORG, writer.id, "writer"),
         }),
       ).rejects.toThrow(DuplicateCodeError);
+    });
+
+    // A plot's size, type and corner tags are its price. The price a holder was
+    // quoted, and the one frozen on a booking, must not move under them.
+    describe("price guard: size, type and corner tags change only while a plot is free", () => {
+      async function seedUnit() {
+        const seeded = await seedProjectAndType();
+        const unit = await createUnit(db, {
+          projectId: seeded.project.id,
+          unitTypeId: seeded.unitType.id,
+          unitNumber: "A-101",
+          floor: 1,
+          audit: ctx(ORG, seeded.writer.id, "writer"),
+        });
+        return { ...seeded, unit };
+      }
+
+      it.each(["AVAILABLE", "BLOCKED"] as const)(
+        "changes the size of a %s plot, and the audit row says before, after and why",
+        async (status) => {
+          const { writer, unit } = await seedUnit();
+          await db.unit.update({ where: { id: unit.id }, data: { status } });
+
+          const updated = await updateUnit(db, {
+            unitId: unit.id,
+            saleableAreaOverride: "1010.50",
+            reason: "re-measured after survey",
+            audit: ctx(ORG, writer.id, "writer"),
+          });
+
+          expect(updated.saleableAreaOverride?.toString()).toBe("1010.5");
+          const row = await db.auditLog.findFirstOrThrow({
+            where: { entity: "Unit", entityId: unit.id, action: "UPDATE" },
+          });
+          expect(row.before).toEqual({ saleableAreaOverride: null });
+          expect(row.after).toEqual({ saleableAreaOverride: "1010.5" });
+          expect(row.reason).toBe("re-measured after survey");
+        },
+      );
+
+      it.each(["HELD", "BOOKED"] as const)(
+        "refuses to change the size, type or tags of a %s plot, names it, and changes nothing",
+        async (status) => {
+          const { writer, project, unit } = await seedUnit();
+          const otherType = await createUnitType(db, {
+            projectId: project.id,
+            code: "1BHK",
+            name: "1BHK",
+            carpetArea: "400.00",
+            builtUpArea: "480.00",
+            saleableArea: "600.00",
+            audit: ctx(ORG, writer.id, "writer"),
+          });
+          await db.unit.update({ where: { id: unit.id }, data: { status } });
+
+          for (const patch of [
+            { saleableAreaOverride: "1010.50" },
+            { saleableAreaOverride: null },
+            { carpetAreaOverride: "500.00" },
+            { unitTypeId: otherType.id },
+            { plcTags: ["CORNER"] },
+          ]) {
+            await expect(
+              updateUnit(db, { unitId: unit.id, ...patch, audit: ctx(ORG, writer.id, "writer") }),
+            ).rejects.toThrow(UnitPriceLockedError);
+          }
+          // The message names the plot and says what to do about it.
+          await expect(
+            updateUnit(db, { unitId: unit.id, saleableAreaOverride: "1010.50", audit: ctx(ORG, writer.id, "writer") }),
+          ).rejects.toThrow(status === "HELD" ? /Plot A-101 is held.*Block it first/ : /Plot A-101 is sold.*Cancel its booking/);
+
+          const after = await db.unit.findUniqueOrThrow({ where: { id: unit.id } });
+          expect(after).toMatchObject({ saleableAreaOverride: null, carpetAreaOverride: null, unitTypeId: unit.unitTypeId });
+          expect(after.plcTags ?? []).toEqual([]);
+          expect(await db.auditLog.count({ where: { entity: "Unit", entityId: unit.id, action: "UPDATE" } })).toBe(0);
+        },
+      );
+
+      it("still lets facing and the plot number change on a held plot", async () => {
+        const { writer, unit } = await seedUnit();
+        await db.unit.update({ where: { id: unit.id }, data: { status: "HELD" } });
+
+        const updated = await updateUnit(db, {
+          unitId: unit.id,
+          facing: "NE",
+          unitNumber: "A-102",
+          audit: ctx(ORG, writer.id, "writer"),
+        });
+
+        expect(updated).toMatchObject({ facing: "NE", unitNumber: "A-102" });
+      });
+
+      it("says forbidden to someone without project.write, not what state the plot is in", async () => {
+        const { unit } = await seedUnit();
+        await db.unit.update({ where: { id: unit.id }, data: { status: "BOOKED" } });
+        const stranger = await db.user.create({
+          data: { orgId: ORG, email: "nobody@test.local", name: "nobody", passwordHash: "unused" },
+        });
+
+        await expect(
+          updateUnit(db, { unitId: unit.id, saleableAreaOverride: "1010.50", audit: ctx(ORG, stranger.id, "nobody") }),
+        ).rejects.toThrow(ForbiddenError);
+      });
     });
   });
 });
