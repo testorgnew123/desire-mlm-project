@@ -1,0 +1,2 @@
+# wrangler writes its local dev state and bundles here
+.wrangler/
