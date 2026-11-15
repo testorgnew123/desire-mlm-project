@@ -463,9 +463,14 @@ Two things that are easy to get wrong and are handled there:
   Still a valid keep-warm, but it would not exercise the edge path. A
   cron-only Worker with no route avoids this.
 - **Cron is UTC.** 09:00–19:00 IST is 03:30–13:30 UTC and cron ranges cannot
-  express a half-hour offset, so the Worker uses `*/4 4-13 * * 1-5`
+  express a half-hour offset, so the Worker uses `*/4 4-13 * * mon-fri`
   (09:30–19:29 IST) and accepts a 30-minute cold window at the start of the
   day rather than burning half an hour of compute daily.
+- **Weekdays by name.** Cloudflare numbers the days 1 = Sunday to 7 = Saturday,
+  not 0 = Sunday as most cron systems do, so the numeric `1-5` this section
+  first used meant Sunday–Thursday: Fridays were never warmed, and Sundays were
+  warmed for nobody (found 2026-11-15, from Cloudflare's cron documentation).
+  `apps/web/test/keepalive-worker.test.ts` now checks the window.
 
 ### The configuration
 

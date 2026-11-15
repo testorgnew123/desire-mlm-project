@@ -41,7 +41,9 @@ wrangler deploy
 ```
 
 Or paste `src/index.js` into **Workers & Pages → Create → Worker** in the
-dashboard and add the cron trigger and the `HEALTH_URL` variable by hand.
+dashboard and add the cron trigger (`*/4 4-13 * * mon-fri`) and the `HEALTH_URL`
+variable (`https://crm.desirerealty.in/api/health`) by hand, and switch on
+Workers Logs in the Worker's settings.
 
 Cron changes can take up to 15 minutes to propagate.
 
@@ -51,18 +53,35 @@ Cron changes can take up to 15 minutes to propagate.
 wrangler tail                   # watch invocations live
 ```
 
+Runs are also kept: **Workers & Pages → desire-keepalive → Logs** shows each one
+for a few days (`[observability]` in `wrangler.toml` turns it on at deploy).
+
 Each run logs one JSON line:
 
 ```json
-{"ok":true,"status":200,"elapsedMs":180,"dbDurationMs":3}
+{"ok":true,"status":200,"elapsedMs":180,"dbDurationMs":3,"state":"warm"}
 ```
 
 `dbDurationMs` comes from `/api/health` itself and separates the two failure
 modes: a high `elapsedMs` with a low `dbDurationMs` means the **function** was
-cold; both high means **Neon** was asleep.
+cold (`"state":"function-cold"`); a high `dbDurationMs` means **Neon** was asleep
+(`"neon-asleep"`). Either one, once the Worker has been running a while, means the
+schedule is not keeping things warm: search the Logs for it. (The thresholds, 1 s
+and 1.5 s, are rough.)
+
+**Check the days it runs.** The first lines of a week should appear on Monday at
+04:00 UTC (09:30 IST) and the last on Friday at 13:56 UTC (19:26 IST); nothing on
+Saturday or Sunday. Cloudflare numbers weekdays 1 = Sunday to 7 = Saturday, which
+is why the schedule uses `mon-fri` and not `1-5` (see below).
 
 The real test is the next weekday morning — the 09:30 IST request should look
-like a warm one, not like 9 seconds.
+like a warm one, not like 9 seconds. From any machine, after the Worker has been
+off for 6+ minutes (before 09:30 IST, say), the first request shows the cold hit;
+one 5-15 minutes into the window should not:
+
+```bash
+curl -s -w "\n ttfb=%{time_starttransfer}s\n" https://crm.desirerealty.in/api/health
+```
 
 ## Budget
 
@@ -84,6 +103,11 @@ leaves no headroom. Weekday working hours is what fits.
 ## Changing the schedule
 
 `crons` in `wrangler.toml`. **Cloudflare cron is UTC** and has no timezone
-setting — the current `*/4 4-13 * * 1-5` is 09:30–19:29 IST, and the comment
-there explains the half-hour offset. Any widening costs Neon CU-hours
-linearly, so re-do the arithmetic above before changing it.
+setting — the current `*/4 4-13 * * mon-fri` is 09:30–19:29 IST, and the comment
+there explains the half-hour offset. **Write weekdays as names.** Cloudflare
+numbers them 1 = Sunday to 7 = Saturday (unlike most cron systems), so a numeric
+`1-5` is Sunday–Thursday; that was this file's schedule until 2026-11-15.
+`apps/web/test/keepalive-worker.test.ts` reads the line and fails if the window
+moves. Any widening costs Neon CU-hours linearly, so re-do the arithmetic above
+before changing it: one more day of 10 hours is about 11 CU-h a month (Saturday
+too: ~66 of 100; Sunday as well: ~77, past the 70 where this README says to stop).

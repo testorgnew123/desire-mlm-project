@@ -18,6 +18,18 @@
  * toward CPU time.
  */
 
+/** Which cold start, if any, a ping paid for. The thresholds are rough, from what
+ *  production showed: a database wake took 4.5-4.9 s inside /api/health, a cold
+ *  function about 2 s, and a warm ping a few hundred ms. Written into the log line
+ *  so Workers Logs can be searched for `"state":"neon-asleep"` -- a ping that still
+ *  woke the database means the schedule is not keeping it warm. */
+function classify({ ok, elapsedMs, dbDurationMs }) {
+  if (!ok) return "error";
+  if (dbDurationMs !== null && dbDurationMs > 1000) return "neon-asleep";
+  if (elapsedMs > 1500) return "function-cold";
+  return "warm";
+}
+
 export default {
   async scheduled(event, env, ctx) {
     const url = env.HEALTH_URL;
@@ -55,20 +67,22 @@ export default {
             // did its job. Not worth failing over.
           }
 
-          console.log(
-            JSON.stringify({
-              ok: response.ok,
-              status: response.status,
-              elapsedMs,
-              dbDurationMs: durationMs,
-            }),
-          );
+          const line = {
+            ok: response.ok,
+            status: response.status,
+            elapsedMs,
+            dbDurationMs: durationMs,
+          };
+          line.state = classify(line);
+          // An error response goes to the error level so it can be filtered on.
+          (response.ok ? console.log : console.error)(JSON.stringify(line));
         } catch (error) {
           // A failed ping is not an outage -- the next one is 4 minutes away.
           // Logged so a persistent failure is visible in the Worker log.
           console.error(
             JSON.stringify({
               ok: false,
+              state: "error",
               elapsedMs: Date.now() - startedAt,
               error: error instanceof Error ? error.message : String(error),
             }),
