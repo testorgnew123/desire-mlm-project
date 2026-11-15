@@ -23,6 +23,11 @@
 >   show as their own row in the sales report. Because they also hold `booking.confirm`,
 >   an admin can confirm a booking they made themselves; the seller-never-confirms rule
 >   is the associate's.
+> - **Email domain (2026-11-15).** A new ADMIN or ASSOCIATE account must use an address on
+>   a company domain listed in the server setting `ALLOWED_EMAIL_DOMAINS`. SUPER_ADMIN, the
+>   client's own role, may use any address; changing a SUPER_ADMIN account to ADMIN or
+>   ASSOCIATE needs an allowed address too. The list is not editable in the app
+>   (`packages/services/src/allowed-domains.ts`, docs/15-OPS-RUNBOOK.md).
 > - A key for a switched-off feature is held by SUPER_ADMIN alone.
 > - Moving an existing database to this matrix is `packages/db/scripts/narrow-roles.ts`
 >   (dry run by default).

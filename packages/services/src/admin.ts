@@ -15,6 +15,12 @@
 //     ADMIN or SUPER_ADMIN account, or assigns one of those roles.
 // So an ADMIN can create and look after associates but can never mint, promote
 // or alter another admin.
+//
+// Emails are held to ALLOWED_EMAIL_DOMAINS (allowed-domains.ts): every role except
+// SUPER_ADMIN needs an email on that list when its account is created, and an
+// account only moves from SUPER_ADMIN to another role if its email is on it. Any
+// future code that creates an account or changes an email must call
+// assertEmailDomainAllowed too.
 import { randomBytes } from "node:crypto";
 import { Prisma } from "@desire/db";
 import type { PrismaClient, User, UserStatus } from "@desire/db";
@@ -23,6 +29,7 @@ export type { User };
 export { NoDefaultGradeError, ensureAssociateProfile } from "./associate-profile";
 export type { EnsuredAssociate } from "./associate-profile";
 import { sendCredentialsEmail } from "./account-mail";
+import { assertEmailDomainAllowed } from "./allowed-domains";
 import { hashPassword } from "./password";
 import { writeAuditLog, type AuditContext } from "./audit";
 import {
@@ -269,6 +276,8 @@ export async function createUser(db: PrismaClient, params: CreateUserParams): Pr
 
   const created = await db.$transaction(async (tx) => {
     await assertCanManage(tx, actorId, [params.roleCode]);
+    // After the permission check, so a caller without rights gets that error first.
+    assertEmailDomainAllowed(email, params.roleCode);
 
     const role = await tx.role.findUnique({ where: { orgId_code: { orgId: params.audit.orgId, code: params.roleCode } } });
     if (!role) throw new RoleNotFoundError(params.roleCode);
@@ -426,6 +435,11 @@ export async function updateUserRoles(db: PrismaClient, params: UpdateUserRolesP
     if (unchanged) return;
 
     if (beforeCodes.includes(SUPER_ADMIN_ROLE) && params.roleCode !== SUPER_ADMIN_ROLE) {
+      // A Super Admin may use any email, so turning that account into a role that
+      // needs a company address must not be a way round createUser's check. Moves
+      // between the other roles are not checked.
+      assertEmailDomainAllowed(user.email, params.roleCode);
+
       const others = await tx.user.count({
         where: { orgId: params.audit.orgId, id: { not: user.id }, userRoles: { some: { role: { code: SUPER_ADMIN_ROLE } } } },
       });
