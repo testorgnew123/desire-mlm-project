@@ -30,10 +30,14 @@
 // path works against local Docker Postgres, CI's ephemeral Postgres, AND
 // hosted Neon. Netlify Functions run on normal Node.js, not edge, so there is
 // no need for Neon's HTTP-specific transport that adapter-neon exists for.
+// relationJoins lets one read fetch a row and the rows it names in ONE statement
+// (`relationLoadStrategy: "join"`) instead of one statement per relation. Only the
+// queries that ask for it change; every other query keeps loading as before.
 generator client {
-  provider   = "prisma-client"
-  engineType = "client"
-  output     = "../src/generated/prisma"
+  provider        = "prisma-client"
+  engineType      = "client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {

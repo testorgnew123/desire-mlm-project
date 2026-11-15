@@ -48,8 +48,12 @@ interface BookingFacts {
 }
 
 async function loadFacts(db: PrismaClient, bookingId: string): Promise<BookingFacts | null> {
+  // One statement, not six: the booking and the four rows its mail quotes are
+  // joined in the database. This runs inside the request of the person who
+  // confirmed or booked, after the commit, and each statement is a round trip.
   const booking = await db.booking.findUnique({
     where: { id: bookingId },
+    relationLoadStrategy: "join",
     select: {
       id: true,
       orgId: true,
@@ -57,31 +61,24 @@ async function loadFacts(db: PrismaClient, bookingId: string): Promise<BookingFa
       status: true,
       agreementValue: true,
       cancellationReason: true,
-      unitId: true,
-      projectId: true,
-      customerId: true,
-      sellingAssociateId: true,
+      unit: { select: { unitNumber: true } },
+      project: { select: { name: true } },
+      customer: { select: { name: true, email: true } },
+      sellingAssociate: { select: { user: { select: { name: true, email: true } } } },
     },
   });
   if (!booking) return null;
-  const [unit, project, customer, associate] = await Promise.all([
-    db.unit.findUnique({ where: { id: booking.unitId }, select: { unitNumber: true } }),
-    db.project.findUnique({ where: { id: booking.projectId }, select: { name: true } }),
-    db.customer.findUnique({ where: { id: booking.customerId }, select: { name: true, email: true } }),
-    db.associate.findUnique({ where: { id: booking.sellingAssociateId }, select: { user: { select: { name: true, email: true } } } }),
-  ]);
-  if (!unit || !project || !customer || !associate) return null;
   return {
     id: booking.id,
     bookingNumber: booking.bookingNumber,
     status: booking.status,
     agreementValue: booking.agreementValue,
-    unitNumber: unit.unitNumber,
-    projectName: project.name,
-    customerName: customer.name,
-    customerEmail: customer.email,
-    associateName: associate.user.name,
-    associateEmail: associate.user.email,
+    unitNumber: booking.unit.unitNumber,
+    projectName: booking.project.name,
+    customerName: booking.customer.name,
+    customerEmail: booking.customer.email,
+    associateName: booking.sellingAssociate.user.name,
+    associateEmail: booking.sellingAssociate.user.email,
     orgId: booking.orgId,
     cancellationReason: booking.cancellationReason,
   };
@@ -150,15 +147,49 @@ async function sendAll(messages: Array<{ to: string; subject: string; text: stri
   await Promise.allSettled(messages.map((message) => sendMail(message, BOOKING_MAIL_DEADLINE_MS)));
 }
 
+/** Runs a piece of work once the response has gone (Next's `after()`). */
+export type MailScheduler = (task: () => Promise<void>) => void;
+
+// On globalThis, not in a module variable: the host registers the scheduler from
+// instrumentation.ts, which is bundled apart from the route handlers, and both
+// must see the same one.
+const globals = globalThis as unknown as { __desireBookingMailScheduler?: MailScheduler };
+
+/** By default the person who books or confirms waits for the mail (at most
+ *  BOOKING_MAIL_DEADLINE_MS): on a serverless function nothing is guaranteed to
+ *  run once the response has gone, so waiting is the one way to be sure the mail
+ *  reached the server. A host that can keep a function alive after the response
+ *  registers a scheduler here and nobody waits for the mail server any more
+ *  (BOOKING_MAIL_AFTER_RESPONSE in apps/web/instrumentation.ts, off by default). */
+export function setBookingMailScheduler(scheduler: MailScheduler | null): void {
+  globals.__desireBookingMailScheduler = scheduler ?? undefined;
+}
+
+async function deliver(task: () => Promise<void>): Promise<void> {
+  const scheduler = globals.__desireBookingMailScheduler;
+  if (scheduler) {
+    try {
+      scheduler(task);
+      return;
+    } catch {
+      // Not inside a request (a script, a job): there is no response to come after,
+      // so send it here and now.
+    }
+  }
+  await task();
+}
+
 /** Runs one notification and swallows anything it throws: a mail problem must not
  *  turn a finished booking into an error. Logs the booking id, never an address. */
 async function safely(what: string, bookingId: string, run: () => Promise<void>): Promise<void> {
   if (!isMailConfigured()) return;
-  try {
-    await run();
-  } catch (error) {
-    console.error(`booking mail (${what}) failed for ${bookingId}`, error instanceof Error ? error.name : error);
-  }
+  await deliver(async () => {
+    try {
+      await run();
+    } catch (error) {
+      console.error(`booking mail (${what}) failed for ${bookingId}`, error instanceof Error ? error.name : error);
+    }
+  });
 }
 
 /** A new booking (a draft) is waiting: tell every admin who may confirm it,
