@@ -6,6 +6,7 @@
 // choice (Server Components + Server Actions only, no client state library).
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
+import { AccountDisabledError } from "@desire/services/auth";
 import { AccountLockedError, InvalidCredentialsError, attemptLogin } from "@desire/services/password";
 import { continueAfterPassword } from "./continue";
 import { setPendingPasswordChangeCookie } from "./pending";
@@ -41,6 +42,9 @@ export async function loginAction(formData: FormData): Promise<void> {
   } catch (error) {
     if (error instanceof AccountLockedError) {
       redirect(`/login?error=account_locked&until=${encodeURIComponent(error.lockedUntil.toISOString())}`);
+    }
+    if (error instanceof AccountDisabledError) {
+      redirect("/login?error=account_disabled");
     }
     if (error instanceof InvalidCredentialsError) {
       redirect("/login?error=invalid_credentials");

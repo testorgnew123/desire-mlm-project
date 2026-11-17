@@ -6,6 +6,7 @@ import "dotenv/config";
 import { afterAll, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import {
+  AccountDisabledError,
   SessionInvalidError,
   createSession,
   revokeAllSessions,
@@ -104,9 +105,45 @@ describe("attemptLogin / lockout", () => {
     expect(reloaded.lockedUntil).not.toBeNull();
     expect(reloaded.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
   });
+
+  it.each(["DISABLED", "SUSPENDED"] as const)("refuses a %s account that gives the right password, and does not count it as a login", async (status) => {
+    const user = await makeTestUser(`blocked-${status.toLowerCase()}`);
+    await db.user.update({ where: { id: user.id }, data: { status } });
+
+    await expect(attemptLogin(db, user.email, TEST_ORG_ID, TEST_PASSWORD)).rejects.toThrow(AccountDisabledError);
+
+    const reloaded = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(reloaded.lastLoginAt).toBeNull();
+    expect(reloaded.failedLoginCount).toBe(0);
+  });
+
+  it("answers a wrong password on a disabled account like any other wrong password", async () => {
+    const user = await makeTestUser("blocked-wrongpass");
+    await db.user.update({ where: { id: user.id }, data: { status: "DISABLED" } });
+
+    await expect(attemptLogin(db, user.email, TEST_ORG_ID, "wrong-password")).rejects.toThrow(InvalidCredentialsError);
+  });
+
+  it("still lets an INVITED account, one that has not yet replaced its temporary password, sign in", async () => {
+    const user = await makeTestUser("invited");
+    await db.user.update({ where: { id: user.id }, data: { status: "INVITED" } });
+
+    await expect(attemptLogin(db, user.email, TEST_ORG_ID, TEST_PASSWORD)).resolves.toMatchObject({ user: { id: user.id } });
+  });
 });
 
 describe("sessions", () => {
+  it("will not create a session for a disabled account, so a sign-in begun earlier cannot finish", async () => {
+    const user = await makeTestUser("session-disabled");
+    await db.user.update({ where: { id: user.id }, data: { status: "DISABLED" } });
+
+    await expect(createSession(db, user.id, {})).rejects.toThrow(AccountDisabledError);
+    expect(await db.session.count({ where: { userId: user.id } })).toBe(0);
+
+    await db.user.update({ where: { id: user.id }, data: { status: "INVITED" } });
+    await expect(createSession(db, user.id, {})).resolves.toHaveProperty("rawToken");
+  });
+
   it("creates a session and validates it", async () => {
     const user = await makeTestUser("session-create");
     const { rawToken } = await createSession(db, user.id, { ipAddress: "127.0.0.1" });

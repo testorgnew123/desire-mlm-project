@@ -4,7 +4,15 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getPrismaClient } from "@desire/db";
 import type { NotificationChannel, RoleCode } from "@desire/db";
-import { createUser, resetUserPassword, updateUserRoles, type IssuedCredentials } from "@desire/services/admin";
+import {
+  createUser,
+  deleteUser,
+  resetUserPassword,
+  setUserDisabled,
+  updateUser,
+  updateUserRoles,
+  type IssuedCredentials,
+} from "@desire/services/admin";
 import { createNotificationRule, updateNotificationRule } from "@desire/services/notifications";
 import { requireSession } from "@/lib/session";
 import type { ActionResult } from "@/lib/action-result";
@@ -104,6 +112,70 @@ export async function updateUserRolesAction(formData: FormData): Promise<ActionR
   }
   revalidatePath("/admin/users");
   return { ok: true, message: "Role updated." };
+}
+
+export async function updateUserAction(formData: FormData): Promise<ActionResult> {
+  const session = await requireSession();
+  const db = getPrismaClient();
+  const userId = String(formData.get("userId") ?? "");
+
+  try {
+    const updated = await updateUser(db, {
+      userId,
+      name: String(formData.get("name") ?? ""),
+      email: String(formData.get("email") ?? ""),
+      audit: auditFor(session),
+    });
+    revalidatePath("/admin/users");
+    revalidatePath(`/admin/users/${userId}`);
+    if (!updated.changed) return { ok: true, message: "Nothing to change." };
+    return {
+      ok: true,
+      message: updated.emailChanged
+        ? `Saved. The login ID is now ${updated.email}. Nothing was sent to it: use Reset password to email the login to the new address.`
+        : "Saved.",
+    };
+  } catch (error) {
+    if (error instanceof Error) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+export async function setUserDisabledAction(formData: FormData): Promise<ActionResult> {
+  const session = await requireSession();
+  const db = getPrismaClient();
+  const userId = String(formData.get("userId") ?? "");
+  const disabled = formData.get("disabled") === "true";
+
+  try {
+    const result = await setUserDisabled(db, { userId, disabled, audit: auditFor(session) });
+    revalidatePath("/admin/users");
+    revalidatePath(`/admin/users/${userId}`);
+    if (!result.changed) return { ok: true, message: disabled ? "Already disabled." : "Already enabled." };
+    return {
+      ok: true,
+      message: disabled
+        ? `Disabled. ${result.email} is signed out and cannot sign in until the account is enabled.`
+        : `Enabled. ${result.email} can sign in again.`,
+    };
+  } catch (error) {
+    if (error instanceof Error) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+export async function deleteUserAction(formData: FormData): Promise<ActionResult> {
+  const session = await requireSession();
+  const db = getPrismaClient();
+
+  try {
+    const deleted = await deleteUser(db, { userId: String(formData.get("userId") ?? ""), audit: auditFor(session) });
+    revalidatePath("/admin/users");
+    return { ok: true, message: `Deleted ${deleted.email}.`, redirectTo: "/admin/users" };
+  } catch (error) {
+    if (error instanceof Error) return { ok: false, error: error.message };
+    throw error;
+  }
 }
 
 export async function createNotificationRuleAction(formData: FormData): Promise<void> {

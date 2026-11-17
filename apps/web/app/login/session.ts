@@ -4,13 +4,26 @@
 // lib/api-session.ts), then clears the pending-MFA cookie so it can't be
 // replayed.
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import type { PrismaClient } from "@desire/db";
-import { createSession } from "@desire/services/auth";
+import { AccountDisabledError, createSession, type CreatedSession } from "@desire/services/auth";
 import { SESSION_COOKIE_NAME } from "@/lib/api-session";
 import { clearPendingMfaCookie } from "./pending";
 
 export async function establishSession(db: PrismaClient, userId: string): Promise<void> {
-  const { rawToken, expiresAt } = await createSession(db, userId, {});
+  let created: CreatedSession;
+  try {
+    created = await createSession(db, userId, {});
+  } catch (error) {
+    // Disabled after the password step (a pending MFA or password-change cookie
+    // outlives that for a few minutes): no session, and the cookie is of no use.
+    if (error instanceof AccountDisabledError) {
+      await clearPendingMfaCookie();
+      redirect("/login?error=account_disabled");
+    }
+    throw error;
+  }
+  const { rawToken, expiresAt } = created;
   const store = await cookies();
   store.set(SESSION_COOKIE_NAME, rawToken, {
     httpOnly: true,

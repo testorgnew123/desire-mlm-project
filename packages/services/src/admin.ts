@@ -17,10 +17,14 @@
 // or alter another admin.
 //
 // Emails are held to ALLOWED_EMAIL_DOMAINS (allowed-domains.ts): every role except
-// SUPER_ADMIN needs an email on that list when its account is created, and an
-// account only moves from SUPER_ADMIN to another role if its email is on it. Any
-// future code that creates an account or changes an email must call
+// SUPER_ADMIN needs an email on that list when its account is created or its address
+// is changed, and an account only moves from SUPER_ADMIN to another role if its email
+// is on it. Any future code that creates an account or changes an email must call
 // assertEmailDomainAllowed too.
+//
+// An account is never erased once it has history: delete only removes one that never
+// signed in and has nothing recorded against its associate profile. Any other account
+// is disabled instead (sessions ended, sign-in refused) and can be enabled again.
 import { randomBytes } from "node:crypto";
 import { Prisma } from "@desire/db";
 import type { PrismaClient, User, UserStatus } from "@desire/db";
@@ -37,7 +41,7 @@ import {
   ensureAdminAssociateProfile,
   ensureAssociateProfile,
 } from "./associate-profile";
-import { revokeAllSessions } from "./auth";
+import { BLOCKED_USER_STATUSES, revokeAllSessions } from "./auth";
 import { ForbiddenError, getSessionPermissions } from "./rbac";
 
 const MANAGE_USERS = "user.manage";
@@ -49,6 +53,15 @@ const SUPER_ADMIN_ROLE: RoleCode = "SUPER_ADMIN";
  *  anything past it would silently disappear, so it is a named ceiling rather
  *  than an unbounded read. */
 const USER_LIST_LIMIT = 500;
+
+/** The longest search the list takes; a longer one is cut, not refused. */
+export const USER_SEARCH_MAX_LENGTH = 100;
+
+/** What an Admin may see and manage: accounts whose only role is ASSOCIATE. A Super
+ *  Admin is not filtered. */
+const ASSOCIATES_ONLY = {
+  userRoles: { some: { role: { code: ASSOCIATE_ROLE } }, none: { role: { code: { not: ASSOCIATE_ROLE } } } },
+} satisfies Prisma.UserWhereInput;
 
 // ── Errors ─────────────────────────────────────────────────────────────
 
@@ -106,6 +119,31 @@ export class LastSuperAdminError extends Error {
   }
 }
 
+export class SelfDisableError extends Error {
+  constructor() {
+    super("You cannot disable your own account.");
+    this.name = "SelfDisableError";
+  }
+}
+
+export class SelfDeleteError extends Error {
+  constructor() {
+    super("You cannot delete your own account.");
+    this.name = "SelfDeleteError";
+  }
+}
+
+/** Deleting this account would erase history, so it can only be disabled. */
+export class UserInUseError extends Error {
+  constructor(
+    public readonly email: string,
+    why: string,
+  ) {
+    super(`${email} ${why}, so it cannot be deleted. Disable it instead.`);
+    this.name = "UserInUseError";
+  }
+}
+
 // ── Shared helpers (duplicated per file -- this codebase's own convention)
 
 function requireActor(audit: AuditContext): string {
@@ -117,6 +155,19 @@ function requireActor(audit: AuditContext): string {
 
 function assertRoleCode(roleCode: string): asserts roleCode is RoleCode {
   if (!(ROLE_CODES as readonly string[]).includes(roleCode)) throw new InvalidRoleError(roleCode);
+}
+
+function isRoleCode(code: string): code is RoleCode {
+  return (ROLE_CODES as readonly string[]).includes(code);
+}
+
+/** The database refused a delete because something still points at the row. With
+ *  the pg driver adapter a RESTRICT refusal (SQLSTATE 23001) arrives as a raw adapter
+ *  error, not as Prisma's P2003, so both are recognised. */
+function isForeignKeyRefusal(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError) return err.code === "P2003";
+  const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return code === "23001" || code === "23503";
 }
 
 /** What the actor may do to accounts, from one permission read. */
@@ -141,6 +192,20 @@ async function assertCanManage(
   if (!reach.rbac && roleCodes.some((code) => code !== ASSOCIATE_ROLE)) {
     throw new ForbiddenError("Only a Super Admin can manage admins and super admins.");
   }
+}
+
+/** Another Super Admin who can still sign in. Without one the organisation would be
+ *  locked out of everything only a Super Admin may do: a disabled one does not count. */
+async function assertAnotherSuperAdmin(tx: Prisma.TransactionClient, orgId: string, excludeUserId: string): Promise<void> {
+  const others = await tx.user.count({
+    where: {
+      orgId,
+      id: { not: excludeUserId },
+      status: { notIn: [...BLOCKED_USER_STATUSES] },
+      userRoles: { some: { role: { code: SUPER_ADMIN_ROLE } } },
+    },
+  });
+  if (others === 0) throw new LastSuperAdminError();
 }
 
 function normaliseEmail(email: string): string {
@@ -191,17 +256,24 @@ export async function listUsers(
     skip?: number;
     /** Rows to return. Ask for one more than a page to learn whether there is a next one. */
     take?: number;
+    /** Only accounts whose name or email contains this, whatever its case. */
+    search?: string;
   },
 ): Promise<UserSummary[]> {
   const reach = await actorReach(db, params.actorId);
   if (!reach.users) throw new ForbiddenError(`User ${params.actorId} lacks permission "${MANAGE_USERS}".`);
 
+  const term = params.search?.trim().slice(0, USER_SEARCH_MAX_LENGTH);
+  // `contains` is a LIKE, and Prisma does not escape % and _ in it: do it here, so a
+  // search for "a_b" finds "a_b" and not "axb".
+  const pattern = term?.replace(/[\\%_]/g, "\\$&");
   const users = await db.user.findMany({
     where: {
       orgId: params.orgId,
-      ...(reach.rbac
-        ? {}
-        : { userRoles: { some: { role: { code: ASSOCIATE_ROLE } }, none: { role: { code: { not: ASSOCIATE_ROLE } } } } }),
+      ...(reach.rbac ? {} : ASSOCIATES_ONLY),
+      ...(pattern
+        ? { OR: [{ email: { contains: pattern, mode: "insensitive" } }, { name: { contains: pattern, mode: "insensitive" } }] }
+        : {}),
     },
     select: {
       id: true,
@@ -223,6 +295,52 @@ export async function listUsers(
     roleCodes: u.userRoles.map((ur) => ur.role.code),
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
   }));
+}
+
+export interface UserDetail extends UserSummary {
+  createdAt: string;
+  /** True while the person still has the temporary password they were sent. */
+  mustChangePassword: boolean;
+  /** The associate profile's code (holds and bookings are made under it), if there is one. */
+  associateCode: string | null;
+}
+
+/** One account, for its own page. Null when there is no such account, it belongs to
+ *  another organisation, or the actor may not manage it (an Admin sees associates only),
+ *  so the page cannot be used to find out who exists. */
+export async function getUser(
+  db: PrismaClient,
+  params: { orgId: string; actorId: string; userId: string },
+): Promise<UserDetail | null> {
+  const reach = await actorReach(db, params.actorId);
+  if (!reach.users) throw new ForbiddenError(`User ${params.actorId} lacks permission "${MANAGE_USERS}".`);
+
+  const u = await db.user.findFirst({
+    where: { id: params.userId, orgId: params.orgId, ...(reach.rbac ? {} : ASSOCIATES_ONLY) },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      status: true,
+      lastLoginAt: true,
+      createdAt: true,
+      mustChangePassword: true,
+      userRoles: { select: { role: { select: { code: true } } } },
+      associate: { select: { code: true } },
+    },
+  });
+  if (!u) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    status: u.status,
+    roleCodes: u.userRoles.map((ur) => ur.role.code),
+    lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+    createdAt: u.createdAt.toISOString(),
+    mustChangePassword: u.mustChangePassword,
+    associateCode: u.associate?.code ?? null,
+  };
 }
 
 // ── Create ─────────────────────────────────────────────────────────────
@@ -439,11 +557,7 @@ export async function updateUserRoles(db: PrismaClient, params: UpdateUserRolesP
       // needs a company address must not be a way round createUser's check. Moves
       // between the other roles are not checked.
       assertEmailDomainAllowed(user.email, params.roleCode);
-
-      const others = await tx.user.count({
-        where: { orgId: params.audit.orgId, id: { not: user.id }, userRoles: { some: { role: { code: SUPER_ADMIN_ROLE } } } },
-      });
-      if (others === 0) throw new LastSuperAdminError();
+      await assertAnotherSuperAdmin(tx, params.audit.orgId, user.id);
     }
 
     await tx.userRole.deleteMany({ where: { userId: user.id } });
@@ -458,5 +572,225 @@ export async function updateUserRoles(db: PrismaClient, params: UpdateUserRolesP
       before: { roleCodes: beforeCodes },
       after: { roleCodes: [params.roleCode] },
     });
+  });
+}
+
+// ── Edit ───────────────────────────────────────────────────────────────
+
+export interface UpdateUserParams {
+  userId: string;
+  name: string;
+  email: string;
+  audit: AuditContext;
+}
+
+export interface UpdatedUser {
+  userId: string;
+  name: string;
+  /** Normalised (trimmed, lower-case): the login ID from now on. */
+  email: string;
+  /** False when the name and the address were already as given. */
+  changed: boolean;
+  emailChanged: boolean;
+}
+
+/** Changes a person's name and email. Same ceiling as everything else here: an ADMIN
+ *  edits associates, only a SUPER_ADMIN anyone. The address is the login ID, and
+ *  nothing is sent to it: resetUserPassword emails the login to the new address.
+ *
+ *  A new address must be on the company list unless the account is a Super Admin's
+ *  (assertEmailDomainAllowed). An address left as it was is never checked, so an
+ *  account that pre-dates the list can still have its name corrected. */
+export async function updateUser(db: PrismaClient, params: UpdateUserParams): Promise<UpdatedUser> {
+  const actorId = requireActor(params.audit);
+  const name = params.name.trim();
+  if (name === "") throw new InvalidUserInputError("A name is required.");
+  const email = normaliseEmail(params.email);
+
+  return db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: params.userId },
+      select: { id: true, orgId: true, name: true, email: true, userRoles: { select: { role: { select: { code: true } } } } },
+    });
+    if (!user) throw new UserNotFoundError(params.userId);
+    if (user.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`User ${params.userId} belongs to another organisation.`);
+    }
+    const roleCodes = user.userRoles.map((ur) => ur.role.code);
+    await assertCanManage(tx, actorId, roleCodes);
+
+    const emailChanged = email !== user.email;
+    if (!emailChanged && name === user.name) return { userId: user.id, name, email, changed: false, emailChanged: false };
+
+    if (emailChanged) {
+      // A role that is not one of the three (an old one) cannot be classified: skipped.
+      for (const code of roleCodes) if (isRoleCode(code)) assertEmailDomainAllowed(email, code);
+    }
+
+    try {
+      await tx.user.update({ where: { id: user.id }, data: { name, email } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        throw new DuplicateEmailError(email);
+      }
+      throw err;
+    }
+
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "User",
+      entityId: user.id,
+      before: { name: user.name, email: user.email },
+      after: { name, email },
+    });
+    return { userId: user.id, name, email, changed: true, emailChanged };
+  });
+}
+
+// ── Disable and enable ─────────────────────────────────────────────────
+
+export interface SetUserDisabledParams {
+  userId: string;
+  disabled: boolean;
+  audit: AuditContext;
+}
+
+export interface UserAvailability {
+  userId: string;
+  email: string;
+  status: UserStatus;
+  /** False when the account was already in the state asked for. */
+  changed: boolean;
+}
+
+/** Switches an account off or back on. A disabled account cannot sign in
+ *  (attemptLogin, createSession) and its sessions are ended here; nothing else about
+ *  it changes, so its holds, bookings and history stay as they are. Enabling puts it
+ *  back where it was: INVITED while it still has the temporary password, ACTIVE
+ *  otherwise. Same ceiling as everything else here. Nobody disables themselves, or
+ *  the last Super Admin who can still sign in. */
+export async function setUserDisabled(db: PrismaClient, params: SetUserDisabledParams): Promise<UserAvailability> {
+  const actorId = requireActor(params.audit);
+
+  return db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: params.userId },
+      select: {
+        id: true,
+        orgId: true,
+        email: true,
+        status: true,
+        mustChangePassword: true,
+        userRoles: { select: { role: { select: { code: true } } } },
+      },
+    });
+    if (!user) throw new UserNotFoundError(params.userId);
+    if (user.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`User ${params.userId} belongs to another organisation.`);
+    }
+    const roleCodes = user.userRoles.map((ur) => ur.role.code);
+    await assertCanManage(tx, actorId, roleCodes);
+
+    const switchedOff = BLOCKED_USER_STATUSES.includes(user.status);
+    const unchanged = { userId: user.id, email: user.email, status: user.status, changed: false };
+    let status: UserStatus;
+    if (params.disabled) {
+      if (user.id === actorId) throw new SelfDisableError();
+      if (switchedOff) return unchanged;
+      if (roleCodes.includes(SUPER_ADMIN_ROLE)) await assertAnotherSuperAdmin(tx, user.orgId, user.id);
+      status = "DISABLED";
+    } else {
+      if (!switchedOff) return unchanged;
+      status = user.mustChangePassword ? "INVITED" : "ACTIVE";
+    }
+
+    await tx.user.update({ where: { id: user.id }, data: { status } });
+    if (params.disabled) await revokeAllSessions(tx, user.id);
+
+    await writeAuditLog(tx, params.audit, {
+      action: "UPDATE",
+      entity: "User",
+      entityId: user.id,
+      before: { status: user.status },
+      after: { status },
+    });
+    return { userId: user.id, email: user.email, status, changed: true };
+  });
+}
+
+// ── Delete ─────────────────────────────────────────────────────────────
+
+export interface DeleteUserParams {
+  userId: string;
+  audit: AuditContext;
+}
+
+/** Deletes an account that was never used: it has not signed in, and nothing is
+ *  recorded against its associate profile. The database decides most of the second
+ *  part: the tables that point at an associate (holds, bookings, commission, payouts
+ *  and so on) refuse the delete with a foreign-key error, reported as "in use" rather
+ *  than checked against a list kept here. Three relations do not refuse, they detach
+ *  quietly (SET NULL): leads assigned to it, lead activities, and associates placed
+ *  under it. Those are looked at first, and a test fails if the schema gains another.
+ *  Anything else is disabled, not deleted: erasing it would erase history. Same
+ *  ceiling as everything else here; nobody deletes themselves or the last Super Admin
+ *  who can still sign in. The audit log keeps what was deleted. */
+export async function deleteUser(db: PrismaClient, params: DeleteUserParams): Promise<{ userId: string; email: string }> {
+  const actorId = requireActor(params.audit);
+
+  return db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: params.userId },
+      select: {
+        id: true,
+        orgId: true,
+        email: true,
+        name: true,
+        lastLoginAt: true,
+        userRoles: { select: { role: { select: { code: true } } } },
+        associate: { select: { id: true, code: true } },
+      },
+    });
+    if (!user) throw new UserNotFoundError(params.userId);
+    if (user.orgId !== params.audit.orgId) {
+      throw new ForbiddenError(`User ${params.userId} belongs to another organisation.`);
+    }
+    const roleCodes = user.userRoles.map((ur) => ur.role.code);
+    await assertCanManage(tx, actorId, roleCodes);
+    if (user.id === actorId) throw new SelfDeleteError();
+    if (roleCodes.includes(SUPER_ADMIN_ROLE)) await assertAnotherSuperAdmin(tx, user.orgId, user.id);
+    if (user.lastLoginAt) throw new UserInUseError(user.email, "has signed in before");
+
+    const onRecord = "has holds, bookings or other activity on record";
+    try {
+      if (user.associate) {
+        const associateId = user.associate.id;
+        const [leads, leadActivities, placedUnder] = await Promise.all([
+          tx.lead.count({ where: { assignedAssociateId: associateId } }),
+          tx.leadActivity.count({ where: { associateId } }),
+          tx.associateHierarchy.count({ where: { parentId: associateId } }),
+        ]);
+        if (leads + leadActivities + placedUnder > 0) throw new UserInUseError(user.email, onRecord);
+
+        // The one grade row the profile was made with is not history; more than one is.
+        const grades = await tx.associateGrade.count({ where: { associateId } });
+        if (grades > 1) throw new UserInUseError(user.email, "has a grade history");
+        await tx.associateGrade.deleteMany({ where: { associateId } });
+        await tx.associate.delete({ where: { id: associateId } });
+      }
+      // Roles, sessions and reset links go with the user (cascade).
+      await tx.user.delete({ where: { id: user.id } });
+    } catch (err) {
+      if (isForeignKeyRefusal(err)) throw new UserInUseError(user.email, onRecord);
+      throw err;
+    }
+
+    await writeAuditLog(tx, params.audit, {
+      action: "DELETE",
+      entity: "User",
+      entityId: user.id,
+      before: { email: user.email, name: user.name, roleCodes, associateCode: user.associate?.code ?? null },
+    });
+    return { userId: user.id, email: user.email };
   });
 }
