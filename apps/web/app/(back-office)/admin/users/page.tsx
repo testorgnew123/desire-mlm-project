@@ -3,10 +3,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPrismaClient, ROLE_CODES, ROLE_NAMES } from "@desire/db";
 import type { RoleCode } from "@desire/db";
-import { listUsers } from "@desire/services/admin";
+import { USER_SEARCH_MAX_LENGTH, listUsers } from "@desire/services/admin";
 import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -27,6 +28,8 @@ const PAGE_SIZE = 50;
 
 interface UsersSearchParams {
   page?: string;
+  /** Show only accounts whose name or email contains this. */
+  q?: string;
 }
 
 /** Who may do what here is decided by the service (admin.ts): a Super Admin
@@ -38,7 +41,8 @@ interface UsersSearchParams {
  *  person. The admin sees the password, under the button that was pressed, only
  *  when that email did not go. */
 export default async function AdminUsersPage({ searchParams }: { searchParams: Promise<UsersSearchParams> }) {
-  const { page: rawPage } = await searchParams;
+  const { page: rawPage, q: rawQ } = await searchParams;
+  const q = (rawQ ?? "").trim().slice(0, USER_SEARCH_MAX_LENGTH);
   // Clamped so a hand-edited ?page= cannot ask the database for an offset it cannot hold.
   const page = Math.min(1000, Math.max(1, Math.floor(Number(rawPage)) || 1));
   const session = await requireSession();
@@ -54,9 +58,12 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
     actorId: session.user.id,
     skip: (page - 1) * PAGE_SIZE,
     take: PAGE_SIZE + 1,
+    search: q || undefined,
   });
   const users = fetched.slice(0, PAGE_SIZE);
   const hasNext = fetched.length > PAGE_SIZE;
+  // The search stays in the paging links, or "Next" would drop it.
+  const pageHref = (n: number) => `/admin/users?${new URLSearchParams({ ...(q ? { q } : {}), page: String(n) }).toString()}`;
 
   return (
     <div className="flex flex-col gap-4">
@@ -102,6 +109,25 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
         </CardContent>
       </Card>
 
+      <form action="/admin/users" method="get" className="flex flex-wrap items-center gap-2">
+        <Input
+          name="q"
+          defaultValue={q}
+          maxLength={USER_SEARCH_MAX_LENGTH}
+          placeholder="Search by name or email"
+          aria-label="Search users"
+          className="max-w-xs"
+        />
+        <Button type="submit" size="sm" variant="outline">
+          Search
+        </Button>
+        {q ? (
+          <Link href="/admin/users" className="text-sm text-primary hover:underline">
+            Clear
+          </Link>
+        ) : null}
+      </form>
+
       <Card>
         <CardContent className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -113,6 +139,9 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                 <th className="py-1.5 pr-4">Last login</th>
                 <th className="py-1.5 pr-4">Role</th>
                 <th className="py-1.5 pr-4">Password</th>
+                <th className="py-1.5 pr-4">
+                  <span className="sr-only">Edit</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -121,7 +150,9 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                   <td className="py-1.5 pr-4">{user.email}</td>
                   <td className="py-1.5 pr-4">{user.name}</td>
                   <td className="py-1.5 pr-4">
-                    <Badge variant="secondary">{user.status.replaceAll("_", " ")}</Badge>
+                    <Badge variant={user.status === "DISABLED" || user.status === "SUSPENDED" ? "danger" : "secondary"}>
+                      {user.status.replaceAll("_", " ")}
+                    </Badge>
                   </td>
                   <td className="py-1.5 pr-4 tabular-nums">{user.lastLoginAt ? formatDate(user.lastLoginAt) : "Never"}</td>
                   <td className="py-1.5 pr-4">
@@ -171,14 +202,22 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                       </SubmitButton>
                     </ActionForm>
                   </td>
+                  <td className="py-1.5 pr-4">
+                    <Link href={`/admin/users/${user.id}`} className="text-primary hover:underline">
+                      Edit
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {users.length === 0 ? (
+            <p className="py-3 text-sm text-muted-foreground">{q ? `No one matches "${q}".` : "No users yet."}</p>
+          ) : null}
           {page > 1 || hasNext ? (
             <div className="mt-3 flex items-center justify-between text-sm">
               {page > 1 ? (
-                <Link href={`/admin/users?page=${page - 1}`} className="text-primary hover:underline">
+                <Link href={pageHref(page - 1)} className="text-primary hover:underline">
                   Previous
                 </Link>
               ) : (
@@ -186,7 +225,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
               )}
               <span className="text-muted-foreground">Page {page}</span>
               {hasNext ? (
-                <Link href={`/admin/users?page=${page + 1}`} className="text-primary hover:underline">
+                <Link href={pageHref(page + 1)} className="text-primary hover:underline">
                   Next
                 </Link>
               ) : (

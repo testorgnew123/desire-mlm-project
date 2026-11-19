@@ -11,7 +11,7 @@
 // 12h idle / 7d absolute timeout, per-account lockout after 5 failed
 // attempts, server-side revocation on demand.
 import { randomBytes, createHash } from "node:crypto";
-import type { PrismaClient, Prisma, Session } from "@desire/db";
+import type { PrismaClient, Prisma, Session, UserStatus } from "@desire/db";
 
 const SESSION_TOKEN_BYTES = 32;
 const SESSION_IDLE_TIMEOUT_MINUTES = 12 * 60;
@@ -27,6 +27,18 @@ export class SessionInvalidError extends Error {
     this.name = "SessionInvalidError";
   }
 }
+
+/** The account behind a sign-in has been disabled by an administrator. */
+export class AccountDisabledError extends Error {
+  constructor() {
+    super("This account has been disabled. Ask an administrator.");
+    this.name = "AccountDisabledError";
+  }
+}
+
+/** Statuses that may not sign in. Nothing sets SUSPENDED today, but the enum has it
+ *  and password reset already turns it away the same way. */
+export const BLOCKED_USER_STATUSES: readonly UserStatus[] = ["SUSPENDED", "DISABLED"];
 
 
 // ── Sessions ─────────────────────────────────────────────────────────────
@@ -49,6 +61,12 @@ export async function createSession(
   userId: string,
   meta: { ipAddress?: string; userAgent?: string },
 ): Promise<CreatedSession> {
+  // The end of every sign-in (password, MFA challenge, first password change). One
+  // that began before an administrator disabled the account must not finish with a
+  // session. Once per sign-in, never per request: validateSession stays as it is.
+  const account = await db.user.findUnique({ where: { id: userId }, select: { status: true } });
+  if (account && BLOCKED_USER_STATUSES.includes(account.status)) throw new AccountDisabledError();
+
   const rawToken = randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_TIMEOUT_DAYS * 24 * 60 * 60_000);
 

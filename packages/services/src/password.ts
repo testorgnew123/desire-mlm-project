@@ -11,6 +11,7 @@
 // that needs a password, so attemptLogin lives here with it.
 import { hash as argon2Hash, verify as argon2Verify } from "@node-rs/argon2";
 import type { PrismaClient, User } from "@desire/db";
+import { AccountDisabledError, BLOCKED_USER_STATUSES } from "./auth";
 
 const FAILED_LOGIN_LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
@@ -80,6 +81,11 @@ export async function attemptLogin(
     await recordFailedLogin(db, user.id, user.failedLoginCount);
     throw new InvalidCredentialsError();
   }
+
+  // After the password, so a wrong guess still gets the same answer as for an account
+  // that does not exist: only someone who knows the password is told it is switched
+  // off. Before the update below, so a refused sign-in does not count as a login.
+  if (BLOCKED_USER_STATUSES.includes(user.status)) throw new AccountDisabledError();
 
   await db.user.update({
     where: { id: user.id },

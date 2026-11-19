@@ -33,6 +33,8 @@ function errorMessage({ error, until }: LoginSearchParams): string | null {
       return "No organization is configured.";
     case "invalid_credentials":
       return "Invalid email or password.";
+    case "account_disabled":
+      return "This account has been disabled. Ask an administrator.";
     case "account_locked":
       return until
         ? `Account is locked until ${formatDateTime(until)} IST.`

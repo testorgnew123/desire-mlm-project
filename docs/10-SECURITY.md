@@ -13,7 +13,7 @@ accordingly.
 | Absolute timeout | 7 d |
 | Lockout | 5 failed attempts → 15 min lock, per IP **and** per account |
 | MFA | TOTP, mandatory for `SUPER_ADMIN`, `FINANCE_ADMIN`, `SALES_HEAD` |
-| Session revocation | `Session.revokedAt`; role change or password reset revokes all |
+| Session revocation | `Session.revokedAt`; role change, password reset or disabling the account revokes all. A disabled account (`User.status` DISABLED or SUSPENDED) is also refused at sign-in and when a half-finished sign-in tries to open a session |
 
 Impersonation (support) requires `SUPER_ADMIN`, shows a persistent banner, and
 writes `AuditAction.IMPERSONATE`.

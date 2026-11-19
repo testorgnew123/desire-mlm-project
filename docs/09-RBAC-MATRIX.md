@@ -27,7 +27,15 @@
 >   a company domain listed in the server setting `ALLOWED_EMAIL_DOMAINS`. SUPER_ADMIN, the
 >   client's own role, may use any address; changing a SUPER_ADMIN account to ADMIN or
 >   ASSOCIATE needs an allowed address too. The list is not editable in the app
->   (`packages/services/src/allowed-domains.ts`, docs/15-OPS-RUNBOOK.md).
+>   (`packages/services/src/allowed-domains.ts`, docs/15-OPS-RUNBOOK.md). Changing an
+>   existing account's email is held to the same list, unless it is a Super Admin's.
+> - **Edit, disable, delete (2026-11-17).** The same ceiling as the rest of user
+>   management: an ADMIN edits, disables, enables or deletes ASSOCIATE accounts only, a
+>   SUPER_ADMIN anyone. Nobody does it to themselves, and the last Super Admin who can
+>   sign in cannot be disabled, deleted or demoted. A disabled account cannot sign in and
+>   is signed out everywhere; its holds, bookings and history stay. Delete exists only for
+>   an account that never signed in and has nothing recorded against it; anything else is
+>   disabled instead.
 > - A key for a switched-off feature is held by SUPER_ADMIN alone.
 > - Moving an existing database to this matrix is `packages/db/scripts/narrow-roles.ts`
 >   (dry run by default).

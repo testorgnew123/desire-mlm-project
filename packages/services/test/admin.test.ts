@@ -5,11 +5,13 @@
 // associate needs before they can hold or book anything, and the company-email
 // rule (ALLOWED_EMAIL_DOMAINS) that applies to every role but Super Admin.
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyRoleSync, getPrismaClient, planRoleSync } from "@desire/db";
 import { ForbiddenError, getSessionPermissions } from "../src/rbac";
-import { createSession } from "../src/auth";
-import { verifyPassword } from "../src/password";
+import { AccountDisabledError, createSession } from "../src/auth";
+import { attemptLogin, verifyPassword } from "../src/password";
 import { EmailConfigError } from "../src/email";
 import type * as EmailModule from "../src/email";
 import {
@@ -19,11 +21,18 @@ import {
   LastSuperAdminError,
   NoDefaultGradeError,
   RoleNotFoundError,
+  SelfDeleteError,
+  SelfDisableError,
   SelfRoleChangeError,
+  UserInUseError,
   UserNotFoundError,
   createUser,
+  deleteUser,
+  getUser,
   listUsers,
   resetUserPassword,
+  setUserDisabled,
+  updateUser,
   updateUserRoles,
 } from "../src/admin";
 import { ensureAdminAssociateProfiles } from "../src/associate-profile";
@@ -54,6 +63,9 @@ const OTHER_ORG = "org_test_admin_other";
 async function reset() {
   for (const orgId of [ORG, OTHER_ORG]) {
     await db.auditLog.deleteMany({ where: { orgId } });
+    await db.lead.deleteMany({ where: { orgId } });
+    await db.savedReportView.deleteMany({ where: { orgId } });
+    await db.associateHierarchy.deleteMany({ where: { associate: { orgId } } });
     await db.associateGrade.deleteMany({ where: { associate: { orgId } } });
     await db.associate.deleteMany({ where: { orgId } });
     await db.grade.deleteMany({ where: { orgId } });
@@ -899,5 +911,554 @@ describe("listUsers", () => {
   it("refuses a user who holds no user-management permission", async () => {
     const f = await seedFixture();
     await expect(listUsers(db, { orgId: ORG, actorId: f.noPerms.id })).rejects.toThrow(ForbiddenError);
+  });
+});
+
+// ── Edit, disable and delete ───────────────────────────────────────────────
+
+type Fixture = Awaited<ReturnType<typeof seedFixture>>;
+
+const asOwner = (f: Fixture) => ctx(ORG, f.owner.id, "owner");
+const asAdmin = (f: Fixture) => ctx(ORG, f.admin.id, "admin");
+
+/** An account made through the screen's own path: INVITED, never signed in, with
+ *  its associate profile. */
+const makeUser = (f: Fixture, email: string, roleCode: "SUPER_ADMIN" | "ADMIN" | "ASSOCIATE" = "ASSOCIATE", name = "Person") =>
+  createUser(db, { email, name, roleCode, audit: asOwner(f) });
+
+/** Someone holding rbac.manage through a role that is not SUPER_ADMIN, so the actor is
+ *  never the account being touched and it is the guard on the last Super Admin that
+ *  stops the change. */
+async function opsActor() {
+  const role = await db.role.create({ data: { orgId: ORG, code: "OPS", name: "Ops" } });
+  const permission = await db.permission.findUniqueOrThrow({ where: { code: "rbac.manage" } });
+  await db.rolePermission.create({ data: { roleId: role.id, permissionId: permission.id } });
+  const ops = await db.user.create({ data: { orgId: ORG, email: "ops@test.local", name: "Ops", passwordHash: "x" } });
+  await db.userRole.create({ data: { userId: ops.id, roleId: role.id } });
+  return ops;
+}
+
+const auditRows = (userId: string, action: "UPDATE" | "DELETE") =>
+  db.auditLog.findMany({ where: { entity: "User", entityId: userId, action } });
+
+describe("updateUser", () => {
+  it("changes the name and the address, stores the address lower-case and audits before and after", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "old.address@test.local", "ASSOCIATE", "Old Name");
+
+    const result = await updateUser(db, {
+      userId: person.userId, name: "  New Name ", email: " New.Address@Test.Local ", audit: asOwner(f),
+    });
+
+    expect(result).toEqual({ userId: person.userId, name: "New Name", email: "new.address@test.local", changed: true, emailChanged: true });
+    expect(await db.user.findUniqueOrThrow({ where: { id: person.userId } })).toMatchObject({
+      name: "New Name",
+      email: "new.address@test.local",
+    });
+    const [row] = await auditRows(person.userId, "UPDATE");
+    expect(row?.before).toEqual({ name: "Old Name", email: "old.address@test.local" });
+    expect(row?.after).toEqual({ name: "New Name", email: "new.address@test.local" });
+  });
+
+  it("does not sign the person out or touch their password", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    await createSession(db, person.userId, {});
+    const before = await db.user.findUniqueOrThrow({ where: { id: person.userId } });
+
+    await updateUser(db, { userId: person.userId, name: "Renamed", email: "q@test.local", audit: asOwner(f) });
+
+    expect((await db.session.findMany({ where: { userId: person.userId } })).every((s) => s.revokedAt === null)).toBe(true);
+    expect((await db.user.findUniqueOrThrow({ where: { id: person.userId } })).passwordHash).toBe(before.passwordHash);
+  });
+
+  it("lets the name be corrected on an account whose address pre-dates the company list", async () => {
+    const f = await seedFixture();
+    // Made before the rule, on any address. The address is left alone, so it is not checked.
+    const old = await db.user.create({ data: { orgId: ORG, email: "old@gmail.com", name: "Typo Nme", passwordHash: "x", status: "ACTIVE" } });
+    const associate = await db.role.findUniqueOrThrow({ where: { orgId_code: { orgId: ORG, code: "ASSOCIATE" } } });
+    await db.userRole.create({ data: { userId: old.id, roleId: associate.id } });
+
+    const result = await updateUser(db, { userId: old.id, name: "Typo Name", email: "OLD@gmail.com", audit: asOwner(f) });
+
+    expect(result).toMatchObject({ changed: true, emailChanged: false, email: "old@gmail.com" });
+    expect((await db.user.findUniqueOrThrow({ where: { id: old.id } })).name).toBe("Typo Name");
+  });
+
+  it.each(["ADMIN", "ASSOCIATE"] as const)("refuses a new address off the company list on a %s, and leaves the account alone", async (roleCode) => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local", roleCode);
+
+    await expect(
+      updateUser(db, { userId: person.userId, name: "Changed", email: "p@gmail.com", audit: asOwner(f) }),
+    ).rejects.toThrow('"gmail.com" is not allowed; use an address at: test.local.');
+
+    expect(await db.user.findUniqueOrThrow({ where: { id: person.userId } })).toMatchObject({ name: "Person", email: "p@test.local" });
+    expect(await auditRows(person.userId, "UPDATE")).toEqual([]);
+  });
+
+  it("lets a Super Admin's address be anything", async () => {
+    const f = await seedFixture();
+    const boss = await makeUser(f, "boss@test.local", "SUPER_ADMIN");
+
+    await updateUser(db, { userId: boss.userId, name: "Boss", email: "boss@gmail.com", audit: asOwner(f) });
+
+    expect((await db.user.findUniqueOrThrow({ where: { id: boss.userId } })).email).toBe("boss@gmail.com");
+  });
+
+  it("checks the address only when it changes: an unusable setting does not stop a name edit", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    delete process.env.ALLOWED_EMAIL_DOMAINS;
+
+    await expect(
+      updateUser(db, { userId: person.userId, name: "Renamed", email: "p@test.local", audit: asOwner(f) }),
+    ).resolves.toMatchObject({ changed: true, emailChanged: false });
+    await expect(
+      updateUser(db, { userId: person.userId, name: "Renamed", email: "q@test.local", audit: asOwner(f) }),
+    ).rejects.toThrow(EmailDomainsNotConfiguredError);
+  });
+
+  it("refuses an address another account already has, whatever its case", async () => {
+    const f = await seedFixture();
+    await makeUser(f, "one@test.local");
+    const two = await makeUser(f, "two@test.local");
+
+    await expect(
+      updateUser(db, { userId: two.userId, name: "Person", email: "ONE@test.local", audit: asOwner(f) }),
+    ).rejects.toThrow(DuplicateEmailError);
+    expect((await db.user.findUniqueOrThrow({ where: { id: two.userId } })).email).toBe("two@test.local");
+  });
+
+  it("rejects an empty name and a malformed address", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    await expect(
+      updateUser(db, { userId: person.userId, name: "   ", email: "p@test.local", audit: asOwner(f) }),
+    ).rejects.toThrow(InvalidUserInputError);
+    await expect(
+      updateUser(db, { userId: person.userId, name: "Person", email: "not-an-email", audit: asOwner(f) }),
+    ).rejects.toThrow(InvalidUserInputError);
+  });
+
+  it("does nothing, and writes no audit row, when nothing changed", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+
+    const result = await updateUser(db, { userId: person.userId, name: " Person ", email: "P@test.local", audit: asOwner(f) });
+
+    expect(result).toMatchObject({ changed: false, emailChanged: false });
+    expect(await auditRows(person.userId, "UPDATE")).toEqual([]);
+  });
+
+  describe("the privilege ceiling", () => {
+    it("lets an ADMIN edit an associate", async () => {
+      const f = await seedFixture();
+      const person = await makeUser(f, "p@test.local");
+      await updateUser(db, { userId: person.userId, name: "By Admin", email: "p2@test.local", audit: asAdmin(f) });
+      expect(await db.user.findUniqueOrThrow({ where: { id: person.userId } })).toMatchObject({ name: "By Admin", email: "p2@test.local" });
+    });
+
+    it("stops an ADMIN editing an admin or a super admin", async () => {
+      const f = await seedFixture();
+      const boss = await makeUser(f, "boss@test.local", "ADMIN");
+      for (const userId of [boss.userId, f.owner.id]) {
+        await expect(
+          updateUser(db, { userId, name: "Changed", email: "changed@test.local", audit: asAdmin(f) }),
+        ).rejects.toThrow("Only a Super Admin");
+      }
+    });
+
+    it("refuses a user without user-management permission, a system actor, another org's user and an unknown user", async () => {
+      const f = await seedFixture();
+      const other = await seedFixture(OTHER_ORG);
+      const person = await makeUser(f, "p@test.local");
+      const foreign = await createUser(db, {
+        email: "foreign@test.local", name: "Foreign", roleCode: "ASSOCIATE", audit: ctx(OTHER_ORG, other.owner.id, "owner"),
+      });
+      const edit = (userId: string, audit: AuditContext) => updateUser(db, { userId, name: "Changed", email: "changed@test.local", audit });
+
+      await expect(edit(person.userId, ctx(ORG, f.noPerms.id, "noperms"))).rejects.toThrow(ForbiddenError);
+      await expect(edit(person.userId, ctx(ORG, null, "system"))).rejects.toThrow(ForbiddenError);
+      await expect(edit(foreign.userId, asOwner(f))).rejects.toThrow(ForbiddenError);
+      await expect(edit("nope", asOwner(f))).rejects.toThrow(UserNotFoundError);
+    });
+  });
+});
+
+describe("setUserDisabled", () => {
+  it("disables an account: status DISABLED, every session of theirs ended, the change audited", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    await createSession(db, person.userId, {});
+    await createSession(db, person.userId, {});
+    await createSession(db, f.admin.id, {});
+
+    const result = await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) });
+
+    expect(result).toMatchObject({ userId: person.userId, status: "DISABLED", changed: true });
+    expect((await db.user.findUniqueOrThrow({ where: { id: person.userId } })).status).toBe("DISABLED");
+    const theirs = await db.session.findMany({ where: { userId: person.userId } });
+    expect(theirs).toHaveLength(2);
+    expect(theirs.every((s) => s.revokedAt !== null)).toBe(true);
+    expect((await db.session.findMany({ where: { userId: f.admin.id } })).every((s) => s.revokedAt === null)).toBe(true);
+    const [row] = await auditRows(person.userId, "UPDATE");
+    expect(row?.before).toEqual({ status: "INVITED" });
+    expect(row?.after).toEqual({ status: "DISABLED" });
+  });
+
+  it("keeps everything else about the account, its associate profile included", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    const before = await db.associate.findUniqueOrThrow({ where: { userId: person.userId } });
+
+    await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) });
+
+    expect(await rolesOf(person.userId)).toEqual(["ASSOCIATE"]);
+    expect((await db.associate.findUniqueOrThrow({ where: { userId: person.userId } })).id).toBe(before.id);
+  });
+
+  it("stops the account signing in, and lets it sign in again once enabled", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+
+    await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) });
+    await expect(attemptLogin(db, "p@test.local", ORG, person.temporaryPassword)).rejects.toThrow(AccountDisabledError);
+
+    await setUserDisabled(db, { userId: person.userId, disabled: false, audit: asOwner(f) });
+    await expect(attemptLogin(db, "p@test.local", ORG, person.temporaryPassword)).resolves.toMatchObject({ user: { id: person.userId } });
+  });
+
+  it("enables an account back to INVITED while it has a temporary password, ACTIVE once it has its own", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+
+    await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) });
+    const invited = await setUserDisabled(db, { userId: person.userId, disabled: false, audit: asOwner(f) });
+    expect(invited).toMatchObject({ status: "INVITED", changed: true });
+
+    await db.user.update({ where: { id: person.userId }, data: { status: "ACTIVE", mustChangePassword: false } });
+    await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) });
+    const active = await setUserDisabled(db, { userId: person.userId, disabled: false, audit: asOwner(f) });
+    expect(active).toMatchObject({ status: "ACTIVE", changed: true });
+  });
+
+  it("treats a SUSPENDED account as switched off too, and enabling it brings it back", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    await db.user.update({ where: { id: person.userId }, data: { status: "SUSPENDED" } });
+
+    expect(await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) })).toMatchObject({ status: "SUSPENDED", changed: false });
+    expect(await setUserDisabled(db, { userId: person.userId, disabled: false, audit: asOwner(f) })).toMatchObject({ status: "INVITED", changed: true });
+  });
+
+  it("does nothing, and writes no audit row, when the account is already in the state asked for", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+
+    expect(await setUserDisabled(db, { userId: person.userId, disabled: false, audit: asOwner(f) })).toMatchObject({ changed: false });
+    await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) });
+    expect(await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asOwner(f) })).toMatchObject({ status: "DISABLED", changed: false });
+
+    expect(await auditRows(person.userId, "UPDATE")).toHaveLength(1);
+  });
+
+  it("stops anyone disabling themselves", async () => {
+    const f = await seedFixture();
+    await makeUser(f, "second@test.local", "SUPER_ADMIN");
+    await expect(setUserDisabled(db, { userId: f.owner.id, disabled: true, audit: asOwner(f) })).rejects.toThrow(SelfDisableError);
+  });
+
+  it("keeps the last Super Admin who can sign in: a disabled one does not count as another", async () => {
+    const f = await seedFixture();
+    const ops = await opsActor();
+    const second = await makeUser(f, "second@test.local", "SUPER_ADMIN");
+    const byOps = ctx(ORG, ops.id, "ops");
+
+    // Two can sign in: either may go.
+    await setUserDisabled(db, { userId: second.userId, disabled: true, audit: byOps });
+    // One is left, and it cannot be switched off, or demoted, or deleted.
+    await expect(setUserDisabled(db, { userId: f.owner.id, disabled: true, audit: byOps })).rejects.toThrow(LastSuperAdminError);
+    await expect(updateUserRoles(db, { userId: f.owner.id, roleCode: "ADMIN", audit: byOps })).rejects.toThrow(LastSuperAdminError);
+    await expect(deleteUser(db, { userId: f.owner.id, audit: byOps })).rejects.toThrow(LastSuperAdminError);
+    expect((await db.user.findUniqueOrThrow({ where: { id: f.owner.id } })).status).toBe("ACTIVE");
+  });
+
+  describe("the privilege ceiling", () => {
+    it("lets an ADMIN disable and enable an associate", async () => {
+      const f = await seedFixture();
+      const person = await makeUser(f, "p@test.local");
+      await setUserDisabled(db, { userId: person.userId, disabled: true, audit: asAdmin(f) });
+      expect((await db.user.findUniqueOrThrow({ where: { id: person.userId } })).status).toBe("DISABLED");
+      await setUserDisabled(db, { userId: person.userId, disabled: false, audit: asAdmin(f) });
+      expect((await db.user.findUniqueOrThrow({ where: { id: person.userId } })).status).toBe("INVITED");
+    });
+
+    it("stops an ADMIN disabling an admin or a super admin", async () => {
+      const f = await seedFixture();
+      const boss = await makeUser(f, "boss@test.local", "ADMIN");
+      for (const userId of [boss.userId, f.owner.id]) {
+        await expect(setUserDisabled(db, { userId, disabled: true, audit: asAdmin(f) })).rejects.toThrow("Only a Super Admin");
+      }
+    });
+
+    it("refuses a user without user-management permission, a system actor, another org's user and an unknown user", async () => {
+      const f = await seedFixture();
+      const other = await seedFixture(OTHER_ORG);
+      const person = await makeUser(f, "p@test.local");
+      const foreign = await createUser(db, {
+        email: "foreign@test.local", name: "Foreign", roleCode: "ASSOCIATE", audit: ctx(OTHER_ORG, other.owner.id, "owner"),
+      });
+      const disable = (userId: string, audit: AuditContext) => setUserDisabled(db, { userId, disabled: true, audit });
+
+      await expect(disable(person.userId, ctx(ORG, f.noPerms.id, "noperms"))).rejects.toThrow(ForbiddenError);
+      await expect(disable(person.userId, ctx(ORG, null, "system"))).rejects.toThrow(ForbiddenError);
+      await expect(disable(foreign.userId, asOwner(f))).rejects.toThrow(ForbiddenError);
+      await expect(disable("nope", asOwner(f))).rejects.toThrow(UserNotFoundError);
+    });
+  });
+});
+
+describe("deleteUser", () => {
+  it.each(["ASSOCIATE", "ADMIN"] as const)("deletes a %s who never signed in, with their profile, and keeps the audit trail", async (roleCode) => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local", roleCode, "Typo Person");
+
+    const result = await deleteUser(db, { userId: person.userId, audit: asOwner(f) });
+
+    expect(result).toEqual({ userId: person.userId, email: "p@test.local" });
+    expect(await db.user.count({ where: { id: person.userId } })).toBe(0);
+    expect(await db.userRole.count({ where: { userId: person.userId } })).toBe(0);
+    expect(await db.associate.count({ where: { userId: person.userId } })).toBe(0);
+    const [row] = await auditRows(person.userId, "DELETE");
+    expect(row?.before).toMatchObject({ email: "p@test.local", name: "Typo Person", roleCodes: [roleCode] });
+    // The address is free again.
+    await expect(makeUser(f, "p@test.local")).resolves.toMatchObject({ email: "p@test.local" });
+  });
+
+  it("refuses an account that has signed in, and deletes nothing", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    await db.user.update({ where: { id: person.userId }, data: { lastLoginAt: new Date() } });
+
+    await expect(deleteUser(db, { userId: person.userId, audit: asOwner(f) })).rejects.toThrow(
+      "p@test.local has signed in before, so it cannot be deleted. Disable it instead.",
+    );
+    expect(await db.user.count({ where: { id: person.userId } })).toBe(1);
+    expect(await auditRows(person.userId, "DELETE")).toEqual([]);
+  });
+
+  it("refuses an account with activity on its associate profile, and rolls everything back", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    const associate = await db.associate.findUniqueOrThrow({ where: { userId: person.userId } });
+    await db.lead.create({
+      data: { orgId: ORG, name: "Buyer", phone: "+919876543210", phoneHash: "hash", source: "WALK_IN", assignedAssociateId: associate.id },
+    });
+
+    await expect(deleteUser(db, { userId: person.userId, audit: asOwner(f) })).rejects.toThrow(UserInUseError);
+
+    // The grade row and the profile were deleted first inside the transaction: they are back.
+    expect(await db.user.count({ where: { id: person.userId } })).toBe(1);
+    expect(await db.associate.count({ where: { userId: person.userId } })).toBe(1);
+    expect(await db.associateGrade.count({ where: { associateId: associate.id } })).toBe(1);
+    expect(await auditRows(person.userId, "DELETE")).toEqual([]);
+  });
+
+  it("refuses an account that has associates placed under it, instead of quietly detaching them", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    const child = await makeUser(f, "child@test.local");
+    const parentProfile = await db.associate.findUniqueOrThrow({ where: { userId: person.userId } });
+    const childProfile = await db.associate.findUniqueOrThrow({ where: { userId: child.userId } });
+    await db.associateHierarchy.create({
+      data: { associateId: childProfile.id, parentId: parentProfile.id, path: `/${parentProfile.id}/`, depth: 1, validFrom: new Date() },
+    });
+
+    await expect(deleteUser(db, { userId: person.userId, audit: asOwner(f) })).rejects.toThrow(UserInUseError);
+
+    expect((await db.associateHierarchy.findFirstOrThrow({ where: { associateId: childProfile.id } })).parentId).toBe(parentProfile.id);
+    expect(await db.user.count({ where: { id: person.userId } })).toBe(1);
+  });
+
+  it("knows every relation that detaches or cascades instead of refusing", async () => {
+    // deleteUser leaves it to the database to refuse a delete when something points at the
+    // account, except where the schema says otherwise. This lists those exceptions. A new one
+    // fails here, so deleteUser gets changed to look at it before it can detach something quietly.
+    const schema = readFileSync(join(__dirname, "../../db/prisma/schema.prisma"), "utf8");
+    const exceptions: string[] = [];
+    let model = "";
+    for (const line of schema.split(/\r?\n/)) {
+      const declared = /^model\s+(\w+)/.exec(line);
+      if (declared) {
+        model = declared[1]!;
+        continue;
+      }
+      const relation = /^\s*(\w+)\s+(Associate|User)(\?)?\s+@relation\(/.exec(line);
+      if (!relation) continue;
+      const action = /onDelete:\s*(\w+)/.exec(line)?.[1] ?? (relation[3] ? "SetNull" : "Restrict");
+      if (action !== "Restrict" && action !== "NoAction") exceptions.push(`${model}.${relation[1]} -> ${relation[2]} (${action})`);
+    }
+
+    expect(exceptions.sort()).toEqual([
+      "AssociateHierarchy.parent -> Associate (SetNull)",
+      "Lead.associate -> Associate (SetNull)",
+      "LeadActivity.associate -> Associate (SetNull)",
+      "PasswordResetToken.user -> User (Cascade)",
+      "Session.user -> User (Cascade)",
+      "UserRole.user -> User (Cascade)",
+    ]);
+  });
+
+  it("refuses an account that owns a saved report view", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    await db.savedReportView.create({ data: { orgId: ORG, userId: person.userId, reportKey: "sales", name: "Mine" } });
+
+    await expect(deleteUser(db, { userId: person.userId, audit: asOwner(f) })).rejects.toThrow(UserInUseError);
+
+    expect(await db.user.count({ where: { id: person.userId } })).toBe(1);
+    expect(await db.associate.count({ where: { userId: person.userId } })).toBe(1);
+  });
+
+  it("refuses an account whose associate profile has a grade history", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local");
+    const associate = await db.associate.findUniqueOrThrow({ where: { userId: person.userId } });
+    const senior = await db.grade.findFirstOrThrow({ where: { orgId: ORG, code: "G2" } });
+    await db.associateGrade.create({ data: { associateId: associate.id, gradeId: senior.id, validFrom: new Date() } });
+
+    await expect(deleteUser(db, { userId: person.userId, audit: asOwner(f) })).rejects.toThrow("has a grade history");
+    expect(await db.associateGrade.count({ where: { associateId: associate.id } })).toBe(2);
+  });
+
+  it("stops anyone deleting themselves", async () => {
+    const f = await seedFixture();
+    await makeUser(f, "second@test.local", "SUPER_ADMIN");
+    await expect(deleteUser(db, { userId: f.owner.id, audit: asOwner(f) })).rejects.toThrow(SelfDeleteError);
+  });
+
+  describe("the privilege ceiling", () => {
+    it("lets an ADMIN delete an associate", async () => {
+      const f = await seedFixture();
+      const person = await makeUser(f, "p@test.local");
+      await deleteUser(db, { userId: person.userId, audit: asAdmin(f) });
+      expect(await db.user.count({ where: { id: person.userId } })).toBe(0);
+    });
+
+    it("stops an ADMIN deleting an admin or a super admin", async () => {
+      const f = await seedFixture();
+      const boss = await makeUser(f, "boss@test.local", "ADMIN");
+      for (const userId of [boss.userId, f.owner.id]) {
+        await expect(deleteUser(db, { userId, audit: asAdmin(f) })).rejects.toThrow("Only a Super Admin");
+        expect(await db.user.count({ where: { id: userId } })).toBe(1);
+      }
+    });
+
+    it("refuses a user without user-management permission, a system actor, another org's user and an unknown user", async () => {
+      const f = await seedFixture();
+      const other = await seedFixture(OTHER_ORG);
+      const person = await makeUser(f, "p@test.local");
+      const foreign = await createUser(db, {
+        email: "foreign@test.local", name: "Foreign", roleCode: "ASSOCIATE", audit: ctx(OTHER_ORG, other.owner.id, "owner"),
+      });
+
+      await expect(deleteUser(db, { userId: person.userId, audit: ctx(ORG, f.noPerms.id, "noperms") })).rejects.toThrow(ForbiddenError);
+      await expect(deleteUser(db, { userId: person.userId, audit: ctx(ORG, null, "system") })).rejects.toThrow(ForbiddenError);
+      await expect(deleteUser(db, { userId: foreign.userId, audit: asOwner(f) })).rejects.toThrow(ForbiddenError);
+      await expect(deleteUser(db, { userId: "nope", audit: asOwner(f) })).rejects.toThrow(UserNotFoundError);
+      expect(await db.user.count({ where: { id: { in: [person.userId, foreign.userId] } } })).toBe(2);
+    });
+  });
+});
+
+describe("listUsers: search", () => {
+  async function people() {
+    const f = await seedFixture();
+    await makeUser(f, "ana.rao@test.local", "ASSOCIATE", "Ana Rao");
+    await makeUser(f, "bob@test.local", "ASSOCIATE", "Bob Stone");
+    await makeUser(f, "a_b@test.local", "ASSOCIATE", "Underscore");
+    await makeUser(f, "axb@test.local", "ASSOCIATE", "Letter X");
+    return f;
+  }
+  const found = async (f: Fixture, search: string, actorId = f.owner.id) =>
+    (await listUsers(db, { orgId: ORG, actorId, search })).map((u) => u.email);
+
+  it("finds an account by part of its name or of its email, whatever the case", async () => {
+    const f = await people();
+    expect(await found(f, "RAO")).toEqual(["ana.rao@test.local"]);
+    expect(await found(f, "  stone ")).toEqual(["bob@test.local"]);
+    expect(await found(f, "ANA.R")).toEqual(["ana.rao@test.local"]);
+    expect(await found(f, "bob@test")).toEqual(["bob@test.local"]);
+  });
+
+  it("takes % and _ as the characters they are, not as wildcards", async () => {
+    const f = await people();
+    expect(await found(f, "a_b")).toEqual(["a_b@test.local"]);
+    expect(await found(f, "%")).toEqual([]);
+  });
+
+  it("lists everyone for an empty or blank search", async () => {
+    const f = await people();
+    const everyone = (await listUsers(db, { orgId: ORG, actorId: f.owner.id })).map((u) => u.email);
+    expect(await found(f, "")).toEqual(everyone);
+    expect(await found(f, "   ")).toEqual(everyone);
+  });
+
+  it("cuts a very long search instead of failing on it", async () => {
+    const f = await people();
+    expect(await found(f, "x".repeat(500))).toEqual([]);
+    // Cut to 100 characters: the first 100 match nobody, the rest never reaches the database.
+    expect(await found(f, `bob@test.local${"z".repeat(500)}`)).toEqual([]);
+  });
+
+  it("never lets an ADMIN's search reach an admin or a super admin", async () => {
+    const f = await people();
+    expect(await found(f, "owner", f.admin.id)).toEqual([]);
+    expect(await found(f, "admin", f.admin.id)).toEqual([]);
+    expect(await found(f, "bob", f.admin.id)).toEqual(["bob@test.local"]);
+  });
+});
+
+describe("getUser", () => {
+  it("returns the account with its detail", async () => {
+    const f = await seedFixture();
+    const person = await makeUser(f, "p@test.local", "ASSOCIATE", "Pat Person");
+
+    const user = await getUser(db, { orgId: ORG, actorId: f.owner.id, userId: person.userId });
+
+    expect(user).toMatchObject({
+      id: person.userId,
+      email: "p@test.local",
+      name: "Pat Person",
+      status: "INVITED",
+      roleCodes: ["ASSOCIATE"],
+      lastLoginAt: null,
+      mustChangePassword: true,
+      associateCode: "A-0001",
+    });
+    expect(Number.isNaN(Date.parse(user!.createdAt))).toBe(false);
+  });
+
+  it("shows an ADMIN an associate but not an admin, a super admin, another org's account or a stranger", async () => {
+    const f = await seedFixture();
+    const other = await seedFixture(OTHER_ORG);
+    const person = await makeUser(f, "p@test.local");
+    const boss = await makeUser(f, "boss@test.local", "ADMIN");
+    const foreign = await createUser(db, {
+      email: "foreign@test.local", name: "Foreign", roleCode: "ASSOCIATE", audit: ctx(OTHER_ORG, other.owner.id, "owner"),
+    });
+    const as = (userId: string) => getUser(db, { orgId: ORG, actorId: f.admin.id, userId });
+
+    expect(await as(person.userId)).toMatchObject({ email: "p@test.local" });
+    expect(await as(boss.userId)).toBeNull();
+    expect(await as(f.owner.id)).toBeNull();
+    expect(await as(foreign.userId)).toBeNull();
+    expect(await as("nope")).toBeNull();
+  });
+
+  it("refuses a user who holds no user-management permission", async () => {
+    const f = await seedFixture();
+    await expect(getUser(db, { orgId: ORG, actorId: f.noPerms.id, userId: f.owner.id })).rejects.toThrow(ForbiddenError);
   });
 });
