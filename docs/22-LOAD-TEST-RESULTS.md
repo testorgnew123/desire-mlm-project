@@ -579,6 +579,9 @@
 >   Seeded from `Date.now()`, the server render and the browser disagreed about every
 >   hold countdown, and React threw the server HTML away on each load by address.
 > - A loading placeholder for the board and a tile-shaped one for the phone grid.
+> - The desktop and phone project lists are paged (24 and 30 a page, `?page=`), as the
+>   Users list is. Checked in a browser against 32 projects: page 1, page 2, a page past
+>   the end, and a garbage `?page=` all behave.
 >
 > ### Measured and left alone
 >
