@@ -17,6 +17,14 @@ import { isMailConfigured } from "./email";
  *  the caller is a person waiting on a confirm or a booking. */
 export const BOOKING_MAIL_DEADLINE_MS = 4_000;
 
+/** Once the mail is handed to `after()` nobody is waiting on it, so the mail
+ *  server gets as long as it needs instead of the message being dropped. A far
+ *  mail server needs about ten round trips to connect, start TLS, log in and
+ *  send: enough on a fast link, not enough on a slow one. That is the difference
+ *  between booking mail going missing and the admin screen's test mail, which
+ *  allows 15 s, always arriving. */
+export const BOOKING_MAIL_AFTER_RESPONSE_DEADLINE_MS = 20_000;
+
 /** At most this many admins are told about one new booking. */
 const MAX_ADMIN_RECIPIENTS = 20;
 
@@ -103,6 +111,23 @@ export function adminBookingMailText(facts: BookingFacts, baseUrl: string | null
   ].join("\n");
 }
 
+/** The buyer's first mail, as soon as the booking exists: it says the booking is
+ *  in hand and being processed, and nothing more. No price, because an admin has
+ *  not agreed it yet, and no link, because a buyer has no account to open. */
+export function customerBookingReceivedMailText(facts: BookingFacts): string {
+  return [
+    `Dear ${facts.customerName},`,
+    "",
+    "We have your booking and it is being processed.",
+    "",
+    `Booking number: ${facts.bookingNumber}`,
+    plotLine(facts),
+    "",
+    `Your contact for this booking is ${facts.associateName}.`,
+    "You will get another email from us once the booking is confirmed.",
+  ].join("\n");
+}
+
 export function customerBookingMailText(facts: BookingFacts): string {
   return [
     `Dear ${facts.customerName},`,
@@ -142,9 +167,34 @@ export function associateCancelledMailText(facts: BookingFacts): string {
 
 // ── Sending ────────────────────────────────────────────────────────────
 
-async function sendAll(messages: Array<{ to: string; subject: string; text: string }>): Promise<void> {
+// `deadlineMs` comes from the caller, not from whether a scheduler is
+// registered: a registered scheduler that refuses the work still leaves a person
+// waiting, and they must not be held for the long deadline.
+async function sendAll(
+  what: string,
+  bookingNumber: string,
+  deadlineMs: number,
+  messages: Array<{ to: string; subject: string; text: string }>,
+): Promise<void> {
   if (messages.length === 0) return;
-  await Promise.allSettled(messages.map((message) => sendMail(message, BOOKING_MAIL_DEADLINE_MS)));
+  const outcomes = await Promise.all(
+    messages.map(async (message) => {
+      const startedAt = Date.now();
+      const outcome = await sendMail(message, deadlineMs);
+      return { ...outcome, ms: Date.now() - startedAt };
+    }),
+  );
+
+  // A booking mail that does not go out leaves no trace otherwise: nothing
+  // throws, the booking is already made and nobody sees an error. Says how many
+  // and why, never an address.
+  const failed = outcomes.filter((outcome) => !outcome.sent);
+  if (failed.length > 0) {
+    const slowest = Math.max(...failed.map((outcome) => outcome.ms));
+    console.error(
+      `booking mail (${what}) for ${bookingNumber}: ${failed.length} of ${outcomes.length} not sent after ${slowest} ms of ${deadlineMs} ms -- ${failed[0]!.note ?? "no reason given"}`,
+    );
+  }
 }
 
 /** Runs a piece of work once the response has gone (Next's `after()`). */
@@ -165,27 +215,29 @@ export function setBookingMailScheduler(scheduler: MailScheduler | null): void {
   globals.__desireBookingMailScheduler = scheduler ?? undefined;
 }
 
-async function deliver(task: () => Promise<void>): Promise<void> {
+// The task is told how long the mail server may take, which depends on who is
+// waiting for it: nobody, once the response has gone, or the person who booked.
+async function deliver(task: (deadlineMs: number) => Promise<void>): Promise<void> {
   const scheduler = globals.__desireBookingMailScheduler;
   if (scheduler) {
     try {
-      scheduler(task);
+      scheduler(() => task(BOOKING_MAIL_AFTER_RESPONSE_DEADLINE_MS));
       return;
     } catch {
       // Not inside a request (a script, a job): there is no response to come after,
       // so send it here and now.
     }
   }
-  await task();
+  await task(BOOKING_MAIL_DEADLINE_MS);
 }
 
 /** Runs one notification and swallows anything it throws: a mail problem must not
  *  turn a finished booking into an error. Logs the booking id, never an address. */
-async function safely(what: string, bookingId: string, run: () => Promise<void>): Promise<void> {
+async function safely(what: string, bookingId: string, run: (deadlineMs: number) => Promise<void>): Promise<void> {
   if (!isMailConfigured()) return;
-  await deliver(async () => {
+  await deliver(async (deadlineMs) => {
     try {
-      await run();
+      await run(deadlineMs);
     } catch (error) {
       console.error(`booking mail (${what}) failed for ${bookingId}`, error instanceof Error ? error.name : error);
     }
@@ -193,9 +245,10 @@ async function safely(what: string, bookingId: string, run: () => Promise<void>)
 }
 
 /** A new booking (a draft) is waiting: tell every admin who may confirm it,
- *  except the person who made it. */
+ *  except the person who made it, and tell the buyer that it is being
+ *  processed. */
 export async function notifyBookingDrafted(db: PrismaClient, params: { bookingId: string; actorId: string | null }): Promise<void> {
-  await safely("drafted", params.bookingId, async () => {
+  await safely("drafted", params.bookingId, async (deadlineMs) => {
     const facts = await loadFacts(db, params.bookingId);
     if (!facts) return;
     const admins = await db.user.findMany({
@@ -211,14 +264,29 @@ export async function notifyBookingDrafted(db: PrismaClient, params: { bookingId
       take: MAX_ADMIN_RECIPIENTS,
     });
     const text = adminBookingMailText(facts, appBaseUrl());
-    await sendAll(admins.map((admin) => ({ to: admin.email, subject: `Booking ${facts.bookingNumber} needs confirming`, text })));
+    // The staff mail says what a plot sold for and links into the back office,
+    // so the buyer must never receive it -- not even when the address they gave
+    // is also a staff login, which is how a buyer once got it.
+    const buyerEmail = facts.customerEmail?.trim().toLowerCase() ?? null;
+    const messages = admins
+      .filter((admin) => admin.email.trim().toLowerCase() !== buyerEmail)
+      .map((admin) => ({ to: admin.email, subject: `Booking ${facts.bookingNumber} needs confirming`, text }));
+
+    if (facts.customerEmail) {
+      messages.push({
+        to: facts.customerEmail,
+        subject: `Your booking ${facts.bookingNumber} has been received`,
+        text: customerBookingReceivedMailText(facts),
+      });
+    }
+    await sendAll("drafted", facts.bookingNumber, deadlineMs, messages);
   });
 }
 
 /** A booking was confirmed: the customer (when an email was entered) and the
  *  selling associate. */
 export async function notifyBookingConfirmed(db: PrismaClient, params: { bookingId: string }): Promise<void> {
-  await safely("confirmed", params.bookingId, async () => {
+  await safely("confirmed", params.bookingId, async (deadlineMs) => {
     const facts = await loadFacts(db, params.bookingId);
     if (!facts) return;
     const messages = [
@@ -231,17 +299,17 @@ export async function notifyBookingConfirmed(db: PrismaClient, params: { booking
         text: customerBookingMailText(facts),
       });
     }
-    await sendAll(messages);
+    await sendAll("confirmed", facts.bookingNumber, deadlineMs, messages);
   });
 }
 
 /** A booking was cancelled: the selling associate. (The customer is not told by
  *  email: a cancellation is a conversation first.) */
 export async function notifyBookingCancelled(db: PrismaClient, params: { bookingId: string }): Promise<void> {
-  await safely("cancelled", params.bookingId, async () => {
+  await safely("cancelled", params.bookingId, async (deadlineMs) => {
     const facts = await loadFacts(db, params.bookingId);
     if (!facts) return;
-    await sendAll([
+    await sendAll("cancelled", facts.bookingNumber, deadlineMs, [
       { to: facts.associateEmail, subject: `Booking ${facts.bookingNumber} cancelled`, text: associateCancelledMailText(facts) },
     ]);
   });

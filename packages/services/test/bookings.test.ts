@@ -989,11 +989,39 @@ describe("booking emails", () => {
 
   it("tells the admins who can confirm, not the associate who booked, that a booking is waiting", async () => {
     const f = await drafted();
-    expect(outbox.sent.map((m) => m.to)).toEqual([f.admin.user.email]);
-    const mail = outbox.sent[0]!;
+    expect(outbox.sent.map((m) => m.to).sort()).toEqual([f.admin.user.email, "buyer@test.local"].sort());
+    const mail = outbox.sent.find((m) => m.to === f.admin.user.email)!;
     expect(mail.subject).toBe(`Booking ${f.draft.bookingNumber} needs confirming`);
     expect(mail.text).toContain(`https://desire.test/bookings/${f.draft.id}`);
     expect(mail.text).toContain("Test Buyer");
+  });
+
+  it("tells the buyer at once that their booking is being processed, with no link and no price", async () => {
+    const f = await drafted();
+    const mail = outbox.sent.find((m) => m.to === "buyer@test.local")!;
+    expect(mail.subject).toBe(`Your booking ${f.draft.bookingNumber} has been received`);
+    expect(mail.text).toContain("being processed");
+    expect(mail.text).toContain(f.draft.bookingNumber);
+    // A buyer has no account to open and no agreed price yet.
+    expect(mail.text).not.toContain("https://desire.test");
+    expect(mail.text).not.toMatch(/₹/);
+  });
+
+  it("never sends the staff mail to the buyer's own address, even when that address is also a staff login", async () => {
+    const f = await seedFixture();
+    await db.customer.update({ where: { id: f.customer.id }, data: { email: f.admin.user.email } });
+    await acquireHold(db, { orgId: ORG, unitId: f.unit.id, associateId: f.seller.associate!.id, audit: ctx(ORG, f.seller.user.id, "seller") });
+    outbox.sent.length = 0;
+
+    const draft = await createDraftBooking(db, {
+      unitId: f.unit.id,
+      priceListId: f.priceList.id,
+      customerId: f.customer.id,
+      audit: ctx(ORG, f.seller.user.id, "seller"),
+    });
+
+    expect(outbox.sent.map((m) => m.to)).toEqual([f.admin.user.email]);
+    expect(outbox.sent[0]!.subject).toBe(`Your booking ${draft.bookingNumber} has been received`);
   });
 
   it("tells the customer and the associate when it is confirmed", async () => {
