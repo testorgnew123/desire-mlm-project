@@ -12,13 +12,21 @@ export const metadata: Metadata = {
   title: "Projects — Desire",
 };
 
+/** Projects per page: a multiple of three, the widest the card grid gets. */
+const PAGE_SIZE = 24;
+
 /** List (docs/08-SCREENS.md: "Projects -- List Detail Towers Units Price
- *  lists Payment plans Commission scheme"). */
-export default async function ProjectsPage() {
+ *  lists Payment plans Commission scheme"). Paged, so the day a developer has a
+ *  hundred projects the page does not carry every card and count at once. */
+export default async function ProjectsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const { page: rawPage } = await searchParams;
+  // Clamped so a hand-edited ?page= cannot ask the database for an offset it cannot hold.
+  const page = Math.min(1000, Math.max(1, Math.floor(Number(rawPage)) || 1));
   const session = await requireSession();
   const db = getPrismaClient();
 
-  const projects = await db.project.findMany({
+  // One row more than the page, to learn whether a next page exists without a count query.
+  const fetched = await db.project.findMany({
     where: { orgId: session.user.orgId },
     select: {
       id: true,
@@ -28,8 +36,13 @@ export default async function ProjectsPage() {
       towers: { select: { kind: true } },
       _count: { select: { units: true } },
     },
-    orderBy: { name: "asc" },
+    // The id breaks ties between equal names, so a project never lands on two pages.
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+    skip: (page - 1) * PAGE_SIZE,
+    take: PAGE_SIZE + 1,
   });
+  const projects = fetched.slice(0, PAGE_SIZE);
+  const hasNext = fetched.length > PAGE_SIZE;
 
   return (
     <div className="flex flex-col gap-4">
@@ -40,7 +53,7 @@ export default async function ProjectsPage() {
           New project
         </Button>
       </div>
-      {projects.length === 0 ? (
+      {projects.length === 0 && page === 1 ? (
         /* Until this button existed, an org with no seed data saw "No projects
            yet." and had no way forward -- createProject had no caller at all. */
         <EmptyState icon={Building2} message="No projects yet. Create the first one to begin." />
@@ -68,6 +81,25 @@ export default async function ProjectsPage() {
           })}
         </div>
       )}
+      {page > 1 || hasNext ? (
+        <div className="flex items-center justify-between text-sm">
+          {page > 1 ? (
+            <Link href={`/projects?page=${page - 1}`} className="text-primary hover:underline">
+              Previous
+            </Link>
+          ) : (
+            <span />
+          )}
+          <span className="text-muted-foreground">Page {page}</span>
+          {hasNext ? (
+            <Link href={`/projects?page=${page + 1}`} className="text-primary hover:underline">
+              Next
+            </Link>
+          ) : (
+            <span />
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

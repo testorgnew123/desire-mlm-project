@@ -20,7 +20,7 @@
 // board uses (unchanged): an action's revalidatePath refreshes this page in the
 // same response, with a new server time that also drops the delta overlay below,
 // so a plot you just held is still yours on screen and Book stays available.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUnitDeltas } from "@/app/board/[projectId]/useUnitDeltas";
@@ -28,10 +28,12 @@ import { STATUS_PRESENTATION, displayStatus } from "@/app/board/[projectId]/stat
 import { UnitTile } from "@/app/board/[projectId]/UnitTile";
 import { EXPIRY_WARNING_MS, formatCountdown } from "@/app/board/[projectId]/format";
 import { formatDateTime } from "@/lib/format";
-import { groupNoun, type GroupKind } from "@/lib/groups";
+import { groupNoun } from "@/lib/groups";
 import { expandCatalogue, type Catalogue, type CatalogueUnit } from "@/app/board/[projectId]/catalogue";
+import type { LiveUnitState } from "@/app/board/[projectId]/types";
 import styles from "./grid.module.css";
 import { holdPlotAction, releaseHoldAction } from "./actions";
+import { floorsOf, groupByTower } from "./grid-sections";
 import { plotSheetActions } from "./plot-sheet";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +48,26 @@ import {
 // A local 3-of-7 status->text-colour map used to live here. It is gone: the
 // tiles carry status via board.module.css's tone classes now, which cover all
 // seven and match the desktop board. One fewer parallel colour convention.
+
+/** A plot with the delta poll's newer state laid over it. The poll carries no holder
+ *  identity (docs/06-INVENTORY-SPEC.md section 6: {id, unitNumber, floor, status,
+ *  currentHoldExpiresAt, updatedAt} only) -- the same limitation the desktop board
+ *  solves (InventoryBoard.tsx's holderIsFromSnapshot). A plot whose status came from
+ *  a live delta must NOT keep the snapshot's isMine/heldByName: that snapshot predates
+ *  this hold and could label someone else's hold "You". */
+function withLiveState(unit: CatalogueUnit, overlay: LiveUnitState | undefined) {
+  if (!overlay) return { ...unit, holderUnknown: false };
+  return {
+    ...unit,
+    status: overlay.status,
+    currentHoldExpiresAt: overlay.currentHoldExpiresAt,
+    updatedAt: overlay.updatedAt,
+    isMine: false,
+    heldByName: null,
+    heldByCode: null,
+    holderUnknown: true,
+  };
+}
 
 export function InventoryGrid({
   projectId,
@@ -67,6 +89,11 @@ export function InventoryGrid({
   // Rebuilt once per snapshot, not per render: `merged` below depends on its identity.
   const units = useMemo(() => expandCatalogue(catalogue).units, [catalogue]);
   const knownUnitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
+  // Grouped by block once per snapshot. Only the block on screen is then laid over with
+  // live state, sorted and drawn: doing that for every block of a township took most
+  // of the time it took to open the grid on a slow phone.
+  const groups = useMemo(() => groupByTower(units), [units]);
+  const unitById = useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
   const { live, isFetching, error } = useUnitDeltas({
     projectId,
     initialServerTime: serverTime,
@@ -89,38 +116,32 @@ export function InventoryGrid({
   // re-sorted and re-diffed every second, in a hidden tab as well. Now it runs
   // only while some plot is HELD (nothing to count down otherwise) and the tab is
   // visible, and catches up the moment it becomes visible again.
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  // The delta poll carries no holder identity (docs/06-INVENTORY-SPEC.md
-  // section 6: {id, unitNumber, floor, status, currentHoldExpiresAt,
-  // updatedAt} only) -- exactly the same limitation the desktop board
-  // already solves (InventoryBoard.tsx's holderIsFromSnapshot). A unit
-  // whose status came from a live delta must NOT keep showing the
-  // snapshot's isMine/heldByName -- that snapshot predates this hold and
-  // could easily label someone else's hold "You".
   //
-  // Memoised on what it actually depends on. It used to be rebuilt on every
-  // render -- every clock tick -- which also defeated the useMemo below that
-  // groups it, so the whole list was regrouped and re-sorted each second.
-  const merged = useMemo(
-    () =>
-      units.map((unit) => {
-        const overlay = live[unit.id];
-        if (!overlay) return { ...unit, holderUnknown: false };
-        return {
-          ...unit,
-          status: overlay.status,
-          currentHoldExpiresAt: overlay.currentHoldExpiresAt,
-          updatedAt: overlay.updatedAt,
-          isMine: false,
-          heldByName: null,
-          heldByCode: null,
-          holderUnknown: true,
-        };
-      }),
-    [units, live],
+  // Seeded from the server snapshot, as the desktop board does, and not from
+  // Date.now(): the server render and the browser's hydration must agree on every
+  // hold countdown they print, and two clocks read seconds apart do not. A
+  // disagreement made React throw the server HTML away and draw the whole grid again
+  // whenever the page was opened by address (refresh, bookmark, installed app); the
+  // tick below sets the real time as soon as a plot is held.
+  const [nowMs, setNowMs] = useState(() => Date.parse(serverTime));
+
+  // The block on screen (the first one until a tab is tapped, or when the chosen one
+  // has gone from the list), with the live state laid over its plots. Memoised on what
+  // it depends on, so a clock tick does not rebuild it.
+  const shownGroup = groups.find((group) => group.key === activeBlock) ?? groups[0] ?? null;
+  const shownUnits = useMemo(
+    () => (shownGroup ? shownGroup.units.map((unit) => withLiveState(unit, live[unit.id])) : []),
+    [shownGroup, live],
   );
-  const anyHeld = useMemo(() => merged.some((unit) => unit.status === "HELD"), [merged]);
+  const selected = useMemo(() => {
+    const base = selectedId === null ? undefined : unitById.get(selectedId);
+    return base ? withLiveState(base, live[base.id]) : null;
+  }, [selectedId, unitById, live]);
+  // The countdown only has to run for what is on screen.
+  const anyHeld = useMemo(
+    () => shownUnits.some((unit) => unit.status === "HELD") || selected?.status === "HELD",
+    [shownUnits, selected],
+  );
   useEffect(() => {
     if (!anyHeld) return;
     const tick = () => {
@@ -134,7 +155,6 @@ export function InventoryGrid({
       document.removeEventListener("visibilitychange", tick);
     };
   }, [anyHeld]);
-  const selected = merged.find((unit) => unit.id === selectedId) ?? null;
   // Lazy expiry applied once, here, so the tile, the detail sheet and the
   // "Hold this unit" button can never disagree about whether a lapsed hold
   // still counts.
@@ -149,66 +169,31 @@ export function InventoryGrid({
           viewerIsAssociate: holdInfo !== null,
         });
 
-  // Tower, then floor descending -- the board's building-elevation reading
-  // order (InventoryBoard's floorSections). The board uses a tower switcher;
-  // one scrolling list with a sticky tower heading suits a phone better and
-  // keeps every plot reachable by thumb.
-  const towerSections = useMemo(() => {
-    const byTower = new Map<
-      string,
-      { towerCode: string | null; towerKind: GroupKind | null; units: typeof merged }
-    >();
-    for (const unit of merged) {
-      const key = unit.towerCode ?? "";
-      let section = byTower.get(key);
-      if (!section) {
-        section = { towerCode: unit.towerCode, towerKind: unit.towerKind, units: [] };
-        byTower.set(key, section);
-      }
-      section.units.push(unit);
-    }
-    return [...byTower.values()]
-      .sort((a, b) => (a.towerCode ?? "").localeCompare(b.towerCode ?? ""))
-      .map((section) => {
-        // Plots have no floor. They collect into one floorless row rendered
-        // without a floor label, rather than being forced into a "floor 0"
-        // band that does not exist on the ground.
-        const byFloor = new Map<number, typeof merged>();
-        const floorless: typeof merged = [];
-        for (const unit of section.units) {
-          if (unit.floor === null) {
-            floorless.push(unit);
-            continue;
-          }
-          const row = byFloor.get(unit.floor);
-          if (row) row.push(unit);
-          else byFloor.set(unit.floor, [unit]);
-        }
-        const floors: Array<{ floor: number | null; units: typeof merged }> = [
-          ...byFloor.entries(),
-        ]
-          .sort((a, b) => b[0] - a[0])
-          .map(([floor, units]) => ({
-            floor: floor as number | null,
-            units: [...units].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)),
-          }));
-        if (floorless.length > 0) {
-          floors.push({
-            floor: null,
-            units: [...floorless].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)),
-          });
-        }
-        return { towerCode: section.towerCode, towerKind: section.towerKind, floors };
-      });
-  }, [merged]);
+  // The block's plots as floor rows, highest floor first -- the board's
+  // building-elevation reading order (InventoryBoard's floorSections; the ordering
+  // lives in grid-sections.ts). The board uses a tower switcher; one scrolling list
+  // with a heading suits a phone better and keeps every plot reachable by thumb.
+  // Plots have no floor: they collect into one floorless row rendered without a floor
+  // label, not a "floor 0" band that does not exist on the ground.
+  const floors = useMemo(() => floorsOf(shownUnits), [shownUnits]);
 
-
-  const sectionKey = (towerCode: string | null) => towerCode ?? "_";
-  const firstSection = towerSections[0];
-  const shownKey = activeBlock ?? (firstSection ? sectionKey(firstSection.towerCode) : "_");
-  const matching = towerSections.filter((section) => sectionKey(section.towerCode) === shownKey);
-  // Falls back to the first block if the chosen one is gone from the list.
-  const shownSections = towerSections.length <= 1 || matching.length === 0 ? towerSections.slice(0, 1) : matching;
+  // Tapping a block tab highlights it at once; the block's tiles are drawn as a lower
+  // priority update, so the tap never waits for them.
+  const [, startSwitch] = useTransition();
+  const [pendingBlock, setPendingBlock] = useState<string | null>(null);
+  const highlightedKey = pendingBlock ?? shownGroup?.key ?? "_";
+  const showBlock = (key: string) => {
+    setPendingBlock(key);
+    startSwitch(() => {
+      setActiveBlock(key);
+      setPendingBlock(null);
+    });
+  };
+  // Stable, so the memoised tiles are not redrawn every second by the countdown tick.
+  const selectUnit = useCallback((unitId: string) => {
+    setHoldError(null);
+    setSelectedId(unitId);
+  }, []);
 
   /** Hold or release, then leave the sheet open: on success the page has been
    *  refreshed by the action (revalidatePath) and the sheet now shows what the
@@ -231,40 +216,38 @@ export function InventoryGrid({
       <div className="sticky top-0 z-10 border-b border-border bg-background p-4">
         <h1 className="text-lg font-semibold">{projectName}</h1>
         <p className="text-xs text-muted-foreground">
-          {isFetching ? "Refreshing…" : error ? error : `${merged.length} units`}
+          {isFetching ? "Refreshing…" : error ? error : `${units.length} units`}
         </p>
       </div>
-      {towerSections.length > 1 ? (
+      {groups.length > 1 ? (
         <div className="flex gap-2 overflow-x-auto border-b border-border px-4 py-2" role="tablist" aria-label="Blocks">
-          {towerSections.map((section) => {
-            const key = sectionKey(section.towerCode);
-            const count = section.floors.reduce((sum, floor) => sum + floor.units.length, 0);
-            return (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={key === shownKey}
-                onClick={() => setActiveBlock(key)}
-                className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
-                  key === shownKey ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"
-                }`}
-              >
-                {groupNoun(section.towerKind)} {section.towerCode ?? "—"} · {count}
-              </button>
-            );
-          })}
+          {groups.map((group) => (
+            <button
+              key={group.key}
+              type="button"
+              role="tab"
+              aria-selected={group.key === highlightedKey}
+              onClick={() => showBlock(group.key)}
+              className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
+                group.key === highlightedKey
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              {groupNoun(group.towerKind)} {group.towerCode ?? "—"} · {group.units.length}
+            </button>
+          ))}
         </div>
       ) : null}
       <div className={styles.grid}>
-        {shownSections.map((section) => (
-          <section key={section.towerCode ?? "_"} className={styles.tower}>
-            {section.towerCode ? (
+        {shownGroup ? (
+          <section key={shownGroup.key} className={styles.tower}>
+            {shownGroup.towerCode ? (
               <h2 className={styles.towerLabel}>
-                {groupNoun(section.towerKind)} {section.towerCode}
+                {groupNoun(shownGroup.towerKind)} {shownGroup.towerCode}
               </h2>
             ) : null}
-            {section.floors.map(({ floor, units: floorUnits }) => (
+            {floors.map(({ floor, units: floorUnits }) => (
               <div key={floor ?? "plots"} className={styles.floorRow}>
                 {/* Empty for plots: the label column stays so the grid keeps
                     its left gutter and tiles stay aligned across sections. */}
@@ -293,10 +276,7 @@ export function InventoryGrid({
                         urgent={remainingMs !== null && remainingMs <= EXPIRY_WARNING_MS}
                         selected={unit.id === selectedId}
                         mine={status === "HELD" && unit.isMine && !unit.holderUnknown}
-                        onSelect={(unitId) => {
-                          setHoldError(null);
-                          setSelectedId(unitId);
-                        }}
+                        onSelect={selectUnit}
                       />
                     );
                   })}
@@ -304,7 +284,7 @@ export function InventoryGrid({
               </div>
             ))}
           </section>
-        ))}
+        ) : null}
       </div>
 
       <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelectedId(null)}>

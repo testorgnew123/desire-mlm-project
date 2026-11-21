@@ -4,11 +4,12 @@ import { redirect } from "next/navigation";
 import { Building2, CircleAlert, CircleCheck } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/format";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { loginAction } from "./actions";
+import { SignInButton } from "./SignInButton";
+import { WarmUp } from "./WarmUp";
 
 export const metadata: Metadata = {
   title: "Sign in — Desire",
@@ -54,9 +55,13 @@ export default async function LoginPage({
 
   const params = await searchParams;
   const error = errorMessage(params);
+  // A new value on every render: a refused sign-in redirects back to this same page,
+  // and the button must come back up rather than stay on "Signing in…".
+  const attempt = Date.now().toString(36);
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted p-4">
+      <WarmUp />
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
           <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -93,9 +98,7 @@ export default async function LoginPage({
                 {error}
               </p>
             ) : null}
-            <Button type="submit" className="w-full">
-              Sign in
-            </Button>
+            <SignInButton key={attempt} />
             <Link href="/login/forgot" className="text-center text-sm text-primary hover:underline">
               Forgot password?
             </Link>

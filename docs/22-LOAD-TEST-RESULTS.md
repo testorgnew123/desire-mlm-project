@@ -511,6 +511,95 @@
 > `POST /api/v1/bookings` answered 500 for a plot whose CORNER tag the price list
 > does not price (`UnpricedPlcTagError` was not mapped). It answers 422 now, with a test.
 
+> ## Round eight, 2026-11-21: sign-in and the plot grid, felt on a slow phone
+>
+> The report was "it lags when people sign in, and when they go to a block". Measured
+> on a local production build with the 2,000-plot project of
+> `apps/web/scripts/perf-seed.ts`, headless Chrome driven over CDP: a phone profile
+> (CPU 4x slower, +150 ms latency, 1.6 Mbit/s) and a desktop one (2x, +100 ms,
+> 5 Mbit/s). One script ran on the untouched `origin/main` and on this branch, against
+> the same scratch database, five runs each.
+>
+> ### The first-login lag is cold start outside the keep-warm window
+>
+> At 00:58 IST on a Saturday, outside the Worker's window (Mon-Fri 09:30-19:29 IST),
+> `GET /api/health` took **8.84 s** with `durationMs` **5,287**: the database was
+> asleep, as it is whenever nobody has used the site for five minutes. That is the
+> first-login cost, and it is what the window leaves uncovered: nights, weekends and
+> 09:00-09:30. The Worker itself works. A one-off test schedule of every minute fired
+> it on Cloudflare's cron and the run logged
+> `{"ok":true,"status":200,"elapsedMs":7128,"dbDurationMs":4283,"state":"neon-asleep"}`
+> (that ping woke a sleeping database); the real schedule was then restored. The
+> sign-in warm-up below softens the uncovered hours. Widening the window is a Neon
+> compute-hours decision ([21](21-TIER-LIMITS.md) section 12).
+>
+> ### What held up
+>
+> | | `origin/main` | This round |
+> |---|---|---|
+> | Tap a block tab: the tab highlights | 455 ms (best 333) | **65 ms** (best 38) |
+> | Grid opened by address (refresh, bookmark, installed app): React hydration errors | 1 on every load | **0** |
+> | Sign-in page wakes the server while the person types | no | one `GET /api/health` on load |
+> | App code in opening the grid (CPU profile, self time at 4x) | 88-268 ms | 73-78 ms |
+>
+> ### What did not move beyond the noise
+>
+> | | `origin/main` | This round |
+> |---|---|---|
+> | Tap a project, tiles drawn | 1,679 ms (best 961) | 1,117 ms (best 745) |
+> | Switch block, new tiles drawn | 459 ms (best 341) | 588 ms (best 351) |
+> | Grid opened by address, first tap that works | 3,018 ms (best 2,747) | 2,763 ms (best 2,308) |
+> | Sign-in click to landing, first visit / returning | 792 / 674 ms | 579 / 628 ms |
+> | Idle on the grid with 50 holds ticking (main thread, ms per second) | median 72 | median 68 |
+>
+> **Read these with this in mind:** on this PC the same code swung by up to 2x
+> between runs (`/projects`, untouched, read 306 ms in one run and 696 ms in the next),
+> so no page-load difference is claimed. Only the first table, which repeats or is
+> structural, is.
+>
+> ### Where opening the grid spends its time
+>
+> A CPU profile of the tap on both builds: most of the 3-6 s sampled (at 4x slower CPU)
+> is the browser's own layout and paint and React's work; the app's code is 73-270 ms.
+> The largest single JavaScript function is React's reader of the server payload, about
+> 250 ms, and it grows with the payload (about 390 KB of data, 43 KB on the wire).
+> Sending only the open block's plots would cut it, at the price of a network trip on
+> every block switch, so it was not done.
+>
+> ### What changed
+>
+> - `/login` sends one `GET /api/health` when it loads, so the function and the
+>   database wake while the person types (`app/login/WarmUp.tsx`).
+> - The sign-in button says "Signing in..." as soon as the form is submitted
+>   (`app/login/SignInButton.tsx`); a refused sign-in comes back with a fresh button.
+> - The phone grid groups plots by block once and sorts and draws only the block on
+>   screen; tapping a block tab highlights it at once and draws the tiles as a lower
+>   priority update (`grid-sections.ts`, pinned against the old arrangement by a test).
+> - The grid's clock is seeded from the server snapshot, as the board's already was.
+>   Seeded from `Date.now()`, the server render and the browser disagreed about every
+>   hold countdown, and React threw the server HTML away on each load by address.
+> - A loading placeholder for the board and a tile-shaped one for the phone grid.
+> - The desktop and phone project lists are paged (24 and 30 a page, `?page=`), as the
+>   Users list is. Checked in a browser against 32 projects: page 1, page 2, a page past
+>   the end, and a garbage `?page=` all behave.
+>
+> ### Measured and left alone
+>
+> - No page is heavy at 2,000 plots. The plots page already shows one block; the
+>   project page is a few hundred ms. The 390 KB project page of round seven was the
+>   QA data's 110 plot types and price list versions. My bookings is 21 statements
+>   in two parallel waves and capped at 50 rows.
+> - Booking mail inside the request: round seven (the switch is
+>   `BOOKING_MAIL_AFTER_RESPONSE=1`; try it on a deploy preview first).
+>
+> ### Method notes
+>
+> - A scripted click on server HTML before React has hydrated it measures a different
+>   path (a native form post and a full page load) and loses clicks. The script waits
+>   for React's `__reactProps` marker on the element first.
+> - `Network.setCacheDisabled` alone did not give cold loads consistently; the script
+>   also clears the browser cache before each cold run.
+
 Phase 5. Run with `apps/web/scripts/load-test.mjs` (autocannon — pure npm,
 no system binary to install, same free/open-source bar as k6). **Always run
 against a local server + local Docker Postgres, never hosted Neon** — the
