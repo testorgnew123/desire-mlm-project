@@ -7,3 +7,8 @@ onlyBuiltDependencies:
   - "@prisma/engines"
   - esbuild
   - prisma
+
+# Backports React's fix for a dropped Suspense ping into the react-dom that Next bundles
+# for the App Router; see apps/web/test/react-ping-patch.test.ts.
+patchedDependencies:
+  next@15.5.25: patches/next@15.5.25.patch
