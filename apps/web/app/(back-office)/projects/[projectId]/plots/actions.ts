@@ -125,7 +125,9 @@ export async function clearCornerAction(formData: FormData): Promise<ActionResul
  *  blocking. */
 export async function changePlotSizeAction(formData: FormData): Promise<ActionResult> {
   return run(formData, async ({ unitIds, audit }) => {
-    const size = parsePlotSize(String(formData.get("saleableArea") ?? ""));
+    const picked = String(formData.get("saleableArea") ?? "").trim();
+    if (picked === "") throw new Error("Choose the new size from the list.");
+    const size = parsePlotSize(picked);
     const reason = String(formData.get("sizeReason") ?? "").trim();
     if (reason === "") throw new Error("Give a reason for the new size.");
     if (reason.length > MAX_SIZE_REASON_LENGTH) {

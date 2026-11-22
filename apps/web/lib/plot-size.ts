@@ -1,5 +1,5 @@
-// What the "New size" box on the Plots screen accepts. Pure, so the rules for a
-// badly typed size are tested without a browser.
+// The sizes the "New size" list on the Plots screen offers, and what it accepts
+// back. Pure, so both are tested without a browser.
 
 /** One request resizes at most this many plots. For a whole block, use the CSV
  *  import with "Update plots that already exist". */
@@ -21,4 +21,11 @@ export function parsePlotSize(raw: string): string {
   }
   // "0210" is 210; say 210 back.
   return typed.replace(/^0+(?=\d)/, "");
+}
+
+/** The sizes the "New size" list offers: each once, smallest first. Callers pass
+ *  fixed-point strings ("200.00"), so equal sizes are equal strings and what comes
+ *  back is what parsePlotSize takes. */
+export function listPlotSizes(sizes: readonly string[]): string[] {
+  return [...new Set(sizes)].sort((a, b) => Number(a) - Number(b));
 }
