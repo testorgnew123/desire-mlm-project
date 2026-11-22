@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CircleAlert } from "lucide-react";
 import { getPrismaClient } from "@desire/db";
@@ -8,11 +7,7 @@ import { getUnpricedPlcTags } from "@desire/services/unit-tags";
 import { MAX_BLOCK_REASON_LENGTH } from "@desire/services/units";
 import { getCachedSessionPermissions, requireSession } from "@/lib/session";
 import { formatArea } from "@/lib/money";
-import { unitStatusTone } from "@/lib/status-tone";
-import { StatusBadge } from "@/components/status-badge";
-import { ActionForm, SubmitButton } from "@/components/action-form";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
 import { MAX_SIZE_REASON_LENGTH } from "@/lib/plot-size";
 import {
@@ -23,6 +18,7 @@ import {
   markCornerAction,
   unblockPlotsAction,
 } from "./actions";
+import { PlotBlocks, type PlotRow } from "./PlotBlocks";
 
 export const dynamic = "force-dynamic";
 
@@ -35,12 +31,15 @@ export const metadata: Metadata = {
 const SIZE_SELECT_CLASS =
   "h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
-/** One block's plots, to change their size, to block or unblock them, to mark
- *  which are corner and to delete ones added by mistake. Tick plots, press a button. The buttons are the `intent`
- *  buttons of one ActionForm, which shows what happened above the table. The size
- *  row comes first so that Enter in any box runs "Change size", which asks for
- *  what it needs and changes nothing otherwise, not Block. What a person sees is
- *  gated by what they may do (unit.block, project.write); the services check again. */
+/** A project's plots, one block at a time, to change their size, to block or unblock
+ *  them, to mark which are corner and to delete ones added by mistake. Tick plots,
+ *  press a button. Every block's plots come with the page and the block buttons switch
+ *  between them on the page (PlotBlocks.tsx says why); `?block=` picks the block shown
+ *  first. The buttons are the `intent` buttons of one ActionForm, which shows what
+ *  happened above the table. The size row comes first so that Enter in any box runs
+ *  "Change size", which asks for what it needs and changes nothing otherwise, not
+ *  Block. What a person sees is gated by what they may do (unit.block, project.write);
+ *  the services check again. */
 export default async function ProjectPlotsPage({
   params,
   searchParams,
@@ -76,21 +75,21 @@ export default async function ProjectPlotsPage({
   const canMark = permissions.has("project.write");
 
   const [units, unpriced, blockedCount, plotTypes] = await Promise.all([
-    selected
-      ? db.unit.findMany({
-          where: { projectId, towerId: selected.id },
-          orderBy: { unitNumber: "asc" },
-          select: {
-            id: true,
-            unitNumber: true,
-            status: true,
-            plcTags: true,
-            blockReason: true,
-            saleableAreaOverride: true,
-            unitType: { select: { code: true, areaBasis: true, saleableArea: true } },
-          },
-        })
-      : [],
+    // Every block's plots, so that switching blocks needs no request.
+    db.unit.findMany({
+      where: { projectId, tower: { kind: "BLOCK" } },
+      orderBy: { unitNumber: "asc" },
+      select: {
+        id: true,
+        unitNumber: true,
+        towerId: true,
+        status: true,
+        plcTags: true,
+        blockReason: true,
+        saleableAreaOverride: true,
+        unitType: { select: { code: true, areaBasis: true, saleableArea: true } },
+      },
+    }),
     getUnpricedPlcTags(db, { projectId }),
     db.unit.count({ where: { projectId, status: "BLOCKED" } }),
     // What the "New size" list offers: the project's plot types, smallest first. A
@@ -105,12 +104,26 @@ export default async function ProjectPlotsPage({
       : [],
   ]);
 
+  const plots: PlotRow[] = units.map((unit) => ({
+    id: unit.id,
+    unitNumber: unit.unitNumber,
+    blockId: unit.towerId ?? "",
+    size: `${unit.unitType.code} · ${(formatArea(unit.saleableAreaOverride ?? unit.unitType.saleableArea, "saleable", unit.unitType.areaBasis) ?? "").replace(" (saleable)", "")}`,
+    status: unit.status,
+    plcTags: unit.plcTags,
+    blockReason: canBlock ? unit.blockReason : null,
+  }));
+
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <Link href={`/projects/${project.id}`} className="text-sm text-primary hover:underline">
+        {/* A plain link (a full page load), not the router's <Link>: from this screen
+            a router link whose page is fetched after the click left the screen
+            unchanged in the production build (see PlotBlocks.tsx), and a save here
+            empties the router's prefetched pages, so even a prefetched one hung. */}
+        <a href={`/projects/${project.id}`} className="text-sm text-primary hover:underline">
           ← {project.name}
-        </Link>
+        </a>
         <h1 className="text-lg font-semibold">Plots</h1>
         <p className="text-sm text-muted-foreground">
           Change a plot&apos;s size, block plots to take them off sale, and mark corner plots.{" "}
@@ -125,48 +138,31 @@ export default async function ProjectPlotsPage({
             The live price list has no rate for{" "}
             {unpriced.map((entry) => `${entry.tag.replaceAll("_", " ").toLowerCase()} (${entry.plots} plots)`).join(", ")}, so those
             plots cannot be booked yet.{" "}
-            <Link href={`/projects/${project.id}`} className="underline">
+            <a href={`/projects/${project.id}`} className="underline">
               Add the rate in a new price list version.
-            </Link>
+            </a>
           </span>
         </p>
       ) : null}
 
-      {towers.length === 0 ? (
+      {selected === null ? (
         <p className="text-sm text-muted-foreground">This project has no blocks yet.</p>
       ) : (
-        <>
-          <nav aria-label="Blocks" className="flex flex-wrap gap-2">
-            {towers.map((tower) => (
-              <Button
-                key={tower.id}
-                nativeButton={false}
-                size="sm"
-                variant={tower.id === selected?.id ? "default" : "outline"}
-                render={<Link href={`/projects/${project.id}/plots?block=${tower.id}`} />}
-              >
-                {tower.code}
-              </Button>
-            ))}
-          </nav>
-
-          {selected ? (
-            <ActionForm
-              id="plots"
-              feedback="top"
-              actions={{
-                changeSize: changePlotSizeAction,
-                block: blockPlotsAction,
-                unblock: unblockPlotsAction,
-                markCorner: markCornerAction,
-                clearCorner: clearCornerAction,
-                delete: deletePlotsAction,
-              }}
-              className="flex flex-col gap-3"
-            >
-              <input type="hidden" name="projectId" value={project.id} />
-              <input type="hidden" name="towerId" value={selected.id} />
-
+        <PlotBlocks
+          projectId={project.id}
+          blocks={towers.map((tower) => ({ id: tower.id, code: tower.code }))}
+          initialBlockId={selected.id}
+          plots={plots}
+          actions={{
+            changeSize: changePlotSizeAction,
+            block: blockPlotsAction,
+            unblock: unblockPlotsAction,
+            markCorner: markCornerAction,
+            clearCorner: clearCornerAction,
+            delete: deletePlotsAction,
+          }}
+          controls={
+            <>
               {canMark ? (
                 <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-3">
                   <label className="flex w-60 flex-col gap-1 text-xs">
@@ -235,48 +231,10 @@ export default async function ProjectPlotsPage({
                   ) : null}
                 </div>
               ) : null}
-
-              <div className="overflow-x-auto rounded-lg border border-border">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-muted/50 text-xs text-muted-foreground">
-                    <tr>
-                      <th className="w-10 px-3 py-2">
-                        <span className="sr-only">Pick</span>
-                      </th>
-                      <th className="px-3 py-2 font-medium">Plot</th>
-                      <th className="px-3 py-2 font-medium">Size</th>
-                      <th className="px-3 py-2 font-medium">Status</th>
-                      <th className="px-3 py-2 font-medium">Tags</th>
-                      <th className="px-3 py-2 font-medium">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {units.map((unit) => (
-                      <tr key={unit.id}>
-                        <td className="px-3 py-2">
-                          <input type="checkbox" name="unitId" value={unit.id} aria-label={`Pick plot ${unit.unitNumber}`} />
-                        </td>
-                        <td className="px-3 py-2 font-medium">{unit.unitNumber}</td>
-                        <td className="px-3 py-2 text-muted-foreground">
-                          {unit.unitType.code} ·{" "}
-                          {(formatArea(unit.saleableAreaOverride ?? unit.unitType.saleableArea, "saleable", unit.unitType.areaBasis) ?? "").replace(" (saleable)", "")}
-                        </td>
-                        <td className="px-3 py-2">
-                          <StatusBadge status={unit.status} tone={unitStatusTone(unit.status)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          {unit.plcTags.map((tag) => (
-                            <Badge key={tag} variant="secondary" className="mr-1 font-normal">
-                              {tag.replaceAll("_", " ")}
-                            </Badge>
-                          ))}
-                        </td>
-                        <td className="px-3 py-2 text-muted-foreground">{canBlock ? (unit.blockReason ?? "") : ""}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            </>
+          }
+          notes={
+            <>
               <p className="text-xs text-muted-foreground">
                 Only plots that are free or held can be blocked. A held plot with a booking waiting must be
                 confirmed or cancelled first. Held or sold plots cannot be resized or marked or cleared as
@@ -297,9 +255,9 @@ export default async function ProjectPlotsPage({
                   deleted. To take any other plot off sale, block it.
                 </p>
               ) : null}
-            </ActionForm>
-          ) : null}
-        </>
+            </>
+          }
+        />
       )}
     </div>
   );
