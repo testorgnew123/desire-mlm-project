@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getPrismaClient } from "@desire/db";
 import { updateUnit } from "@desire/services/projects";
 import { ForbiddenError } from "@desire/services/rbac";
-import { blockUnit, unblockUnit } from "@desire/services/units";
+import { blockUnit, deleteUnit, unblockUnit } from "@desire/services/units";
 import { setUnitPlcTag } from "@desire/services/unit-tags";
 import { requireSession } from "@/lib/session";
 import { MAX_PLOTS_PER_SIZE_CHANGE, MAX_SIZE_REASON_LENGTH } from "@/lib/plot-size";
@@ -116,6 +116,29 @@ export async function markCornerAction(formData: FormData): Promise<ActionResult
 
 export async function clearCornerAction(formData: FormData): Promise<ActionResult> {
   return mark(formData, false);
+}
+
+/** Deletes the ticked plots. Only a plot that was never held or booked can go
+ *  (deleteUnit says why for any other, by plot number); one at a time like blocking,
+ *  so a refused plot is named and the others still go. */
+export async function deletePlotsAction(formData: FormData): Promise<ActionResult> {
+  return run(formData, async ({ unitIds, audit }) => {
+    const db = getPrismaClient();
+    let done = 0;
+    const refused: string[] = [];
+    for (const unitId of unitIds) {
+      try {
+        await deleteUnit(db, { unitId, audit });
+        done += 1;
+      } catch (error) {
+        // No permission fails every plot alike: say so once.
+        if (error instanceof ForbiddenError) throw error;
+        refused.push(error instanceof Error ? error.message : "A plot was refused.");
+      }
+    }
+    if (done === 0) throw new Error(`Nothing was deleted. ${refused.join(" ")}`);
+    return `Deleted ${plural(done, "plot")}.${refused.length ? ` Not deleted: ${refused.join(" ")}` : ""}`;
+  });
 }
 
 /** Moves the ticked plots to one plot type, with one reason for all. A plot type is
