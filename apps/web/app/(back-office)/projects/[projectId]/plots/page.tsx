@@ -14,7 +14,7 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MAX_SIZE_REASON_LENGTH, listPlotSizes } from "@/lib/plot-size";
+import { MAX_SIZE_REASON_LENGTH } from "@/lib/plot-size";
 import { blockPlotsAction, changePlotSizeAction, clearCornerAction, markCornerAction, unblockPlotsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -68,7 +68,7 @@ export default async function ProjectPlotsPage({
   const canBlock = permissions.has("unit.block");
   const canMark = permissions.has("project.write");
 
-  const [units, unpriced, blockedCount, typeSizes, ownSizes] = await Promise.all([
+  const [units, unpriced, blockedCount, plotTypes] = await Promise.all([
     selected
       ? db.unit.findMany({
           where: { projectId, towerId: selected.id },
@@ -86,15 +86,16 @@ export default async function ProjectPlotsPage({
       : [],
     getUnpricedPlcTags(db, { projectId }),
     db.unit.count({ where: { projectId, status: "BLOCKED" } }),
-    // What the "New size" list offers: every plot type's size and every size a plot
-    // carries of its own (set through this screen or the CSV import). Only read for
-    // people who may change sizes.
-    canMark ? db.unitType.findMany({ where: { projectId, areaBasis: "SQYD" }, select: { saleableArea: true } }) : [],
-    canMark ? db.unit.groupBy({ by: ["saleableAreaOverride"], where: { projectId, saleableAreaOverride: { not: null } } }) : [],
-  ]);
-  const sizes = listPlotSizes([
-    ...typeSizes.map((type) => type.saleableArea.toFixed(2)),
-    ...ownSizes.flatMap((row) => (row.saleableAreaOverride ? [row.saleableAreaOverride.toFixed(2)] : [])),
+    // What the "New size" list offers: the project's plot types, smallest first. A
+    // plot type is a size with its code, so picking one moves a plot to it. Only read
+    // for people who may change sizes.
+    canMark
+      ? db.unitType.findMany({
+          where: { projectId, areaBasis: "SQYD" },
+          orderBy: [{ saleableArea: "asc" }, { code: "asc" }],
+          select: { id: true, code: true, saleableArea: true },
+        })
+      : [],
   ]);
 
   return (
@@ -160,13 +161,13 @@ export default async function ProjectPlotsPage({
 
               {canMark ? (
                 <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-3">
-                  <label className="flex w-44 flex-col gap-1 text-xs">
+                  <label className="flex w-60 flex-col gap-1 text-xs">
                     New size
-                    <select name="saleableArea" defaultValue="" className={SIZE_SELECT_CLASS}>
+                    <select name="unitTypeId" defaultValue="" className={SIZE_SELECT_CLASS}>
                       <option value="">Choose a size…</option>
-                      {sizes.map((size) => (
-                        <option key={size} value={size}>
-                          {(formatArea(size, "saleable", "SQYD") ?? "").replace(" (saleable)", "")}
+                      {plotTypes.map((type) => (
+                        <option key={type.id} value={type.id}>
+                          {`${type.code} · ${(formatArea(type.saleableArea, "saleable", "SQYD") ?? "").replace(" (saleable)", "")}`}
                         </option>
                       ))}
                     </select>
@@ -266,10 +267,11 @@ export default async function ProjectPlotsPage({
                 booking first.
               </p>
               <p className="text-xs text-muted-foreground">
-                The new size applies to the ticked plots only, not to their plot type. The list shows the
-                sizes already in this project; to offer another, add a plot type on the project page. To
-                change many plots at once, use the CSV import on the project page with &quot;Update plots
-                that already exist&quot;.
+                Picking a size moves the ticked plots to that plot type: their plot code and size change
+                together, and the plot type&apos;s rate applies. The list shows the plot types already in
+                this project; to offer another size, add a plot type on the project page. To change many
+                plots at once, use the CSV import on the project page with &quot;Update plots that already
+                exist&quot;.
               </p>
             </ActionForm>
           ) : null}

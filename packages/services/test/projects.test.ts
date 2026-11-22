@@ -894,6 +894,35 @@ describe("createUnit / updateUnit", () => {
         },
       );
 
+      it("moves a plot to another type and drops its own size in one call, as Plots > Change size does", async () => {
+        const { writer, project, unit } = await seedUnit();
+        const otherType = await createUnitType(db, {
+          projectId: project.id,
+          code: "1BHK",
+          name: "1BHK",
+          carpetArea: "400.00",
+          builtUpArea: "480.00",
+          saleableArea: "600.00",
+          audit: ctx(ORG, writer.id, "writer"),
+        });
+        await updateUnit(db, { unitId: unit.id, saleableAreaOverride: "1010.50", audit: ctx(ORG, writer.id, "writer") });
+
+        const updated = await updateUnit(db, {
+          unitId: unit.id,
+          unitTypeId: otherType.id,
+          saleableAreaOverride: null,
+          reason: "moved to the 1BHK size",
+          audit: ctx(ORG, writer.id, "writer"),
+        });
+
+        expect(updated).toMatchObject({ unitTypeId: otherType.id, saleableAreaOverride: null });
+        const row = await db.auditLog.findFirstOrThrow({
+          where: { entity: "Unit", entityId: unit.id, action: "UPDATE", reason: "moved to the 1BHK size" },
+        });
+        expect(row.before).toEqual({ unitTypeId: unit.unitTypeId, saleableAreaOverride: "1010.5" });
+        expect(row.after).toEqual({ unitTypeId: otherType.id, saleableAreaOverride: null });
+      });
+
       it.each(["HELD", "BOOKED"] as const)(
         "refuses to change the size, type or tags of a %s plot, names it, and changes nothing",
         async (status) => {

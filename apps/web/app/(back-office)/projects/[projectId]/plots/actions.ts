@@ -7,7 +7,7 @@ import { ForbiddenError } from "@desire/services/rbac";
 import { blockUnit, unblockUnit } from "@desire/services/units";
 import { setUnitPlcTag } from "@desire/services/unit-tags";
 import { requireSession } from "@/lib/session";
-import { MAX_PLOTS_PER_SIZE_CHANGE, MAX_SIZE_REASON_LENGTH, parsePlotSize } from "@/lib/plot-size";
+import { MAX_PLOTS_PER_SIZE_CHANGE, MAX_SIZE_REASON_LENGTH } from "@/lib/plot-size";
 import type { ActionResult } from "@/lib/action-result";
 
 /** The ids ticked on the plots table. Duplicates dropped; the services cap the
@@ -118,16 +118,16 @@ export async function clearCornerAction(formData: FormData): Promise<ActionResul
   return mark(formData, false);
 }
 
-/** Gives the ticked plots one new size in square yards, with one reason for all.
- *  The size is each plot's own override; the plot type's size is left alone. A
- *  plot's size is its price, so a held or sold plot is refused by name (see
+/** Moves the ticked plots to one plot type, with one reason for all. A plot type is
+ *  a size with its code, so the plot takes both from it, and a size the plot carried
+ *  of its own is dropped so that the type's size is the one it shows. A plot's size
+ *  and type are its price, so a held or sold plot is refused by name (see
  *  PRICE_EDITABLE_STATUSES) and the others still go through, one at a time like
  *  blocking. */
 export async function changePlotSizeAction(formData: FormData): Promise<ActionResult> {
-  return run(formData, async ({ unitIds, audit }) => {
-    const picked = String(formData.get("saleableArea") ?? "").trim();
-    if (picked === "") throw new Error("Choose the new size from the list.");
-    const size = parsePlotSize(picked);
+  return run(formData, async ({ projectId, unitIds, audit }) => {
+    const unitTypeId = String(formData.get("unitTypeId") ?? "").trim();
+    if (unitTypeId === "") throw new Error("Choose the new size from the list.");
     const reason = String(formData.get("sizeReason") ?? "").trim();
     if (reason === "") throw new Error("Give a reason for the new size.");
     if (reason.length > MAX_SIZE_REASON_LENGTH) {
@@ -140,11 +140,20 @@ export async function changePlotSizeAction(formData: FormData): Promise<ActionRe
     }
 
     const db = getPrismaClient();
+    // The service checks the type against each plot's own project; this read gives the
+    // person a clear answer for a type that is gone or not a plot type, and its name.
+    const plotType = await db.unitType.findFirst({
+      where: { id: unitTypeId, projectId, areaBasis: "SQYD", project: { orgId: audit.orgId } },
+      select: { code: true, saleableArea: true },
+    });
+    if (!plotType) throw new Error("That size is not a plot type of this project. Reload the page and choose again.");
+    const size = `${plotType.code} (${plotType.saleableArea.toFixed(2)} sq yd)`;
+
     let done = 0;
     const refused: string[] = [];
     for (const unitId of unitIds) {
       try {
-        await updateUnit(db, { unitId, saleableAreaOverride: size, reason, audit });
+        await updateUnit(db, { unitId, unitTypeId, saleableAreaOverride: null, reason, audit });
         done += 1;
       } catch (error) {
         // No permission fails every plot alike: say so once.
@@ -153,6 +162,6 @@ export async function changePlotSizeAction(formData: FormData): Promise<ActionRe
       }
     }
     if (done === 0) throw new Error(`Nothing was changed. ${refused.join(" ")}`);
-    return `Changed ${plural(done, "plot")} to ${size} sq yd.${refused.length ? ` Not changed: ${refused.join(" ")}` : ""}`;
+    return `Changed ${plural(done, "plot")} to ${size}.${refused.length ? ` Not changed: ${refused.join(" ")}` : ""}`;
   });
 }
