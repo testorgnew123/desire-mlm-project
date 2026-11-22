@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePlotSize } from "@/lib/plot-size";
+import { listPlotSizes, parsePlotSize } from "@/lib/plot-size";
 
 describe("parsePlotSize", () => {
   it.each([
@@ -20,4 +20,24 @@ describe("parsePlotSize", () => {
       expect(() => parsePlotSize(typed)).toThrow(/square yards as a plain number/);
     },
   );
+});
+
+describe("listPlotSizes", () => {
+  it("lists a size once, however many plot types and plots carry it", () => {
+    expect(listPlotSizes(["200.00", "150.00", "200.00"])).toEqual(["150.00", "200.00"]);
+  });
+
+  it("orders by size, not as text", () => {
+    expect(listPlotSizes(["1000.00", "200.00", "99.50", "150.00"])).toEqual(["99.50", "150.00", "200.00", "1000.00"]);
+  });
+
+  it("is empty when there are no sizes", () => {
+    expect(listPlotSizes([])).toEqual([]);
+  });
+
+  it("offers only values parsePlotSize takes back unchanged", () => {
+    for (const size of listPlotSizes(["99999999.99", "0.50", "210.00"])) {
+      expect(parsePlotSize(size)).toBe(size);
+    }
+  });
 });
