@@ -34,9 +34,11 @@ const FormStateContext = createContext<FormState>({ locked: false, busy: false, 
  *  screen (and keeps the transition pending) for good. Measured on `next start`
  *  with a local database (answers in ~40 ms): about 7 saves in 10 on the project
  *  page; never on `next dev`; and with 150 ms or more of network latency, 16
- *  saves in 16 painted normally. The cause was not found (it is not staleTimes,
- *  link prefetch, the form mechanism or any one input). A reload is the one
- *  recovery that always shows the saved data. */
+ *  saves in 16 painted normally. The cause was a dropped Suspense ping in the React
+ *  that Next bundles, fixed by patches/next@15.5.25.patch (on `next start`, 20 of 20
+ *  saves on the project page and a user page painted without this firing after it,
+ *  against 0 of 16 before). It stays as a safety net: a reload is the one recovery
+ *  that always shows the saved data. */
 const RECOVER_AFTER_MS = 600;
 
 /** The same recovery for a save that moves to another page. That navigation
