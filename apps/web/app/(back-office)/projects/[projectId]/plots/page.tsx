@@ -15,7 +15,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MAX_SIZE_REASON_LENGTH } from "@/lib/plot-size";
-import { blockPlotsAction, changePlotSizeAction, clearCornerAction, markCornerAction, unblockPlotsAction } from "./actions";
+import {
+  blockPlotsAction,
+  changePlotSizeAction,
+  clearCornerAction,
+  deletePlotsAction,
+  markCornerAction,
+  unblockPlotsAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -28,8 +35,8 @@ export const metadata: Metadata = {
 const SIZE_SELECT_CLASS =
   "h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
-/** One block's plots, to change their size, to block or unblock them and to mark
- *  which are corner. Tick plots, press a button. The buttons are the `intent`
+/** One block's plots, to change their size, to block or unblock them, to mark
+ *  which are corner and to delete ones added by mistake. Tick plots, press a button. The buttons are the `intent`
  *  buttons of one ActionForm, which shows what happened above the table. The size
  *  row comes first so that Enter in any box runs "Change size", which asks for
  *  what it needs and changes nothing otherwise, not Block. What a person sees is
@@ -153,6 +160,7 @@ export default async function ProjectPlotsPage({
                 unblock: unblockPlotsAction,
                 markCorner: markCornerAction,
                 clearCorner: clearCornerAction,
+                delete: deletePlotsAction,
               }}
               className="flex flex-col gap-3"
             >
@@ -212,6 +220,16 @@ export default async function ProjectPlotsPage({
                       </SubmitButton>
                       <SubmitButton name="intent" value="clearCorner" pendingLabel="Clearing…" size="sm" variant="outline">
                         Clear corner
+                      </SubmitButton>
+                      <SubmitButton
+                        name="intent"
+                        value="delete"
+                        confirm="Delete the ticked plots? This cannot be undone."
+                        pendingLabel="Deleting…"
+                        size="sm"
+                        variant="destructive"
+                      >
+                        Delete
                       </SubmitButton>
                     </>
                   ) : null}
@@ -273,6 +291,12 @@ export default async function ProjectPlotsPage({
                 plots at once, use the CSV import on the project page with &quot;Update plots that already
                 exist&quot;.
               </p>
+              {canMark ? (
+                <p className="text-xs text-muted-foreground">
+                  Delete is for plots added by mistake: only a plot that was never held or booked can be
+                  deleted. To take any other plot off sale, block it.
+                </p>
+              ) : null}
             </ActionForm>
           ) : null}
         </>

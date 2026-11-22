@@ -240,6 +240,101 @@ function isRestorable(status: UnitStatus): boolean {
   return status !== "BLOCKED";
 }
 
+// ── Delete ─────────────────────────────────────────────────────────────
+
+export class UnitDeleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnitDeleteError";
+  }
+}
+
+/** Deletes a plot that was never held or booked: it is for sale or blocked, and no
+ *  hold, booking or price-list rate of its own has ever pointed at it. Anything with
+ *  that history is refused, because erasing it would erase the record of a sale; such
+ *  a plot is blocked instead. Its own status history (written when it was created,
+ *  blocked or unblocked) goes with it, and the audit log keeps what was deleted.
+ *  Every model that points at a unit is checked here by name; a test fails if the
+ *  schema gains another. Same permission as adding a plot (project.write). */
+export async function deleteUnit(
+  db: PrismaClient,
+  params: { unitId: string; audit: AuditContext },
+): Promise<{ unitId: string; unitNumber: string }> {
+  const actorId = requireUserActor(params.audit, "Deleting a plot");
+  return db.$transaction(async (tx) => {
+    // Locked like blockUnit. acquireHold takes the same lock first, so a hold cannot
+    // land between the checks below and the delete.
+    await tx.$queryRaw`SELECT "id" FROM "units" WHERE "id" = ${params.unitId} FOR UPDATE`;
+    const unit = await tx.unit.findUnique({
+      where: { id: params.unitId },
+      select: {
+        id: true,
+        orgId: true,
+        projectId: true,
+        towerId: true,
+        unitTypeId: true,
+        unitNumber: true,
+        status: true,
+        currentHoldId: true,
+        plcTags: true,
+        facing: true,
+        blockReason: true,
+        saleableAreaOverride: true,
+        carpetAreaOverride: true,
+      },
+    });
+    if (!unit || unit.orgId !== params.audit.orgId) {
+      throw new UnitDeleteError("Plot not found.");
+    }
+    await assertPermission(tx, actorId, "project.write", { projectId: unit.projectId });
+
+    if ((unit.status !== "AVAILABLE" && unit.status !== "BLOCKED") || unit.currentHoldId) {
+      throw new UnitDeleteError(
+        `${unit.unitNumber} is ${unit.status.toLowerCase().replaceAll("_", " ")}, so it cannot be deleted.`,
+      );
+    }
+    const [holds, bookings, rates] = await Promise.all([
+      tx.unitHold.count({ where: { unitId: unit.id } }),
+      tx.booking.count({ where: { unitId: unit.id } }),
+      tx.priceListItem.count({ where: { unitId: unit.id } }),
+    ]);
+    if (holds + bookings > 0) {
+      throw new UnitDeleteError(
+        `${unit.unitNumber} has holds or bookings on record, so it cannot be deleted. Block it instead.`,
+      );
+    }
+    // A plot's own rate sits in a price list, and price lists are never changed once
+    // made. The database would not refuse this delete: that link is optional, so it
+    // would quietly clear it and leave the list with a rate for no plot.
+    if (rates > 0) {
+      throw new UnitDeleteError(
+        `${unit.unitNumber} has its own rate in a price list, so it cannot be deleted. Block it instead.`,
+      );
+    }
+
+    await tx.unitStatusHistory.deleteMany({ where: { unitId: unit.id } });
+    await tx.unit.delete({ where: { id: unit.id } });
+    await writeAuditLog(tx, params.audit, {
+      action: "DELETE",
+      entity: "Unit",
+      entityId: unit.id,
+      before: {
+        unitNumber: unit.unitNumber,
+        projectId: unit.projectId,
+        towerId: unit.towerId,
+        unitTypeId: unit.unitTypeId,
+        status: unit.status,
+        plcTags: unit.plcTags,
+        facing: unit.facing,
+        blockReason: unit.blockReason,
+        saleableAreaOverride: unit.saleableAreaOverride?.toString() ?? null,
+        carpetAreaOverride: unit.carpetAreaOverride?.toString() ?? null,
+      },
+    });
+    return { unitId: unit.id, unitNumber: unit.unitNumber };
+  });
+}
+
 // ── Delta read for the live board ──────────────────────────────────────
 
 export interface UnitDelta {

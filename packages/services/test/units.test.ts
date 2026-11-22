@@ -2,12 +2,16 @@
 // Runs against LOCAL Docker Postgres -- transactions, row locks, and history
 // reconstruction are exactly what is under test, so a mock would prove nothing.
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getPrismaClient } from "@desire/db";
 import { InvalidTransitionError } from "../src/unit-transitions";
 import {
   UnitBlockError,
+  UnitDeleteError,
   blockUnit,
+  deleteUnit,
   getStockStatement,
   getUnitDeltas,
   listActiveHolds,
@@ -330,29 +334,29 @@ describe("unblockUnit", () => {
   });
 });
 
-describe("blocking is permissioned and only for plots still on sale", () => {
-  async function bookingOn(unitId: string, projectId: string, associateId: string, status: "DRAFT" | "CONFIRMED" | "CANCELLED") {
-    const customer = await db.customer.create({ data: { orgId: ORG, name: "Buyer", phone: "9999900000" } });
-    const priceList = await db.priceList.findFirstOrThrow({ where: { projectId } });
-    return db.booking.create({
-      data: {
-        orgId: ORG,
-        projectId,
-        unitId,
-        customerId: customer.id,
-        bookingNumber: `BK-${Math.random().toString(36).slice(2, 8)}`,
-        bookingDate: new Date(),
-        status,
-        sellingAssociateId: associateId,
-        priceListId: priceList.id,
-        baseAmount: "1000.00",
-        agreementValue: "1000.00",
-        commissionableValue: "1000.00",
-        saleableAreaAtBooking: "975.00",
-      },
-    });
-  }
+async function bookingOn(unitId: string, projectId: string, associateId: string, status: "DRAFT" | "CONFIRMED" | "CANCELLED") {
+  const customer = await db.customer.create({ data: { orgId: ORG, name: "Buyer", phone: "9999900000" } });
+  const priceList = await db.priceList.findFirstOrThrow({ where: { projectId } });
+  return db.booking.create({
+    data: {
+      orgId: ORG,
+      projectId,
+      unitId,
+      customerId: customer.id,
+      bookingNumber: `BK-${Math.random().toString(36).slice(2, 8)}`,
+      bookingDate: new Date(),
+      status,
+      sellingAssociateId: associateId,
+      priceListId: priceList.id,
+      baseAmount: "1000.00",
+      agreementValue: "1000.00",
+      commissionableValue: "1000.00",
+      saleableAreaAtBooking: "975.00",
+    },
+  });
+}
 
+describe("blocking is permissioned and only for plots still on sale", () => {
   it("refuses a user without unit.block, and changes nothing", async () => {
     const { unit } = await seedFixture();
     const associateUser = await makeUser("plain", ["unit.read"]);
@@ -474,6 +478,115 @@ describe("blocking is permissioned and only for plots still on sale", () => {
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(await db.unitStatusHistory.count({ where: { unitId: unit.id, fromStatus: "BLOCKED" } })).toBe(1);
+  });
+});
+
+describe("deleteUnit: only a plot that was never held or booked", () => {
+  /** Someone who may add plots (project.write), which is who may delete them. */
+  async function deleter() {
+    const user = await makeUser("deleter", ["project.write"]);
+    return { user, audit: { orgId: ORG, actorId: user.id, actorLabel: user.name } satisfies AuditContext };
+  }
+
+  it("deletes a plot for sale with its status history, and the audit log keeps what it was", async () => {
+    const { unit, project } = await seedFixture();
+    await db.unitStatusHistory.create({
+      data: { unitId: unit.id, fromStatus: null, toStatus: "AVAILABLE", reason: "unit created", actorLabel: "test" },
+    });
+    await blockUnit(db, { unitId: unit.id, reason: "survey", audit: adminAudit });
+    await unblockUnit(db, { unitId: unit.id, audit: adminAudit });
+    const { user, audit: deleterAudit } = await deleter();
+
+    expect(await deleteUnit(db, { unitId: unit.id, audit: deleterAudit })).toEqual({ unitId: unit.id, unitNumber: "A-1" });
+
+    expect(await db.unit.count({ where: { id: unit.id } })).toBe(0);
+    expect(await db.unitStatusHistory.count({ where: { unitId: unit.id } })).toBe(0);
+    const row = await db.auditLog.findFirstOrThrow({ where: { entity: "Unit", entityId: unit.id, action: "DELETE" } });
+    expect(row.actorId).toBe(user.id);
+    expect(row.before).toMatchObject({ unitNumber: "A-1", projectId: project.id, status: "AVAILABLE" });
+  });
+
+  it("deletes a blocked plot that was never held", async () => {
+    const { unit } = await seedFixture();
+    await blockUnit(db, { unitId: unit.id, reason: "title dispute", audit: adminAudit });
+    const { audit: deleterAudit } = await deleter();
+
+    await deleteUnit(db, { unitId: unit.id, audit: deleterAudit });
+    expect(await db.unit.count({ where: { id: unit.id } })).toBe(0);
+  });
+
+  it.each(["HELD", "BOOKED", "AGREEMENT_SIGNED", "REGISTERED", "POSSESSION"] as const)("refuses a %s plot", async (status) => {
+    const { unit } = await seedFixture();
+    await db.unit.update({ where: { id: unit.id }, data: { status } });
+    const { audit: deleterAudit } = await deleter();
+
+    await expect(deleteUnit(db, { unitId: unit.id, audit: deleterAudit })).rejects.toThrow(/cannot be deleted/);
+    expect(await db.unit.count({ where: { id: unit.id } })).toBe(1);
+  });
+
+  it("refuses a plot that was held once, even after the hold ended", async () => {
+    const { unit, associate } = await seedFixture();
+    await acquireHold(db, { orgId: ORG, unitId: unit.id, associateId: associate.id, audit });
+    // Blocking releases the hold, so the plot is back off sale with only a released hold.
+    await blockUnit(db, { unitId: unit.id, reason: "x", audit: adminAudit });
+    const { audit: deleterAudit } = await deleter();
+
+    await expect(deleteUnit(db, { unitId: unit.id, audit: deleterAudit })).rejects.toThrow(
+      /has holds or bookings on record/,
+    );
+    expect(await db.unit.count({ where: { id: unit.id } })).toBe(1);
+  });
+
+  it("refuses a plot whose only booking was cancelled", async () => {
+    const { unit, project, associate } = await seedFixture();
+    await bookingOn(unit.id, project.id, associate.id, "CANCELLED");
+    const { audit: deleterAudit } = await deleter();
+
+    await expect(deleteUnit(db, { unitId: unit.id, audit: deleterAudit })).rejects.toThrow(
+      /has holds or bookings on record/,
+    );
+    expect(await db.unit.count({ where: { id: unit.id } })).toBe(1);
+  });
+
+  it("refuses a plot with its own rate in a price list, and leaves the rate as it was", async () => {
+    const { unit, project } = await seedFixture();
+    const priceList = await db.priceList.findFirstOrThrow({ where: { projectId: project.id } });
+    const rate = await db.priceListItem.create({ data: { priceListId: priceList.id, unitId: unit.id, baseRate: "5000.00" } });
+    const { audit: deleterAudit } = await deleter();
+
+    await expect(deleteUnit(db, { unitId: unit.id, audit: deleterAudit })).rejects.toThrow(/own rate in a price list/);
+    expect((await db.priceListItem.findUniqueOrThrow({ where: { id: rate.id } })).unitId).toBe(unit.id);
+  });
+
+  it("refuses someone without project.write, the system actor, and another organisation", async () => {
+    const { unit } = await seedFixture();
+
+    // The fixture's admin may block plots (unit.block) but not add or delete them.
+    await expect(deleteUnit(db, { unitId: unit.id, audit: adminAudit })).rejects.toThrow(ForbiddenError);
+    await expect(deleteUnit(db, { unitId: unit.id, audit })).rejects.toThrow(ForbiddenError);
+    const { audit: deleterAudit } = await deleter();
+    await expect(
+      deleteUnit(db, { unitId: unit.id, audit: { ...deleterAudit, orgId: "org_somewhere_else" } }),
+    ).rejects.toThrow(UnitDeleteError);
+    expect(await db.unit.count({ where: { id: unit.id } })).toBe(1);
+  });
+
+  it("knows every model that points at a unit", () => {
+    // deleteUnit checks each of these by name before it deletes. A new one fails here,
+    // so deleteUnit gets changed to look at it before a delete can orphan or clear it.
+    const schema = readFileSync(join(__dirname, "../../db/prisma/schema.prisma"), "utf8");
+    const pointers: string[] = [];
+    let model = "";
+    for (const line of schema.split(/\r?\n/)) {
+      const declared = /^model\s+(\w+)/.exec(line);
+      if (declared) {
+        model = declared[1]!;
+        continue;
+      }
+      const relation = /^\s*(\w+)\s+Unit\??\s+@relation\(/.exec(line);
+      if (relation) pointers.push(`${model}.${relation[1]}`);
+    }
+    expect(pointers.sort()).toEqual(["Booking.unit", "PriceListItem.unit", "UnitHold.unit", "UnitStatusHistory.unit"]);
   });
 });
 

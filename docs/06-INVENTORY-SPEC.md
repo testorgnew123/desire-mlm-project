@@ -52,6 +52,21 @@ or later is a materially different, rarer legal process (unwinding a registered
 agreement) and is out of scope until a real client case requires it — do not
 add those transitions speculatively.
 
+### Deleting a plot
+
+Deleting is not a state: the row goes. It is for plots added by mistake, so only
+a plot with no sales history can be deleted (`deleteUnit`, `units.ts`; the Delete
+button on Projects > Plots). It must be `AVAILABLE` or `BLOCKED` with no live hold,
+and no `UnitHold` (released ones included), no `Booking` (cancelled ones included)
+and no `PriceListItem` rate of its own may point at it. Anything else is refused
+by plot number with "block it instead". `project.write` for the plot's project
+(Admin, Super Admin), the same as adding plots. The plot's own `UnitStatusHistory`
+rows go with it; the audit log keeps a `DELETE` row with what the plot was. The
+per-plot rate check matters because that relation is optional: the database would
+quietly clear the link instead of refusing, leaving a published price list with a
+rate for no plot. A test lists every model that points at a unit, so a new one
+fails until `deleteUnit` checks it.
+
 ## 2. Hold concurrency — the double-hold race
 
 Two associates tapping **Hold** on the same unit in the same second is the
